@@ -67,6 +67,7 @@ enum {
 	RTP_TIMEOUT_MS = 20000,
 	RTP_FIRST_PKT_TIMEOUT_MS = 10000,
 	RTP_RESTART_TIMEOUT_MS = 2000,
+	DCE_TIMEOUT_MS = 5000,
 	DTLS_MTU       = 1480,
 	SSRC_MAX       = 4,
 	ICE_INTERVAL   = 50,    /* milliseconds */
@@ -151,6 +152,8 @@ struct reflow {
 	struct sa media_laddr;	
 	char tag[32];
 	bool terminated;
+	bool closed;
+	bool destructed;
 	int af;
 	int err;
 
@@ -2037,6 +2040,15 @@ static void destructor(void *arg)
 		return;
 	}
 
+	/* dce may ref this object while we are destructing, 
+	 * which means this destrucot may be called multiple times, 
+	 * ensure that it returns gracefully in that case.
+	 */
+	if (rf->destructed)
+		return;	
+
+	dce_detach(rf->data.dce);
+
 	list_unlink(&rf->le);
 	
 	rf->terminated = true;	
@@ -2047,7 +2059,7 @@ static void destructor(void *arg)
 	info("reflow(%p): destroyed (%H) got_sdp=%d\n",
 	     rf, print_errno, rf->err, rf->got_sdp);
 
-	if (g_reflow.mediaflow.closeh) {
+	if (!rf->closed && g_reflow.mediaflow.closeh) {
 		g_reflow.mediaflow.closeh(rf->mf, rf->extarg);
 	}
 	
@@ -2081,7 +2093,6 @@ static void destructor(void *arg)
 	rf->video.vds = NULL;
 	mem_deref(p);
 
-	dce_detach(rf->data.dce);
 	rf->data.dce = mem_deref(rf->data.dce);
 
 	rf->tls_conn = mem_deref(rf->tls_conn);
@@ -2093,37 +2104,42 @@ static void destructor(void *arg)
 	rf->sel_pair = mem_deref(rf->sel_pair);
 	rf->trice = mem_deref(rf->trice);
 	rf->trice_stun = mem_deref(rf->trice_stun);
-	mem_deref(rf->us_stun);
+	rf->us_stun = mem_deref(rf->us_stun);
 	list_flush(&rf->turnconnl);
 
-	mem_deref(rf->dtls_sock);
+	rf->dtls_sock = mem_deref(rf->dtls_sock);
 
-	mem_deref(rf->uh_srtp);
+	rf->uh_srtp = mem_deref(rf->uh_srtp);
 
-	mem_deref(rf->rtp); /* must be free'd after ICE and DTLS */
+	rf->rtp = mem_deref(rf->rtp); /* must be free'd after ICE and DTLS */
 	list_flush(&rf->audio.formatl);	
-	mem_deref(rf->sdp);
+	rf->sdp = mem_deref(rf->sdp);
 
-	mem_deref(rf->srtp_tx);
-	mem_deref(rf->srtp_rx);
-	mem_deref(rf->dtls);
-	mem_deref(rf->ct_gather);
+	rf->srtp_tx = mem_deref(rf->srtp_tx);
+	rf->srtp_rx = mem_deref(rf->srtp_rx);
+	rf->dtls = mem_deref(rf->dtls);
+	rf->ct_gather = mem_deref(rf->ct_gather);
 
-	mem_deref(rf->label);
-	mem_deref(rf->video.label);
+	rf->label = mem_deref(rf->label);
+	rf->video.label = mem_deref(rf->video.label);
 
-	mem_deref(rf->peer_software);
+	rf->peer_software = mem_deref(rf->peer_software);
 
-	mem_deref(rf->userid_remote);
-	mem_deref(rf->clientid_remote);
-	mem_deref(rf->clientid_local);
+	rf->userid_remote = mem_deref(rf->userid_remote);
+	rf->clientid_remote = mem_deref(rf->clientid_remote);
+	rf->clientid_local = mem_deref(rf->clientid_local);
 	
-	mem_deref(rf->extmap);
-	
-	mem_deref(rf->mf);
+	rf->extmap = mem_deref(rf->extmap);
 
-	mem_deref(rf->rtps.assrcv);
-	mem_deref(rf->rtps.vssrcv);
+	if (!rf->closed && g_reflow.mediaflow.closeh) {
+		g_reflow.mediaflow.closeh(rf->mf, rf->extarg);
+	}
+	
+	rf->mf = mem_deref(rf->mf);
+
+	rf->rtps.assrcv = mem_deref(rf->rtps.assrcv);
+	rf->rtps.vssrcv = mem_deref(rf->rtps.vssrcv);
+	rf->destructed = true;
 }
 
 
@@ -2284,7 +2300,9 @@ static void dc_open_handler(int chid, const char *label,
 
 	RFLOG(LOG_LEVEL_INFO, "data channel opened with label %s\n", rf, label);
 
-	IFLOW_CALL_CB(rf->iflow, dce_estabh, rf->iflow.arg);
+	
+	if (!rf->closed)
+		IFLOW_CALL_CB(rf->iflow, dce_estabh, rf->iflow.arg);
 }
 
 
@@ -2292,7 +2310,8 @@ static void dc_data_handler(int chid, uint8_t *data, size_t len, void *arg)
 {
 	struct reflow *rf = arg;
 
-	IFLOW_CALL_CB(rf->iflow, dce_recvh, data, len, rf->iflow.arg);
+	if (!rf->closed)
+		IFLOW_CALL_CB(rf->iflow, dce_recvh, data, len, rf->iflow.arg);
 }
 
 static void dc_closed_handler(int chid, const char *label,
@@ -2300,9 +2319,10 @@ static void dc_closed_handler(int chid, const char *label,
 {
 	struct reflow *rf = arg;
 
-	RFLOG(LOG_LEVEL_INFO, "dc-closed\n", rf);
+	RFLOG(LOG_LEVEL_INFO, "dc-closed: closed=%d closeh=%p\n", rf, rf->closed, rf->iflow.dce_closeh);
 
-	IFLOW_CALL_CB(rf->iflow, dce_closeh, rf->iflow.arg);
+	if (!rf->closed)
+		IFLOW_CALL_CB(rf->iflow, dce_closeh, rf->iflow.arg);
 }
 
 static bool exist_ssrc(struct reflow *rf, uint32_t ssrc)
@@ -2535,7 +2555,7 @@ int reflow_alloc(struct iflow		**flowp,
 			err = ENOMEM;
 			goto out;
 		}
-		err = sdp_format_add(NULL, rf->audio.sdpm, false,
+		err = sdp_format_add(&af->fmt, rf->audio.sdpm, false,
 				     ac->pt, ac->name, ac->srate, ac->ch,
 				     NULL, NULL, ac, false,
 				     "");
@@ -5640,15 +5660,20 @@ void reflow_set_audio_cbr(struct iflow *iflow, bool enabled)
 	if (!rf)
 		return;
 
+	info("reflow(%p): set_audio_cbr: enabled=%d\n", rf, enabled);
+	
 	/* If CBR is already set, do not reset mid-call */
 	if (!rf->audio.local_cbr)
 		rf->audio.local_cbr = enabled;
 
 	LIST_FOREACH(&rf->audio.formatl, le) {
 		struct auformat *af = le->data;
-		sdp_format_set_params(af->fmt, "%s",
-				      rf->audio.local_cbr ? af->ac->fmtp_cbr
-				                          : af->ac->fmtp);
+		const char *fmtp = rf->audio.local_cbr ? af->ac->fmtp_cbr
+			                               : af->ac->fmtp;
+
+		info("reflow(%p): set_audio_cbr: %s\n", rf, fmtp);
+
+		sdp_format_set_params(af->fmt, "%s", fmtp);
 	}
 }
 
@@ -5781,6 +5806,9 @@ static void dns_handler(int dns_err, const struct sa *srv, void *arg)
 	struct sa turn_srv;
 	char addr[32];
 	size_t i;
+
+	if (rf->closed)
+		goto out;
 
 	sa_cpy(&turn_srv, srv);
 	sa_set_port(&turn_srv, lent->port);
@@ -6039,6 +6067,15 @@ void reflow_set_call_type(struct iflow *iflow,
 
 void reflow_close(struct iflow *iflow)
 {
+	struct reflow *rf = (struct reflow *)iflow;
+
+	info("reflow(%p): close\n", rf);
+
+	rf->closed = true;
+	if (g_reflow.mediaflow.closeh) {
+		g_reflow.mediaflow.closeh(rf->mf, rf->extarg);
+	}
+
 	mem_deref(iflow);
 }
 

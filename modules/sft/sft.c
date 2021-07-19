@@ -51,6 +51,8 @@
 
 #define RTP_LEVELK 0.1f
 
+//#define SELECTIVE_VIDEO
+
 enum select_mode {
 	SELECT_MODE_NONE = 0x0,
 	SELECT_MODE_LEVEL = 0x1,
@@ -2415,6 +2417,7 @@ static void call_destructor(void *arg)
 	}
 
 	mem_deref(call->group);
+	mem_deref(call->lock);
 }
 
 
@@ -2549,6 +2552,7 @@ static char *make_callid(const char *convid,
 }
 
 
+#ifdef SELECTIVE_VIDEO
 static void select_video_streams(struct call *call,
 				 const char *mode,
 				 const struct list *streaml)
@@ -2598,6 +2602,7 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 			     msg->u.confstreams.mode,
 			     &msg->u.confstreams.streaml);
 }
+#endif
 
 
 static int alloc_icall(struct call *call,
@@ -2620,9 +2625,12 @@ static int alloc_icall(struct call *call,
 		goto out;
 	}
 	ecall_set_confpart_handler(ecall, ecall_confpart_handler);
+#ifdef SELECTIVE_VIDEO
 	ecall_set_confstreams_handler(ecall, ecall_confstreams_handler);
+#endif
 	
 	/* Add any turn servers we may have */
+	info("sf: call(%p): adding %d TURN servers\n", call, turnc);
 	for (i = 0; i < turnc; ++i)
 		ecall_add_turnserver(ecall, &turnv[i]);
 
@@ -2695,14 +2703,17 @@ static int alloc_call(struct call **callp, struct sft *sft,
 
 	call->video.select.mode = SELECT_MODE_LEVEL;
 
-	call->turnv = mem_zalloc(turnc * sizeof(*turnv), NULL);
-	if (!call->turnv) {
-		err = ENOMEM;
-		goto out;
-	}
+	if (turnc > 0) {
+		call->turnv = mem_zalloc(turnc * sizeof(*turnv), NULL);
+		if (!call->turnv) {
+			err = ENOMEM;
+			goto out;
+		}
 
-	for (i = 0; i < turnc; ++i) {
-		call->turnv[i] = turnv[i];
+		for (i = 0; i < turnc; ++i) {
+			call->turnv[i] = turnv[i];
+		}
+		call->turnc = turnc;
 	}
 
 	call->audio.tcc.call = call;
@@ -2793,10 +2804,11 @@ static int start_icall(struct call *call)
 		       "send_video_send_state failed on icall: %p (%m)\n",
 		       call, call->icall, err);
 		goto out;
-	}						
+	}
+
 	err = ICALL_CALLE(call->icall, start,
 			  ICALL_CALL_TYPE_VIDEO,
-			  false);
+			  true);
 	if (err) {
 		SFTLOG(LOG_LEVEL_WARN,
 		       "start failed on icall: %p (%m)\n",
@@ -3091,18 +3103,18 @@ static bool is_blacklisted(const char *ver, struct list *cbl)
 
 static int reply_blacklist(struct http_conn *hc, struct econn_message *msg)
 {
-	//struct econn_message *msg;
+	struct econn_message *rmsg;
 	char *rstr;
 	int err;
 
-	//msg = econn_message_alloc();
-	//if (!msg)
-	//	return ENOMEM;
+	rmsg = econn_message_alloc();
+	if (!rmsg)
+		return ENOMEM;
 
-	//econn_message_init(msg, ECONN_CONF_CONN, "sft");
-	msg->u.confconn.status = ECONN_CONFCONN_REJECTED_BLACKLIST;
+	econn_message_init(rmsg, ECONN_CONF_CONN, msg->sessid_sender);
+	rmsg->u.confconn.status = ECONN_CONFCONN_REJECTED_BLACKLIST;
 
-	err = econn_message_encode(&rstr, msg);
+	err = econn_message_encode(&rstr, rmsg);
 	if (err) {
 		warning("reply_blacklist: failed to encode message: %m\n", err);
 		return err;
@@ -3111,7 +3123,7 @@ static int reply_blacklist(struct http_conn *hc, struct econn_message *msg)
 	http_creply(hc, 200, "OK", "application/json", "%s", rstr);
 
 	mem_deref(rstr);
-	//mem_deref(msg);
+	mem_deref(rmsg);
 
 	return 0;
 }
@@ -3191,6 +3203,8 @@ static void http_req_handler(struct http_conn *hc,
 	const struct sa *sa;
 	char *toolver;
 	char *body = NULL;
+	struct zapi_ice_server *turnv;
+	size_t turnc;
 	int n;
 	int err = 0;
 
@@ -3342,13 +3356,27 @@ static void http_req_handler(struct http_conn *hc,
 			group_created = true;
 		}
 
+		if (avs_service_use_turn()) {
+			turnv = cmsg->u.confconn.turnv;
+			turnc = cmsg->u.confconn.turnc;
+		}
+		else {
+			turnv = NULL;
+			turnc = 0;
+		}
+
+		info("sft: using %d TURN servers for call\n", turnc);
 		err = alloc_call(&call, sft,
-				 cmsg->u.confconn.turnv,
-				 cmsg->u.confconn.turnc,
+				 turnv,
+				 turnc,
 				 group, userid, clientid,
 				 callid, cmsg->sessid_sender,
 				 cmsg->u.confconn.selective_audio,
+#ifdef SELECTIVE_VIDEO
 				 cmsg->u.confconn.selective_video,
+#else
+				 false,
+#endif
 				 NUM_RTP_STREAMS,
 				 cmsg->u.confconn.vstreams);
 		if (err)

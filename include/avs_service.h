@@ -43,6 +43,7 @@ struct sa  *avs_service_media_addr(void);
 struct sa  *avs_service_metrics_addr(void);
 const char *avs_service_url(void);
 const char *avs_service_blacklist(void);
+bool avs_service_use_turn(void);
 
 /*
  * Config

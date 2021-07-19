@@ -56,9 +56,11 @@ struct avs_service {
 	} log;
 
 	int worker_count;
+	bool use_turn;
 };
 struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
+       .use_turn = false,
 };
 
 #define DEFAULT_REQ_ADDR "127.0.0.1"
@@ -72,7 +74,7 @@ static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>]\n");
+			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T\n");
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
@@ -87,6 +89,7 @@ static void usage(void)
 			         "\t\t\t Example: <6.2.9,6.2.11\n");
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
+	(void)re_fprintf(stderr, "\t-T              Use TURN servers when gathering\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 }
 
@@ -209,7 +212,7 @@ int main(int argc, char *argv[])
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "A:b:I:l:M:p:qr:u:w:");
+		const int c = getopt(argc, argv, "A:b:I:l:M:p:qr:Tu:w:");
 		if (0 > c)
 			break;
 
@@ -247,6 +250,11 @@ int main(int argc, char *argv[])
 
 		case 'r':
 			sa_set_port(&avsd.metrics_addr, atoi(optarg));
+			break;
+
+		case 'T':
+			info("avsd: using TURN\n");
+			avsd.use_turn = true;
 			break;
 			
 		case 'u':
@@ -388,4 +396,9 @@ const char *avs_service_blacklist(void)
 int avs_service_worker_count(void)
 {
 	return avsd.worker_count;
+}
+
+bool avs_service_use_turn(void)
+{
+	return avsd.use_turn;
 }

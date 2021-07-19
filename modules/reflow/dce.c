@@ -116,6 +116,7 @@ struct payload {
 	enum mq_type type;
 	struct dce *dce;           /* pointer */
 	struct dce_channel *ch;    /* pointer */
+	void *arg;
 	uint32_t magic;
 
 	union {
@@ -277,6 +278,7 @@ static void payload_destructor(void *arg)
 		break;
 	}
 	mem_deref(pld->dce);
+	mem_deref(pld->arg);
 }
 
 
@@ -303,6 +305,11 @@ static struct payload *payload_new(struct dce *dce, struct dce_channel *ch,
 {
 	struct payload *pld;
 
+	if (!dce->attached) {
+		info("dce(%p): payload_new: detached\n", dce);
+		return NULL;
+	}
+
 	pld = mem_zalloc(sizeof(*pld), payload_destructor);
 	if (!pld)
 		return NULL;
@@ -313,11 +320,13 @@ static struct payload *payload_new(struct dce *dce, struct dce_channel *ch,
 
 	if (!locked) {
 		pld->dce = mem_ref(dce);
+		pld->arg = mem_ref(dce->arg);
 	}
 	else {
 		lock_write_get(g_dce.lock);
 		if (exist_dce(&g_dce.dcel, dce)) {
 			pld->dce = mem_ref(dce);
+			pld->arg = mem_ref(dce->arg);
 		}
 		else {
 			pld->dce = NULL;
@@ -885,7 +894,7 @@ static int dce_handler(void *data)
 	ch = pld->ch;
 
 	if (!dce->attached) {
-		info("dce(%p): is detached\n", dce);
+		info("dce(%p): dce_handler: is detached\n", dce);
 		goto out;
 	}
 
@@ -1289,7 +1298,7 @@ handle_association_change_event(struct dce *dce,
 				}
 			}
 		}
-		break;
+		return;
 		
 	case SCTP_COMM_LOST:
 		info("dce(%p): association change: SCTP_COMM_LOST\n", dce);
@@ -1312,8 +1321,20 @@ handle_association_change_event(struct dce *dce,
 		break;
 	}
 
+	if (!dce)
+		return;
+
 	info("dce(%p): association change: streams (in/out) = (%u/%u)\n",
 	     dce, sac->sac_inbound_streams, sac->sac_outbound_streams);
+
+	LIST_FOREACH(&dce->channell, le) {
+		struct dce_channel *ch = le->data;
+
+		pld = payload_new(dce, ch, CH_CLOSE, false);
+		if (pld) {
+			assign_task(dce, pld, true);
+		}
+	}
 }
 
 
@@ -2084,14 +2105,13 @@ void dce_close(void)
 		usleep(500000);
 	}
 
-	mem_deref(g_dce.lock);
-
 	if (!list_isempty(&g_dce.pendingl)) {
 		debug("dce: flush pending events: %u\n",
 			  list_count(&g_dce.pendingl));
 	}
 	list_flush(&g_dce.pendingl);
 
+	mem_deref(g_dce.lock);
 	dce_inited = false;	
 }
 

@@ -5,7 +5,6 @@
 #include <pthread.h>
 #include <unistd.h>
 
-
 #define TIMEOUT_WORKER 20
 
 struct worker_task {
@@ -45,9 +44,11 @@ static void workb_destructor(void *arg)
 	struct work_balancer *wb = arg;
 	size_t i;
 
+#if 1
 	for(i = 0; i < wb->c; ++i) {
 		wb->v[i] = mem_deref(wb->v[i]);
 	}
+#endif
 	mem_deref(wb->v);	
 	mem_deref(wb->main);
 }
@@ -56,7 +57,8 @@ static void worker_destructor(void *arg)
 {
 	struct worker *w = arg;
 
-	workb->v[w->id] = (struct worker *)NULL;
+	if (w->id > 0)
+		workb->v[w->id - 1] = (struct worker *)NULL;
 	
 	tmr_cancel(&w->tmr);
 	list_flush(&w->taskl);
@@ -309,19 +311,21 @@ void worker_close(void)
 {
 	size_t i;
 	int err;
-	
+
 	for (i = 0; i < workb->c; ++i) {
 		struct worker *w = workb->v[i];
+		pthread_t tid;
 
 		if (!w)
 			continue;
 
+		tid = w->tid;
 		w->running = false;
 		//err = mqueue_push(w->mq, WORKER_TASK_QUIT, NULL);
+		info("worker_close wid=%d\n", w->id);
 		err = push_task(w, WORKER_TASK_QUIT, NULL, NULL);
 		if (!err) {
-			info("worker_close wid=%d\n", w->id);
-			pthread_join(w->tid, NULL);
+			pthread_join(tid, NULL);
 			
 			/* when the worker thread exists, it will
 			 * deref its worker object
