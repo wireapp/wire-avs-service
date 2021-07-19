@@ -3,4 +3,4 @@
 	url = https://github.com/sctplab/usrsctp.git
 [submodule "contrib/avs"]
 	path = contrib/avs
-	url = https://github.com/wireapp/wire-audio-video-signaling.git
+	url = git@github.com:wearezeta/avs

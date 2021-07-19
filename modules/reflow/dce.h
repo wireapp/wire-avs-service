@@ -3,24 +3,24 @@
 * Copyright (C) 2016 Wire Swiss GmbH
 *
 * This program is free software: you can redistribute it and/or modify
-* it under the terms of the GNU Affero General Public License as published by
+* it under the terms of the GNU General Public License as published by
 * the Free Software Foundation, either version 3 of the License, or
 * (at your option) any later version.
 *
 * This program is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU Affero General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU General Public License for more details.
 *
-* You should have received a copy of the GNU Affero General Public License
-* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
 
 struct dce;
 struct dce_channel;
 
-typedef int  (dce_send_h)(uint8_t *pkt, size_t len, void *arg);
+typedef int  (dce_send_h)(struct mbuf *mb, void *arg);
 typedef void (dce_estab_h)(void *arg);
 typedef void (dce_open_chan_h)(int sid,
 			       const char *label, const char *protocol,
@@ -57,3 +57,7 @@ int  dce_send(struct dce *dce, struct dce_channel *ch, const void *data, size_t 
 void dce_recv_pkt(struct dce *dce, const uint8_t *pkt, size_t len);
 bool dce_snd_dry(struct dce *dce);
 bool dce_is_chan_open(const struct dce_channel *ch);
+void dce_detach(struct dce *dce);
+
+struct worker;
+void dce_assign_worker(struct dce *dce, struct worker *w);

@@ -3,17 +3,17 @@
 * Copyright (C) 2016 Wire Swiss GmbH
 *
 * This program is free software: you can redistribute it and/or modify
-* it under the terms of the GNU Affero General Public License as published by
+* it under the terms of the GNU General Public License as published by
 * the Free Software Foundation, either version 3 of the License, or
 * (at your option) any later version.
 *
 * This program is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU Affero General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU General Public License for more details.
 *
-* You should have received a copy of the GNU Affero General Public License
-* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program. If not, see <http://www.gnu.org/licenses/>.
 *
 * This module of the Wire Software uses software code from
 * sctplab/usrsctp (https://github.com/sctplab/usrsctp)
@@ -73,6 +73,7 @@
 #include <re.h>
 #include <avs_log.h>
 #include <avs_string.h>
+#include <avs_service.h>
 #include "dce.h"
 
 #define DATA_CHANNEL_PORT 5000
@@ -106,7 +107,8 @@ enum mq_type {
 	CH_ESTAB,
 	CH_OPEN,
 	CH_CLOSE,
-	CH_DATA
+	CH_DATA,
+	CH_SEND,
 };
 
 struct payload {
@@ -125,6 +127,10 @@ struct payload {
 			uint8_t *buf;
 			size_t len;
 		} chdata;
+
+		struct {
+			struct mbuf *mb;
+		} chsend;
 	} v;
 };
 
@@ -133,7 +139,6 @@ static struct {
 	struct lock *lock;
 	struct list dcel;
 	struct list pendingl;
-	struct mqueue *mqueue;
 } g_dce = {
 	.lock = NULL
 };
@@ -176,9 +181,11 @@ struct dce_channel {
 };
 
 struct dce {
+	struct worker *worker;
 	struct socket *sock;
 	struct peer_connection pc;
 
+	bool attached;
 	dce_send_h *sendh;
 	dce_estab_h *estabh;
 	struct list channell;
@@ -262,29 +269,14 @@ static void payload_destructor(void *arg)
 		mem_deref(pld->v.chdata.buf);
 		break;
 
+	case CH_SEND:
+		mem_deref(pld->v.chsend.mb);
+		break;
+
 	default:
 		break;
 	}
-}
-
-
-static struct payload *payload_new(struct dce *dce, struct dce_channel *ch,
-				   enum mq_type type)
-{
-	struct payload *pld;
-
-	pld = mem_zalloc(sizeof(*pld), payload_destructor);
-	if (!pld)
-		return NULL;
-
-	pld->magic = PAYLOAD_MAGIC;
-	pld->type = type;
-	pld->dce = dce;
-	pld->ch = ch;
-
-	list_append(&g_dce.pendingl, &pld->le, pld);
-
-	return pld;
+	mem_deref(pld->dce);
 }
 
 
@@ -293,6 +285,9 @@ static bool exist_dce(struct list *dcel, struct dce *dce)
 	bool found = false;
 	struct le *le;
 
+	if (!dce)
+		return false;
+	
 	le = dcel->head;
 	while (le && !found) {
 		found = le->data == (void *)dce;
@@ -302,15 +297,53 @@ static bool exist_dce(struct list *dcel, struct dce *dce)
 	return found;
 }
 
+
+static struct payload *payload_new(struct dce *dce, struct dce_channel *ch,
+				   enum mq_type type, bool locked)
+{
+	struct payload *pld;
+
+	pld = mem_zalloc(sizeof(*pld), payload_destructor);
+	if (!pld)
+		return NULL;
+
+	pld->magic = PAYLOAD_MAGIC;
+	pld->type = type;
+	pld->ch = ch;
+
+	if (!locked) {
+		pld->dce = mem_ref(dce);
+	}
+	else {
+		lock_write_get(g_dce.lock);
+		if (exist_dce(&g_dce.dcel, dce)) {
+			pld->dce = mem_ref(dce);
+		}
+		else {
+			pld->dce = NULL;
+		}
+	}
+	list_append(&g_dce.pendingl, &pld->le, pld);
+	if (locked)
+		lock_rel(g_dce.lock);
+
+	return pld;
+}
+
+
 static int sctp_header_decode(struct sctp_header *hdr, struct mbuf *mb)
 {
+	size_t pos;
+
 	if (mbuf_get_left(mb) < 12)
 		return EBADMSG;
 
+	pos = mb->pos;
 	hdr->sport    = ntohs(mbuf_read_u16(mb));
 	hdr->dport    = ntohs(mbuf_read_u16(mb));
 	hdr->vtag     = ntohl(mbuf_read_u32(mb));
 	hdr->checksum = ntohl(mbuf_read_u32(mb));
+	mb->pos = pos;
 
 	return 0;
 }
@@ -819,6 +852,112 @@ get_dce_channel(struct dce *dce, const char *label)
 }
 
 
+static int dce_handler(void *data)
+{
+	struct payload *pld = data;
+	struct dce_channel *ch;
+	struct dce *dce = NULL;
+	uint8_t *buf;
+	bool valid;
+
+	if (PAYLOAD_MAGIC != pld->magic) {
+		warning("dce: invalid payload magic\n");
+		return EBADF;
+	}
+
+	buf = (pld->type == CH_DATA) ? pld->v.chdata.buf : NULL;
+
+#if 0
+	info("dce_handler: pld=%p type=%d dce=%p ch=%p data=%p buf=%p\n",
+	     pld, pld->type, pld->dce, pld->ch, data, buf);
+#endif
+
+	lock_write_get(g_dce.lock);
+	valid = exist_dce(&g_dce.dcel, pld->dce);
+	lock_rel(g_dce.lock);
+
+	if (!valid) {
+		warning("dce: mqueue_recv: dce(%p) not valid\n", pld->dce);
+		goto out;
+	}
+
+	dce = pld->dce;
+	ch = pld->ch;
+
+	if (!dce->attached) {
+		info("dce(%p): is detached\n", dce);
+		goto out;
+	}
+
+	switch (pld->type) {
+	case ESTAB:
+		if (dce->estabh)
+			dce->estabh(dce->arg);
+		break;
+
+	case CH_ESTAB:
+		if (ch->estabh)
+			ch->estabh(ch->arg);
+		break;
+
+	case CH_OPEN:
+		if (ch->openh) {
+			ch->openh(pld->v.chopen.sid, ch->label,
+				  ch->protocol, ch->arg);
+		}
+		break;
+
+	case CH_CLOSE:
+		if (ch && ch->closeh) {
+			ch->closeh(ch->id, ch->label,
+				   ch->protocol, ch->arg);
+		}
+		break;
+
+	case CH_DATA:
+		if (ch->datah) {
+			ch->datah(ch->id,
+				  pld->v.chdata.buf, pld->v.chdata.len,
+				  ch->arg);
+		}
+		break;
+
+	case CH_SEND: {
+		struct mbuf *mb = pld->v.chsend.mb;
+		if (dce->sendh) {
+			int err;
+			err = dce->sendh(mb, dce->arg);
+			if (err) {
+				warning("dce: sendh error (%m)\n", err);
+			}
+		}
+	}
+		break;
+
+	default:
+		warning("dce: mqueue: ignored event %d\n", pld->type);
+		break;
+	}
+
+ out:
+#if 0
+	info("dce_handler: DONE pld=%p type=%d dce=%p ch=%p data=%p buf=%p\n",
+	     pld, pld->type, pld->dce, pld->ch, data, buf);
+#endif
+	
+	mem_deref(pld);
+
+	return 0;
+}
+
+static void assign_task(struct dce *dce, struct payload *pld, bool locked)
+{
+	(void)locked;
+	
+	worker_assign_task(dce->worker, dce_handler, pld);
+}
+
+
 static void
 handle_open_request_message(struct dce *dce,
                             struct rtcweb_datachannel_open_request *req,
@@ -962,13 +1101,14 @@ handle_open_request_message(struct dce *dce,
 
 			ch->id = channel->id;
 
-			pld = payload_new(dce, ch, CH_OPEN);
+			pld = payload_new(dce, ch, CH_OPEN, true);
 			if (!pld)
 				return;
 
 			pld->v.chopen.sid = channel->o_stream;
 
-			mqueue_push(g_dce.mqueue, pld->type, pld);
+			assign_task(dce, pld, true);
+			//mqueue_push(dce->mq, pld->type, pld);
 		}
 	}
 }
@@ -1002,13 +1142,13 @@ handle_open_ack_message(struct dce *dce,
 
 		ch->id = channel->id;
 
-		pld = payload_new(dce, ch, CH_OPEN);
+		pld = payload_new(dce, ch, CH_OPEN, true);
 		if (!pld)
 			return;
 
 		pld->v.chopen.sid = channel->i_stream;
 
-		mqueue_push(g_dce.mqueue, pld->type, pld);
+		assign_task(dce, pld, true);
 	}
 	return;
 }
@@ -1049,15 +1189,17 @@ handle_data_message(struct dce *dce,
 		if (ch) {
 			struct payload *pld;
 
-			pld = payload_new(dce, ch, CH_DATA);
-			if (!pld)
+			pld = payload_new(dce, ch, CH_DATA, true);
+			if (!pld) {
+				lock_peer_connection(&dce->pc);		
 				return;
+			}
 
 			pld->v.chdata.buf = mem_alloc(length, NULL);
 			memcpy(pld->v.chdata.buf, buffer, length);
 			pld->v.chdata.len = length;
 
-			mqueue_push(g_dce.mqueue, pld->type, pld);
+			assign_task(dce, pld, true);
 		}
 
 		lock_peer_connection(&dce->pc);		
@@ -1123,32 +1265,30 @@ static void
 handle_association_change_event(struct dce *dce,
 				struct sctp_assoc_change *sac)
 {
+	struct le *le;
+	struct payload *pld;
+
 	switch (sac->sac_state) {
 	case SCTP_COMM_UP:
 		info("dce(%p): association change: SCTP_COMM_UP\n", dce);
-		unlock_peer_connection(&dce->pc);
-            
-		if (dce) {            
-			struct le *le;
-			struct payload *pld;
+		if (!dce)
+			return;
 
-			pld = payload_new(dce, NULL, ESTAB);
-			if (!pld)
-				return;
-
-			mqueue_push(g_dce.mqueue, pld->type, pld);
+		pld = payload_new(dce, NULL, ESTAB, false);
+		if (pld) {
+			info("dce(%p): ESTAB to worker: %p(%p)\n",
+			     dce, dce->worker, worker_tid(dce->worker));
+			assign_task(dce, pld, true);
 
 			LIST_FOREACH(&dce->channell, le) {
 				struct dce_channel *ch = le->data;
                 
-				pld = payload_new(dce, ch, CH_ESTAB);
-				if (!pld)
-					return;
-
-				mqueue_push(g_dce.mqueue, pld->type, pld);
+				pld = payload_new(dce, ch, CH_ESTAB, false);
+				if (pld) {
+					assign_task(dce, pld, true);
+				}
 			}
 		}
-		lock_peer_connection(&dce->pc);		
 		break;
 		
 	case SCTP_COMM_LOST:
@@ -1323,11 +1463,11 @@ handle_stream_reset_event(struct dce *dce, struct sctp_stream_reset_event *strrs
 			if (ch) {
 				struct payload *pld;
 
-				pld = payload_new(dce, ch, CH_CLOSE);
+				pld = payload_new(dce, ch, CH_CLOSE, true);
 				if (!pld)
 					return;
 
-				mqueue_push(g_dce.mqueue, pld->type, pld);
+				assign_task(dce, pld, true);
 			}
 		}
 	}
@@ -1583,7 +1723,7 @@ receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
 		return 1;
 	}
 
-	//debug("sock=%p dce=%p dce->pc=%p\n", sock, dce, &dce->pc);
+	debug("receive_cb: sock=%p dce=%p dce->pc=%p\n", sock, dce, &dce->pc);
 
 	lock_write_get(g_dce.lock);
 	if (!exist_dce(&g_dce.dcel, dce)) {
@@ -1621,9 +1761,7 @@ receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
 		usrsctp_close(sock);
 	}
 
-	lock_write_get(g_dce.lock);
 	mem_deref(dce);
-	lock_rel(g_dce.lock);
 
 	return 1;
 }
@@ -1815,6 +1953,10 @@ static void dce_destructor(void *arg)
 	struct dce *dce = arg;
 
 	lock_write_get(g_dce.lock);
+	if (mem_nrefs(dce) > 0) {
+		lock_rel(g_dce.lock);
+		return;
+	}
 	list_unlink(&dce->le);
 	lock_rel(g_dce.lock);
 
@@ -1842,6 +1984,8 @@ static void dce_destructor(void *arg)
 
 	list_flush(&dce->channell);
 	close_peer_connection(&dce->pc);
+
+	//mem_deref(dce->mq);
 }
 
 
@@ -1850,7 +1994,8 @@ static int usrsctp_send_handler(void *addr, void *buf, size_t len,
 {
 	struct dce *dce = addr;
 	struct sctp_header hdr;
-	struct mbuf mb;
+	struct payload *pld;
+	struct mbuf *mb;
 	int err;
     
 	if (!dce)
@@ -1864,101 +2009,39 @@ static int usrsctp_send_handler(void *addr, void *buf, size_t len,
 	}
 
 	assert(DCE_MAGIC == dce->magic);
-    
-	mb.buf = buf;
-	mb.pos = 0;
-	mb.end = mb.size = len;
 
-	err = sctp_header_decode(&hdr, &mb);
+	mb = mbuf_alloc(len);
+	mbuf_write_mem(mb, buf, len);
+	mb->pos = 0;
+
+	err = sctp_header_decode(&hdr, mb);
 	if (err) {
 		warning("dce: send: SCTP decode error (%m)\n", err);
 		goto out;
 	}
 	else {
+		/*
+		if (hdr.sport != DATA_CHANNEL_PORT ||
+		    hdr.dport != DATA_CHANNEL_PORT) {
+			err = EPERM;
+			goto out;
+		}
+		*/
 		assert(hdr.sport == DATA_CHANNEL_PORT);
 		assert(hdr.dport == DATA_CHANNEL_PORT);
 	}
 
-	if (dce->sendh) {
-		err = dce->sendh((uint8_t *)buf, len, dce->arg);
-		if (err) {
-			warning("dce: sendh error (%m)\n", err);
-			goto out;
-		}
+	pld = payload_new(dce, NULL, CH_SEND, false);
+	if (!pld) {
+		err = ENOMEM;
+		goto out;
 	}
-
+	pld->v.chsend.mb = mb;
+	assign_task(dce, pld, false);
  out:
 	lock_rel(g_dce.lock);
 
 	return err ? 1 : 0;
-}
-
-
-static void dce_mqueue_handler(int id, void *data, void *arg)
-{
-	struct payload *pld = data;
-	struct dce_channel *ch;
-	bool valid;
-	(void)arg;
-
-	if (PAYLOAD_MAGIC != pld->magic) {
-		warning("dce: invalid payload magic\n");
-		return;
-	}
-
-	lock_write_get(g_dce.lock);
-	valid = exist_dce(&g_dce.dcel, pld->dce);
-	lock_rel(g_dce.lock);
-
-	if (!valid) {
-		warning("dce: mqueue_recv: dce(%p) not valid\n", pld->dce);
-		goto out;
-	}
-
-	ch = pld->ch;
-
-	switch (id) {
-
-	case ESTAB:
-		if (pld->dce->estabh)
-			pld->dce->estabh(pld->dce->arg);
-		break;
-
-	case CH_ESTAB:
-		if (ch->estabh)
-			ch->estabh(ch->arg);
-		break;
-
-	case CH_OPEN:
-		if (ch->openh) {
-			ch->openh(pld->v.chopen.sid, ch->label,
-				  ch->protocol, ch->arg);
-		}
-		break;
-
-	case CH_CLOSE:
-		if (ch && ch->closeh) {
-			ch->closeh(ch->id, ch->label,
-				   ch->protocol, ch->arg);
-		}
-
-		break;
-
-	case CH_DATA:
-		if (ch->datah) {
-			ch->datah(ch->id,
-				  pld->v.chdata.buf, pld->v.chdata.len,
-				  ch->arg);
-		}
-		break;
-
-	default:
-		warning("dce: mqueue: ignored event %d\n", id);
-		break;
-	}
-
- out:
-	mem_deref(pld);
 }
 
 
@@ -1976,10 +2059,6 @@ int dce_init(void)
 	list_init(&g_dce.dcel);
 
 	err = lock_alloc(&g_dce.lock);
-	if (err)
-		return err;
-
-	err = mqueue_alloc(&g_dce.mqueue, dce_mqueue_handler, NULL);
 	if (err)
 		return err;
 
@@ -2006,8 +2085,6 @@ void dce_close(void)
 	}
 
 	mem_deref(g_dce.lock);
-
-	g_dce.mqueue = mem_deref(g_dce.mqueue);
 
 	if (!list_isempty(&g_dce.pendingl)) {
 		debug("dce: flush pending events: %u\n",
@@ -2056,6 +2133,7 @@ int dce_alloc(struct dce **dcep,
 	if (!dce)
 		return ENOMEM;
 
+	dce->attached = true;
 	dce->sendh = sendh;
 	dce->estabh = estabh;
 	dce->arg = arg;
@@ -2187,7 +2265,7 @@ int dce_alloc(struct dce **dcep,
 	list_append(&g_dce.dcel, &dce->le, dce);
 	lock_rel(g_dce.lock);
 
-	debug("dce(%p): init done\n", dce);
+	info("dce(%p): alloc done\n", dce);
 	
  out:
 	if (err)
@@ -2196,6 +2274,16 @@ int dce_alloc(struct dce **dcep,
 		*dcep = dce;
 
 	return err;
+}
+
+void dce_assign_worker(struct dce *dce, struct worker *w)
+{
+	info("dce(%p): assigning worker: %p\n", dce, w);
+	
+	if (!dce)
+		return;
+
+	dce->worker = w;
 }
 
 int dce_channel_alloc(struct dce_channel **chp,
@@ -2257,3 +2345,10 @@ bool dce_is_chan_open(const struct dce_channel *ch)
 	}
 }
 
+void dce_detach(struct dce *dce)
+{
+	if (!dce)
+		return;
+
+	dce->attached = false;
+}

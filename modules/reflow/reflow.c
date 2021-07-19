@@ -3,17 +3,17 @@
 * Copyright (C) 2016 Wire Swiss GmbH
 *
 * This program is free software: you can redistribute it and/or modify
-* it under the terms of the GNU Affero General Public License as published by
+* it under the terms of the GNU General Public License as published by
 * the Free Software Foundation, either version 3 of the License, or
 * (at your option) any later version.
 *
 * This program is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU Affero General Public License for more details.
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU General Public License for more details.
 *
-* You should have received a copy of the GNU Affero General Public License
-* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <stdlib.h>
@@ -61,6 +61,7 @@
 
 #define MAX_SRTP_KEY_SIZE (32+14)  /* Master key and salt */
 
+#define NUM_RTP_STREAMS 2
 
 enum {
 	RTP_TIMEOUT_MS = 20000,
@@ -239,6 +240,8 @@ struct reflow {
 		char *label;
 		bool has_rtp;
 		bool disabled;
+
+		char fingerprint[512];
 	} video;
 
 	/* Data */
@@ -261,6 +264,8 @@ struct reflow {
 		bool disabled;
 		bool local_cbr;
 		bool remote_cbr;
+
+		char fingerprint[512];
 	} audio;
     
 	/* User callbacks */
@@ -297,8 +302,17 @@ struct reflow {
 	struct le le;
 
 	struct mediaflow *mf;
+	struct worker *worker;
 
 	bool use_transcc;
+
+	/* RTP streams */
+	struct {
+		uint32_t *assrcv;
+		int assrcc;
+		uint32_t *vssrcv;
+		int vssrcc;
+	} rtps;
 };
 
 
@@ -598,7 +612,7 @@ bool reflow_is_ready(const struct reflow *rf)
 	return true;
 }
 
-static void regen_lssrc(struct reflow *rf)
+static uint32_t regen_lssrc(uint32_t old_ssrc)
 {
 	uint32_t lssrc;
 
@@ -609,9 +623,9 @@ static void regen_lssrc(struct reflow *rf)
 	do {
 		lssrc = rand_u32();
 	}
-	while(lssrc == rf->lssrcv[MEDIA_AUDIO]);
+	while(lssrc == 0 || lssrc == old_ssrc);
 
-	rf->lssrcv[MEDIA_AUDIO] = lssrc;
+	return lssrc;
 }
 
 /* XXX: Move to mediamanager */
@@ -651,10 +665,14 @@ static int reflow_send_dc_data(struct reflow *rf, const uint8_t *data, size_t le
 
 	if (!rf)
 		return EINVAL;
+
+	if (rf->err)
+		return rf->err;
 	
 	if (rf->data.dce && rf->data.ch) {
 		err = dce_send(rf->data.dce, rf->data.ch, data, len);
-		if (err) {
+		if (!rf->err && err) {
+			rf->err = err;
 			IFLOW_CALL_CB(rf->iflow, closeh, err, rf->iflow.arg);
 		}
 	}
@@ -671,10 +689,10 @@ static int reflow_dce_send(struct iflow *flow, const uint8_t *data, size_t len)
 }
 
 
-static int dce_send_data_handler(uint8_t *pkt, size_t len, void *arg)
+static int dce_send_data_handler(struct mbuf *mb, void *arg)
 {
 	struct reflow *rf = arg;
-	struct mbuf mb;
+	size_t len = mbuf_get_left(mb);
 	int err = 0;
 
 	if (!reflow_is_ready(rf)) {
@@ -684,21 +702,16 @@ static int dce_send_data_handler(uint8_t *pkt, size_t len, void *arg)
 		return EINTR;
 	}
 
-	mb.buf = pkt;
-	mb.pos = 0;
-	mb.size = len;
-	mb.end = len;
-
 #if 0
 	info("reflow(%p): sending DCE packet: %zu tls_conn=%p\n",
-	     rf, mbuf_get_left(&mb), rf->tls_conn);
+	     rf, len, rf->tls_conn);
 #endif
 
 	switch (rf->crypto) {
 
 	case CRYPTO_DTLS_SRTP:
 		if (rf->tls_conn) {
-			err = dtls_send(rf->tls_conn, &mb);
+			err = dtls_send(rf->tls_conn, mb);
 		}
 		else {
 			warning("reflow(%p): dce_send_data:"
@@ -748,8 +761,7 @@ static void timeout_rtp(void *arg)
 		info("reflow(%p): no RTP received\n", rf);
 		rf->terminated = true;
 		rf->ice_ready = false;
-
-	    
+		
 		IFLOW_CALL_CB(rf->iflow, closeh, ETIMEDOUT, rf->iflow.arg);
 		return;
 	}
@@ -1275,7 +1287,13 @@ static void dtls_conn_handler(const struct sa *unused_peer, void *arg)
 	bool okay;
 	int err;
 
-	info("reflow(%p): incoming DTLS connect\n", rf);
+	info("reflow(%p): incoming DTLS connect tls=%p(err=%d)\n",
+	     rf, rf->tls_conn, rf->err);
+
+	if (rf->err) {
+		warning("reflow(%p): DTLS connect when in error state\n", rf);
+		return;
+	}
 
 	/* NOTE: The DTLS peer should be set in handle_dtls_packet */
 	if (!reflow_dtls_peer_isset(rf)) {
@@ -1699,22 +1717,19 @@ static void external_rtp_recv(struct reflow *rf,
 
 #if 0	
 	if (g_reflow.mediaflow.recv_rtph) {
-		g_reflow.mediaflow.recv_rtph(mbuf_buf(mb), len,
-					     rf->extarg);
+		g_reflow.mediaflow.recv_rtph(mb, rf->extarg);
 	}
 #endif
 
 	if (is_rtp) {
 		if (g_reflow.mediaflow.recv_rtph) {
-			g_reflow.mediaflow.recv_rtph(mbuf_buf(mb), len,
-						     rf->extarg);
+			g_reflow.mediaflow.recv_rtph(mb, rf->extarg);
 		}
 	}
 	/* This is a RTCP packet */	
 	else { 
 		if (g_reflow.mediaflow.recv_rtcph) {
-			g_reflow.mediaflow.recv_rtcph(mbuf_buf(mb), len,
-						      rf->extarg);
+			g_reflow.mediaflow.recv_rtcph(mb, rf->extarg);
 		}
 	}
 }
@@ -2022,7 +2037,7 @@ static void destructor(void *arg)
 		return;
 	}
 
-	list_unlink(&rf->le);	
+	list_unlink(&rf->le);
 	
 	rf->terminated = true;	
 
@@ -2032,6 +2047,10 @@ static void destructor(void *arg)
 	info("reflow(%p): destroyed (%H) got_sdp=%d\n",
 	     rf, print_errno, rf->err, rf->got_sdp);
 
+	if (g_reflow.mediaflow.closeh) {
+		g_reflow.mediaflow.closeh(rf->mf, rf->extarg);
+	}
+	
 	/* print a nice summary */
 	if (rf->got_sdp) {
 		info("%H\n", reflow_summary, rf);
@@ -2062,6 +2081,7 @@ static void destructor(void *arg)
 	rf->video.vds = NULL;
 	mem_deref(p);
 
+	dce_detach(rf->data.dce);
 	rf->data.dce = mem_deref(rf->data.dce);
 
 	rf->tls_conn = mem_deref(rf->tls_conn);
@@ -2099,12 +2119,11 @@ static void destructor(void *arg)
 	mem_deref(rf->clientid_local);
 	
 	mem_deref(rf->extmap);
-
-	if (g_reflow.mediaflow.closeh) {
-		g_reflow.mediaflow.closeh(rf->mf, rf->extarg);
-	}
 	
 	mem_deref(rf->mf);
+
+	mem_deref(rf->rtps.assrcv);
+	mem_deref(rf->rtps.vssrcv);
 }
 
 
@@ -2286,6 +2305,21 @@ static void dc_closed_handler(int chid, const char *label,
 	IFLOW_CALL_CB(rf->iflow, dce_closeh, rf->iflow.arg);
 }
 
+static bool exist_ssrc(struct reflow *rf, uint32_t ssrc)
+{
+	bool found = false;
+	int i;
+
+	for (i = 0; !found && i < rf->rtps.assrcc; ++i) {
+		found = rf->rtps.assrcv[i] == ssrc;
+	}
+	for (i = 0; !found && i < rf->rtps.vssrcc; ++i) {
+		found = rf->rtps.vssrcv[i] == ssrc;
+	}
+
+	return found;
+}
+
 
 /**
  * Create a new reflow.
@@ -2298,6 +2332,7 @@ static void dc_closed_handler(int chid, const char *label,
  */
 int reflow_alloc(struct iflow		**flowp,
 		 const char		*convid,
+		 const char		*userid_self,
 		 const char		*clientid_self,
 		 enum icall_conv_type	conv_type,
 		 enum icall_call_type	call_type,
@@ -2366,6 +2401,7 @@ int reflow_alloc(struct iflow		**flowp,
 			    reflow_stop_media,
 			    reflow_close,
 			    NULL, //reflow_get_stats,
+			    NULL, //reflow_get_audio_level
 			    reflow_debug);
 	list_append(&g_reflow.rfl, &rf->le, rf);
 
@@ -2466,7 +2502,10 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	regen_lssrc(rf);
+
+	
+
+	rf->lssrcv[MEDIA_AUDIO] = regen_lssrc(rf->lssrcv[MEDIA_AUDIO]);
 	info("reflow(%p): local SSRC is %u\n",
 	      rf, rf->lssrcv[MEDIA_AUDIO]);
 
@@ -2485,7 +2524,7 @@ int reflow_alloc(struct iflow		**flowp,
 	err = init_ice(rf);
 	if (err)
 		goto out;
-
+	
 	/* populate SDP with all known audio-codecs */
 	LIST_FOREACH(&g_reflow.aucodecl, le) {
 		struct aucodec *ac = list_ledata(le);
@@ -2568,6 +2607,11 @@ int reflow_alloc(struct iflow		**flowp,
 			goto out;
 
 		dtls_set_mtu(rf->dtls_sock, DTLS_MTU);
+
+		re_snprintf(rf->audio.fingerprint,
+			    sizeof(rf->audio.fingerprint),
+			    "sha-256 %H",
+			    dtls_print_sha256_fingerprint, rf->dtls);
 
 		err = sdp_media_set_lattr(rf->audio.sdpm, true,
 					  "fingerprint", "sha-256 %H",
@@ -2793,6 +2837,11 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 			    "ice-pwd", "%s", rf->ice_pwd);
 
 	if (rf->dtls) {
+		re_snprintf(rf->video.fingerprint,
+			    sizeof(rf->video.fingerprint),
+			    "sha-256 %H",
+			    dtls_print_sha256_fingerprint, rf->dtls);
+		
 		err = sdp_media_set_lattr(rf->video.sdpm, true,
 					  "fingerprint", "sha-256 %H",
 					  dtls_print_sha256_fingerprint,
@@ -3367,6 +3416,122 @@ void reflow_set_ice_role(struct reflow *rf, enum ice_role role)
 	}
 }
 
+static bool fmt_add(struct sdp_media *sdpm, struct sdp_format *fmt)
+{
+
+	return true;
+}
+
+
+static void bundle_ssrc(struct reflow *rf,
+			struct sdp_session *sess, struct sdp_media *sdpm,
+			uint32_t ssrc, uint32_t mid, const char *fingerprint,
+			bool is_video)
+{
+	struct sdp_media *newm;
+	const char *mtype;
+	char *label;
+	bool disabled = false;
+	int32_t bw;
+	int lport;
+	int err;
+	struct sa sa;
+	struct le *le;
+
+	mtype = is_video ? sdp_media_video : sdp_media_audio;
+	bw = is_video ? VIDEO_BANDWIDTH : AUDIO_BANDWIDTH; 
+	disabled = ssrc == 0;
+	lport = 9; //disabled ? 0 : 9;
+	err = sdp_media_add(&newm, sess, mtype, lport, sdp_media_proto(sdpm));
+	if (err) {
+		warning("bundle_ssrc: video add failed: %m\n", err);
+		return;
+	}
+
+	sa_init(&sa, AF_INET);
+	sa_set_str(&sa, "127.0.0.1", lport);
+	sdp_media_set_disabled(newm, false);
+	sdp_media_set_laddr(newm, &sa);
+	sdp_media_set_lport(newm, lport);
+	sdp_media_set_lattr(newm, false, "mid", "%u", mid);
+	sdp_media_set_lattr(newm, false, "rtcp-mux", NULL);
+	sdp_media_set_lattr(newm, false, "ice-ufrag", "%s", rf->ice_ufrag);
+	sdp_media_set_lattr(newm, false, "ice-pwd", "%s", rf->ice_pwd);
+	
+	sdp_media_set_lattr(newm, true, "fingerprint", "%s", fingerprint);
+	
+	if (is_video) {
+		sdp_media_set_lattr(newm, false, "extmap",
+			"2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+		sdp_media_set_lattr(newm, false, "extmap",
+			"3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
+		
+	}
+	else {
+		sdp_media_set_lattr(newm, false, "extmap",
+		       "1 urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on");
+		sdp_media_set_lattr(newm, false, "extmap",
+		       "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+	}
+	
+	uuid_v4(&label);
+	
+	if (!disabled) {
+		sdp_media_set_lattr(newm, false, "ssrc", "%u cname:%s",
+				    ssrc, label);
+		sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
+				    ssrc, label, label);
+		sdp_media_set_lattr(newm, false, "ssrc", "%u mslabel:%s",
+				    ssrc, label);
+		sdp_media_set_lattr(newm, false, "ssrc", "%u label:%s",
+				    ssrc, label);
+	}
+	mem_deref(label);
+
+
+	//sdp_media_format_apply(sdpm, false, NULL, -1, NULL,
+	//		       -1, -1, fmt_handler, newm);
+
+	//sdp_media_rattr_apply(sdpm, NULL,
+	//		      media_rattr_handler, newm);
+
+	LIST_FOREACH(sdp_media_format_lst(sdpm, true), le) {
+		struct sdp_format *fmt = le->data;
+
+		sdp_format_add(NULL, newm, false,
+		       fmt->id, fmt->name, fmt->srate, fmt->ch,
+		       NULL, NULL, NULL, false, "%s", fmt->params);
+	}
+	
+	sdp_media_set_ldir(newm, disabled ? SDP_INACTIVE : SDP_SENDONLY);
+	sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
+}
+
+
+static struct sdp_media *find_media(struct sdp_session *sess, bool video)
+				    
+{
+	struct sdp_media *sdpm;
+	const struct list *medial;
+	struct le *le;
+	bool found = false;
+	const char *type = video ? sdp_media_video : sdp_media_audio;
+
+	if (!sess) {
+		return NULL;
+	}
+
+	medial = sdp_session_medial(sess, true);
+
+	for (le = medial->head; le && !found; le = le->next) {
+		sdpm = (struct sdp_media *)le->data;
+		
+		found = streq(type, sdp_media_name(sdpm));
+	}
+
+	return found ? sdpm : NULL;
+}
+
 
 int reflow_generate_offer(struct iflow *iflow,
 			  char *sdp, size_t sz)
@@ -3397,20 +3562,69 @@ int reflow_generate_offer(struct iflow *iflow,
 
 	has_video = rf->video.sdpm && !rf->video.disabled;
 	has_data = rf->data.sdpm != NULL;
-	/* Setup the bundle, depending on usage of video or data */
-	if (has_video && has_data) {
-		sdp_session_set_lattr(rf->sdp, true,
-				      "group", "BUNDLE audio video data");
-	}
-	else if (has_video) {
-		sdp_session_set_lattr(rf->sdp, true,
-				      "group", "BUNDLE audio video");
-	}
-	else if (has_data) {
-		sdp_session_set_lattr(rf->sdp, true,
-				      "group", "BUNDLE audio data");
-	}
 
+	/* Setup the bundle, depending on usage of video or data */
+	{
+		struct mbuf *bmb;
+		char *bstr;
+		int i;
+		uint32_t mid = 1;
+		struct sdp_media *sdpa;
+		struct sdp_media *sdpv;
+		char *protoa;
+		char *protov;
+
+		sdpa = find_media(rf->sdp, false);
+		sdpv = find_media(rf->sdp, true);
+		str_dup(&protoa, sdp_media_proto(sdpa));
+		str_dup(&protov, sdp_media_proto(sdpv));
+		//sdpa = rf->audio.sdpm;
+		//sdpv = rf->video.sdpm;
+
+		//list_flush((struct list *)sdp_session_medial(rf->sdp, true));
+	
+		
+		bmb = mbuf_alloc(256);
+		if (!bmb) {
+			err = ENOMEM;
+			goto out;
+		}
+		
+		if (has_video && has_data)
+			mbuf_printf(bmb, "BUNDLE audio video data");
+		else if (has_video)
+			mbuf_printf(bmb, "BUNDLE audio video");
+		else if (has_data) 
+			mbuf_printf(bmb, "BUNDLE audio data");
+
+		for (i = 0; i < rf->rtps.assrcc; ++i) {
+			mbuf_printf(bmb, " %u", mid);
+			bundle_ssrc(rf, rf->sdp, sdpa,
+				    rf->rtps.assrcv[i], mid,
+				    rf->audio.fingerprint, false);
+			++mid;
+		}
+		if (has_video) {
+			for (i = 0; i < rf->rtps.vssrcc; ++i) {
+				mbuf_printf(bmb, " %u", mid);
+				bundle_ssrc(rf, rf->sdp, sdpv,
+					    rf->rtps.vssrcv[i], mid,
+					    rf->video.fingerprint, true);
+				++mid;
+			}
+		}
+		
+		bmb->pos = 0;
+		mbuf_strdup(bmb, &bstr, mbuf_get_left(bmb));
+		
+		sdp_session_set_lattr(rf->sdp, true, "group", bstr);
+
+		mem_deref(bstr);
+		mem_deref(bmb);
+		mem_deref(protoa);
+		mem_deref(protov);
+	}
+			
 	err = sdp_encode(&mb, rf->sdp, offer);
 	if (err) {
 		warning("reflow(%p): sdp encode(offer) failed (%m)\n",
@@ -3868,6 +4082,9 @@ int reflow_send_rtp(struct reflow *rf, const struct rtp_header *hdr,
 		return EINTR;
 	}
 
+	if (rf->err)
+		return rf->err;
+
 	headroom = get_headroom(rf);
 
 	mb = mbuf_alloc(headroom + pldlen);
@@ -3918,6 +4135,9 @@ int reflow_send_raw_rtp(struct reflow *rf, const uint8_t *buf,
 		return EINTR;
 	}
 
+	if (rf->err)
+		return rf->err;
+
 	pthread_mutex_lock(&rf->mutex_enc);
 
 	headroom = get_headroom(rf);
@@ -3945,6 +4165,78 @@ int reflow_send_raw_rtp(struct reflow *rf, const uint8_t *buf,
 	mem_deref(mb);
 
 	pthread_mutex_unlock(&rf->mutex_enc);
+
+	return err;
+}
+
+static void mf_assign_worker(struct mediaflow *mf, struct worker *w)
+{
+	struct reflow *rf;
+
+	if (!mf)
+		return;
+
+	rf = mf->flow;
+	rf->worker = w;
+
+	info("reflow(%p): dce=%p worker=%p\n", rf, rf->data.dce, w);
+
+	dce_assign_worker(rf->data.dce, w);
+}
+
+static int mf_assign_streams(struct mediaflow *mf,
+			     uint32_t **assrcv, int assrcc,
+			     uint32_t **vssrcv, int vssrcc)
+{
+	struct reflow *rf;
+	uint32_t *ssrcv;
+	int err = 0;
+	int i;
+	
+	if (!mf)
+		return EINVAL;
+
+	rf = mf->flow;
+
+	/* Audio streams */
+	ssrcv = mem_zalloc(assrcc * sizeof(*ssrcv), NULL);
+	if (!ssrcv) {
+		err = ENOMEM;
+		goto out;
+	}
+	rf->rtps.assrcv = ssrcv;
+	for(i = 0; i < assrcc; ++i) {
+		uint32_t ssrc = 0;
+		do {
+			ssrc = regen_lssrc(ssrc);
+		} while(exist_ssrc(rf, ssrc));
+		ssrcv[i] = ssrc;
+		rf->rtps.assrcc = i + 1;
+	}
+	if (assrcv)
+		*assrcv = ssrcv;
+
+	/* Video streams */
+	ssrcv = mem_zalloc(vssrcc * sizeof(*ssrcv), NULL);
+	if (!ssrcv) {
+		err = ENOMEM;
+		goto out;
+	}
+	rf->rtps.vssrcv = ssrcv;
+	for(i = 0; i < vssrcc; ++i) {
+		uint32_t ssrc = 0;
+		do {
+			ssrc = regen_lssrc(ssrc);
+		} while(exist_ssrc(rf, ssrc));
+		ssrcv[i] = ssrc;
+		rf->rtps.vssrcc = i + 1;
+	}
+	if (vssrcv)
+		*vssrcv = ssrcv;
+
+ out:
+	if (err)
+		mem_deref(ssrcv);
 
 	return err;
 }
@@ -4060,6 +4352,9 @@ int reflow_send_raw_rtcp(struct reflow *rf,
 		return EINTR;
 	}
 
+	if (rf->err)
+		return rf->err;
+	
 	pthread_mutex_lock(&rf->mutex_enc);
 
 	headroom = get_headroom(rf);
@@ -5889,6 +6184,8 @@ static int module_init(void)
 	iflow_set_alloc(reflow_alloc);
 	mediapump_register(&g_reflow.mediaflow.mp, "reflow",
 			   mf_set_handlers,
+			   mf_assign_worker,			   
+			   mf_assign_streams,
 			   mf_send_rtp,
 			   mf_send_rtcp,
 			   mf_send_dc,

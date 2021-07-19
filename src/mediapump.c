@@ -3,17 +3,17 @@
  * Copyright (C) 2020 Wire Swiss GmbH
  *
  * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <re.h>
@@ -28,6 +28,8 @@ static struct list g_flowl = LIST_INIT;
 struct mediapump {
 	char *name;
 	mediapump_set_handlers_h *set_handlersh;
+	mediaflow_assign_worker_h *assign_workerh;
+	mediaflow_assign_streams_h *assign_streamsh;
 	mediaflow_send_data_h *send_rtph;
 	mediaflow_send_data_h *send_rtcph;
 	mediaflow_send_dc_h *send_dch;
@@ -81,6 +83,38 @@ int mediapump_set_handlers(struct mediapump *mp,
 
 	return 0;
 }
+
+void mediaflow_assign_worker(struct mediaflow *mf, struct worker *w)
+{
+	struct mediapump *mp;
+	
+	if (!mf)
+		return;
+
+	mp = mf->mp;
+	if (mp && mp->assign_workerh) {
+		mp->assign_workerh(mf, w);
+	}
+}
+
+int mediaflow_assign_streams(struct mediaflow *mf,
+			      uint32_t **assrcv, int assrcc,
+			      uint32_t **vssrcv, int vssrcc)
+{
+	struct mediapump *mp;
+	int err = ENOSYS;
+	
+	if (!mf)
+		return EINVAL;
+
+	mp = mf->mp;
+	if (mp && mp->assign_streamsh) {
+		err = mp->assign_streamsh(mf, assrcv, assrcc, vssrcv, vssrcc);
+	}
+
+	return err;
+}	
+
 
 int mediaflow_send_rtp(struct mediaflow *mf,
 		       const uint8_t *data, size_t len)
@@ -166,6 +200,8 @@ void mediapump_remove_ssrc(struct mediaflow *mf, uint32_t ssrc)
 int mediapump_register(struct mediapump **mpp,
 		       const char *name,
 		       mediapump_set_handlers_h *set_handlersh,
+		       mediaflow_assign_worker_h *assign_workerh,
+		       mediaflow_assign_streams_h *assign_streamsh,
 		       mediaflow_send_data_h *rtph,
 		       mediaflow_send_data_h *rtcph,
 		       mediaflow_send_dc_h *dch,
@@ -187,6 +223,8 @@ int mediapump_register(struct mediapump **mpp,
 
 	str_dup(&mp->name, name);
 	mp->set_handlersh = set_handlersh;
+	mp->assign_workerh = assign_workerh;
+	mp->assign_streamsh = assign_streamsh;
 	mp->send_rtph = rtph;
 	mp->send_rtcph = rtcph;
 	mp->send_dch = dch;

@@ -3,17 +3,17 @@
  * Copyright (C) 2016 Wire Swiss GmbH
  *
  * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -24,6 +24,7 @@
 #include <getopt.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <wordexp.h>
 #include <re.h>
 #include <avs_log.h>
@@ -34,6 +35,7 @@
 #include <avs_service.h>
 #include "score.h"
 
+#define NUM_WORKERS 16
 
 /* Global Context */
 struct avs_service {
@@ -46,13 +48,17 @@ struct avs_service {
 	char url[256];
 	char blacklist[256];
 
-	char log_prefix[256];
-	FILE *logfp;
-	bool log_file;
+	struct {
+		char prefix[256];	
+		FILE *fp;
+		bool file;
+		struct lock *lock;
+	} log;
+
+	int worker_count;
 };
 struct avs_service avsd = {
-       .logfp = NULL,
-       .log_file = false,
+       .worker_count = NUM_WORKERS,
 };
 
 #define DEFAULT_REQ_ADDR "127.0.0.1"
@@ -66,7 +72,7 @@ static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q]\n");
+			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>]\n");
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
@@ -81,6 +87,7 @@ static void usage(void)
 			         "\t\t\t Example: <6.2.9,6.2.11\n");
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
+	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 }
 
 static void signal_handler(int sig)
@@ -145,7 +152,7 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 	mb = mbuf_alloc(1024);
 	if (!mb)
 		return;
-
+	
 	if (gettimeofday(&tv, NULL) == 0) {
 		struct tm  tstruct;
 		uint32_t tms;
@@ -156,17 +163,20 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 		tstruct = *localtime(&tv.tv_sec);
 		tms = tv.tv_usec / 1000;
 		strftime(timebuf, sizeof(timebuf), "%m-%d %X", &tstruct);
-		mbuf_printf(mb, "%s.%03u T(0x%08x) %s%s",
+		mbuf_printf(mb, "%s.%03u T(%p) %s%s",
 			   timebuf, tms,
-			   (void *)tid,
+			   tid,
 			   level_prefix(level), msg);
 	}
 	else {
 		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
 	}
 
-	if (avsd.log_file)
-		fp = avsd.logfp;
+
+	lock_write_get(avsd.log.lock);
+	
+	if (avsd.log.file)
+		fp = avsd.log.fp;
 	else
 		fp = stdout;
 
@@ -174,6 +184,7 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 		fwrite(mb->buf, 1, mb->end, fp);
 		fflush(fp);
 	}
+	lock_rel(avsd.log.lock);
 
 	mem_deref(mb);
 }
@@ -192,10 +203,13 @@ int main(int argc, char *argv[])
 	(void)sys_coredump_set(true);
 
 	memset(&avsd, 0, sizeof(avsd));
+
+	avsd.worker_count = NUM_WORKERS;
+	lock_alloc(&avsd.log.lock);
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "A:b:I:l:M:p:qr:u:");
+		const int c = getopt(argc, argv, "A:b:I:l:M:p:qr:u:w:");
 		if (0 > c)
 			break;
 
@@ -209,18 +223,22 @@ int main(int argc, char *argv[])
 			break;
 			
 		case 'I':
-			sa_set_str(&avsd.req_addr, optarg,
-				   DEFAULT_REQ_PORT);
+			err = sa_set_str(&avsd.req_addr, optarg,
+					 DEFAULT_REQ_PORT);
+			if (err)
+				goto out;
 			break;
 
 		case 'l':
-			avsd.log_file = true;
-			str_ncpy(avsd.log_prefix, optarg, sizeof(avsd.log_prefix));
+			avsd.log.file = true;
+			str_ncpy(avsd.log.prefix, optarg, sizeof(avsd.log.prefix));
 			break;
 
 		case 'M':
-			sa_set_str(&avsd.metrics_addr, optarg,
-				   DEFAULT_METRICS_PORT);
+			err = sa_set_str(&avsd.metrics_addr, optarg,
+					 DEFAULT_METRICS_PORT);
+			if (err)
+				goto out;
 			break;
 
 		case 'p':
@@ -237,6 +255,10 @@ int main(int argc, char *argv[])
 
 		case 'q':
 			log_level = LOG_LEVEL_WARN;
+			break;
+
+		case 'w':
+			avsd.worker_count = atoi(optarg);
 			break;
 
 		default:
@@ -283,7 +305,7 @@ int main(int argc, char *argv[])
 
 	log_set_min_level(log_level);
 	log_enable_stderr(false);
-	if (avsd.log_file) {
+	if (avsd.log.file) {
 		char  buf[256];
 		time_t     now = time(0);
 		struct tm  tstruct;
@@ -294,9 +316,9 @@ int main(int argc, char *argv[])
 		buf[16] = '-';
 
 		re_snprintf(log_file_name, sizeof(log_file_name),
-			    "%s_%s.log", avsd.log_prefix, buf);
+			    "%s_%s.log", avsd.log.prefix, buf);
 
-		avsd.logfp = fopen(log_file_name, "a");
+		avsd.log.fp = fopen(log_file_name, "a");
 	}
 
 	log_register_handler(&logh);
@@ -320,6 +342,8 @@ int main(int argc, char *argv[])
 	avs_close();
 	libre_close();
 
+	avsd.log.lock = mem_deref(avsd.log.lock);
+	
 	/* check for memory leaks */
 	tmr_debug();
 	mem_debug();
@@ -328,7 +352,8 @@ int main(int argc, char *argv[])
 	(void)error_handler;
 
 	log_unregister_handler(&logh);
-	
+
+		
 	return err;
 }
 
@@ -358,4 +383,9 @@ const char *avs_service_blacklist(void)
 {
 	return avsd.blacklist[0] != '\0' ? avsd.blacklist : NULL;
 	
+}
+
+int avs_service_worker_count(void)
+{
+	return avsd.worker_count;
 }

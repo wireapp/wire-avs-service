@@ -4,7 +4,7 @@
 
 PROJECT	  := sftd
 
-SFT_VER_MAJOR := 1
+SFT_VER_MAJOR := 2
 SFT_VER_MINOR := 0
 ifeq ($(BUILD_NUMBER),)
 SFT_VER_BUILD := local
@@ -257,6 +257,7 @@ dump:
 	@echo ""
 	@echo "SRCS = $(SRCS)"
 	@echo "OBJS = $(OBJS)"
+	@echo "LIBS = $(LIBS)"
 
 version:
 	@echo "$(SFT_VERSION)"
