@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+
 #define TIMEOUT_WORKER 20
 
 struct worker_task {
@@ -101,12 +102,13 @@ static void task_handler(int id, void *data, void *arg)
 static void worker_timeout_handler(void *arg)
 {
 	struct worker *w = arg;
-	struct worker_task *task = NULL;
 	struct le *le = NULL;
 
 	//info("worker_timeout: w(%p): %d\n", w, w->id);
 	
 	do {
+		struct worker_task *task = NULL;
+
 		lock_write_get(w->lock);
 		le = w->taskl.head;
 		if (le) {
@@ -324,6 +326,7 @@ void worker_close(void)
 		//err = mqueue_push(w->mq, WORKER_TASK_QUIT, NULL);
 		info("worker_close wid=%d\n", w->id);
 		err = push_task(w, WORKER_TASK_QUIT, NULL, NULL);
+		workb->v[i] = NULL;
 		if (!err) {
 			pthread_join(tid, NULL);
 			

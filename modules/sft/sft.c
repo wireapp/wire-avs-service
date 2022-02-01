@@ -49,9 +49,8 @@
 #define AUDIO_LEVEL_SILENCE 80
 #define AUDIO_LEVEL_ABS_SILENCE 127
 
-#define RTP_LEVELK 0.1f
+#define RTP_LEVELK 0.5f
 
-//#define SELECTIVE_VIDEO
 
 enum select_mode {
 	SELECT_MODE_NONE = 0x0,
@@ -142,9 +141,13 @@ struct task_arg {
 };
 
 #define TIMEOUT_SETUP 10000
-#define TIMEOUT_CONN 10000
+#define TIMEOUT_CONN 20000
 #define TIMEOUT_RR 3000
-#define TIMEOUT_FIR 3000
+
+/* Moved to avs_service as cmdline param or default
+ * #define TIMEOUT_FIR 3000
+ */
+
 #define TIMEOUT_TRANSCC 150
 
 #define RTP_SEQ_MOD (1<<16)
@@ -197,7 +200,7 @@ struct transcc {
 	struct tmr tmr;
 };
 
-#define NUM_RTP_STREAMS 4
+#define NUM_RTP_STREAMS 5
 
 //#define NUM_RTP_STREAMS_AUDIO 2
 //#define NUM_RTP_STREAMS_VIDEO 2
@@ -344,7 +347,8 @@ static void task_destructor(void *arg)
 	struct task_arg *task = arg;
 
 #if 0
-	info("task_destructor: call=%p[%u] arg=%p[%u]\n",
+	info("task_destructor(%p): call=%p[%u] arg=%p[%u]\n",
+	     task,
 	     task ? task->call : NULL, mem_nrefs(task->call),
 	     task ? task->arg : NULL, mem_nrefs(task->arg));
 #endif
@@ -375,7 +379,21 @@ static int task_handler(void *arg)
 static int assign_task(struct call *call, sft_task_h *taskh, void *arg, bool lock)
 {
 	struct task_arg *task;
+	bool locked = false;
 	int err = 0;
+
+	if (lock) {
+		lock_write_get(g_sft->lock);
+		locked = true;
+	}
+
+	if (!call->worker && call->group) {
+		call->worker = worker_get(call->group->id);
+	}
+	if (!call->worker) {
+		err = ENOENT;
+		goto out;
+	}
 	
 	task = mem_zalloc(sizeof(*task), task_destructor);
 	if (!task) {
@@ -383,21 +401,20 @@ static int assign_task(struct call *call, sft_task_h *taskh, void *arg, bool loc
 		goto out;
 	}
 
+#if 0
+	info("sft: assign_task(%p): call: %p[%u]\n", task, call, mem_nrefs(call));
+#endif
 	task->h = taskh;
-	if (lock)
-		lock_write_get(g_sft->lock);
 	task->call = mem_ref(call);
 	task->arg = mem_ref(arg);
-	if (lock)
-		lock_rel(g_sft->lock);
-
-	if (!call->worker && call->group) {
-		call->worker = worker_get(call->group->id);
-	}
-
-	worker_assign_task(call->worker, task_handler, task);
 
  out:
+	if (locked)
+		lock_rel(g_sft->lock);
+
+	if (!err)
+		worker_assign_task(call->worker, task_handler, task);
+
 	return err;
 }
 
@@ -1104,7 +1121,9 @@ static struct rtp_stream *video_stream_find(struct call *call,
 	bool found = false;
 	struct le *le;
 
+#if 0
 	info("video_stream_find(%p): rcall=%p\n", call, rcall);
+#endif
 
 	lock_write_get(call->lock);
 	for(le = call->video.select.streaml.head; !found && le; le = le->next) {
@@ -1114,8 +1133,10 @@ static struct rtp_stream *video_stream_find(struct call *call,
 	}
 
 	if (found) {
+#if 0
 		info("video_stream_find(%p): rcall=%p ix=%d/%d\n",
 		     call, rcall, vs->ix, rcall->video.rtps.c);
+#endif
 		
 		if (vs->ix < rcall->video.rtps.c)
 			rs = &rcall->video.rtps.v[vs->ix];
@@ -1315,7 +1336,9 @@ static void reflow_recv_rtp(struct mbuf *mb, void *arg)
 	group = call->group;
 	//s_ix = lookup_ix(group, call);
 	call->active = true;
-	call->alive = true;
+	
+	/* Clients are assumed to be alive only if they send PINGs */
+	/* call->alive = true; */
 	
 	pos = mb->pos;
 	len = mbuf_get_left(mb);
@@ -1502,6 +1525,19 @@ static void reflow_recv_rtp(struct mbuf *mb, void *arg)
 			 || (rst == RTP_STREAM_TYPE_VIDEO
 			    && rcall->video.select.mode == SELECT_MODE_LEVEL)) {
 				if (aulevel >= AUDIO_LEVEL_SILENCE) {
+					if (RTP_STREAM_TYPE_AUDIO == rst) {
+						struct rtp_stream *rs;
+
+						/* The level from this user has gone below the
+						 * silence level, we should remove them from the
+						 * streams, if one is assigned to them
+						 */
+						rs = rtp_stream_find(rcall, ssrc, rst, kg, aulevel);
+						if (rs) {
+							rs->current_ssrc = 0;
+							rs->level = AUDIO_LEVEL_ABS_SILENCE;
+						}
+					}
 					deref_locked(rcall);
 					continue;
 				}
@@ -1590,7 +1626,10 @@ static void reflow_recv_rtcp(struct mbuf *mb, void *arg)
 	struct call *call = arg;
 
 	(void)mb;
-	call->alive = true;
+	(void)call;
+
+	/* Don't reset the alive flag on RTCP, rely fully on PING */
+	/* call->alive = true; */
 	
 #if 0
 	struct call *call = arg;
@@ -1792,16 +1831,21 @@ static int send_conf_part(struct call *call, uint64_t ts,
 			goto out;
 		}
 		if (pcall->mf) {
-			part->ssrca = mediaflow_get_ssrc(pcall->mf, "audio", false);
-			part->ssrcv = mediaflow_get_ssrc(pcall->mf, "video", false);
+			part->ssrca = mediaflow_get_ssrc(pcall->mf,
+							 "audio", false);
+			part->ssrcv = mediaflow_get_ssrc(pcall->mf,
+							 "video", false);
 		}
 		part->authorized = false;
+		part->muted_state =
+			pcall->muted ? MUTED_STATE_MUTED : MUTED_STATE_UNMUTED;
 
 		list_append(&msg->u.confpart.partl, &part->le, part);
 	}
 
 	n = list_count(&msg->u.confpart.partl);
-	SFTLOG(LOG_LEVEL_INFO, "icall: %p %s.%s: with %d parts should_start=%d\n",
+	SFTLOG(LOG_LEVEL_INFO,
+	       "icall: %p %s.%s: with %d parts should_start=%d\n",
 	       call, call->icall,
 	       call->userid, call->clientid,
 	       n,
@@ -2012,13 +2056,16 @@ static void fir_handler(void *arg)
 	send_fir(call);
 	//send_pli(call);
 
-	tmr_start(&call->tmr_fir, TIMEOUT_FIR, fir_handler, call);
+	tmr_start(&call->tmr_fir, avs_service_fir_timeout(),
+		  fir_handler, call);
 }
 
 static void conn_handler(void *arg)
 {
 	struct call *call = arg;
 
+	info("conn_handler: call(%p)\n", call);
+	
 	if (call->alive) {
 		call->alive = false;
 		tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
@@ -2059,8 +2106,9 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	if (USE_RR)
 		tmr_start(&call->tmr_rr, TIMEOUT_RR, rr_handler, call);
 
-	tmr_start(&call->tmr_fir, TIMEOUT_FIR, fir_handler, call);
+	tmr_start(&call->tmr_fir, avs_service_fir_timeout(), fir_handler, call);
 	tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
+
 
 	lock_write_get(g_sft->lock);
 	group_send_conf_part(group);
@@ -2150,8 +2198,8 @@ static void icall_close_handler(struct icall *icall,
 	tmr_cancel(&call->tmr_conn);
 	
 	SFTLOG(LOG_LEVEL_INFO,
-	       "icall=%p calid=%s err=%d userid=%s clientid=%s metrics: %s\n",
-	       call, icall, call->callid, err, userid, clientid, metrics_json);
+	       "[%u] icall=%p callid=%s err=%d userid=%s clientid=%s metrics: %s\n",
+	       call, mem_nrefs(call), icall, call->callid, err, userid, clientid, metrics_json);
 
 	lock_write_get(sft->lock);
 	close_call(call);
@@ -2258,6 +2306,8 @@ static int ecall_ping_handler(struct ecall *ecall,
 			      void *arg)
 {
 	struct call *call = arg;
+
+	info("ecall_ping_handler: call(%p)\n", call);
 	
 	tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
 
@@ -2552,7 +2602,6 @@ static char *make_callid(const char *convid,
 }
 
 
-#ifdef SELECTIVE_VIDEO
 static void select_video_streams(struct call *call,
 				 const char *mode,
 				 const struct list *streaml)
@@ -2576,13 +2625,16 @@ static void select_video_streams(struct call *call,
 		LIST_FOREACH(streaml, le) {
 			struct econn_stream_info *si = le->data;
 			struct call *rcall;
-			char *callid;
+			char *callid = NULL;
 
 			callid = make_callid(call->group->id, si->userid, "_");
 			rcall = find_call(call->sft, callid);
-			if (rcall)
+			if (rcall) {
 				attach_video_stream(rcall, call, ix);
+				deref_locked(rcall);
+			}
 			++ix;
+			mem_deref(callid);
 		}
 	}
 	else {
@@ -2602,7 +2654,6 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 			     msg->u.confstreams.mode,
 			     &msg->u.confstreams.streaml);
 }
-#endif
 
 
 static int alloc_icall(struct call *call,
@@ -2625,9 +2676,7 @@ static int alloc_icall(struct call *call,
 		goto out;
 	}
 	ecall_set_confpart_handler(ecall, ecall_confpart_handler);
-#ifdef SELECTIVE_VIDEO
 	ecall_set_confstreams_handler(ecall, ecall_confstreams_handler);
-#endif
 	
 	/* Add any turn servers we may have */
 	info("sf: call(%p): adding %d TURN servers\n", call, turnc);
@@ -2701,7 +2750,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	if (err)
 		goto out;
 
-	call->video.select.mode = SELECT_MODE_LEVEL;
+	call->video.select.mode = SELECT_MODE_LIST;
 
 	if (turnc > 0) {
 		call->turnv = mem_zalloc(turnc * sizeof(*turnv), NULL);
@@ -2941,7 +2990,7 @@ static void http_stats_handler(struct http_conn *hc,
 			     void *arg)
 {
 	struct sft *sft = arg;
-	char *url;
+	char *url = NULL;
 	struct mbuf *mb = NULL;
 	char *stats = NULL;
 	uint64_t now;
@@ -2952,12 +3001,18 @@ static void http_stats_handler(struct http_conn *hc,
 
 #if 1
 	if (streq(url, "/debug")) {
+		lock_write_get(sft->lock);
+
 		info("Calls in list: %d\n", (int)dict_count(sft->groups));
 		dict_apply(sft->calls, print_group_handler, NULL);
 		info("Parts in list: %d\n", (int)dict_count(sft->calls));
 		dict_apply(sft->calls, print_call_handler, NULL);
 		http_creply(hc, 200, "OK", "text/plain", "Debug\n");
+
+		lock_rel(sft->lock);
+
 		mem_debug();
+
 		goto out;
 	}
 #endif
@@ -2966,12 +3021,12 @@ static void http_stats_handler(struct http_conn *hc,
 		err = ENOENT;
 		goto out;
 	}
-	
+
 	mb = mbuf_alloc(512);
 	now = tmr_jiffies();
 
 	lock_write_get(sft->lock);	
-	
+
 	mbuf_printf(mb, "# HELP sft_uptime "
 		    "Uptime in [seconds] of the SFT service\n");
 	mbuf_printf(mb, "# TYPE sft_uptime counter\n");
@@ -3006,13 +3061,13 @@ static void http_stats_handler(struct http_conn *hc,
 	mbuf_printf(mb, "sft_calls_total %llu\n", sft->stats.group_cnt);
 	mbuf_printf(mb, "\n");
 
+	lock_rel(sft->lock);
+
 	mb->pos = 0;
 	mbuf_strdup(mb, &stats, mb->end);
 	http_creply(hc, 200, "OK", "text/plain", "%s", stats);
 
  out:
-	lock_rel(sft->lock);
-	
 	mem_deref(stats);
 	mem_deref(mb);
 	mem_deref(url);
@@ -3372,13 +3427,10 @@ static void http_req_handler(struct http_conn *hc,
 				 group, userid, clientid,
 				 callid, cmsg->sessid_sender,
 				 cmsg->u.confconn.selective_audio,
-#ifdef SELECTIVE_VIDEO
 				 cmsg->u.confconn.selective_video,
-#else
-				 false,
-#endif
 				 NUM_RTP_STREAMS,
-				 cmsg->u.confconn.vstreams);
+				 11);
+		//cmsg->u.confconn.vstreams);
 		if (err)
 			goto out;
 
@@ -3432,11 +3484,13 @@ static void sft_destructor(void *arg)
 static void part_destructor(void *arg)
 {
 	struct participant *part = arg;
-	
+
 	list_unlink(&part->le);
 
-	mem_deref(part->call);
-	
+	info("part_dtor(%p): call: %p[%u]\n", part, part->call, mem_nrefs(part->call));
+
+	mem_deref(part->call);	
+
 	list_flush(&part->authl);
 }
 

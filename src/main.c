@@ -36,6 +36,7 @@
 #include "score.h"
 
 #define NUM_WORKERS 16
+#define TIMEOUT_FIR 3000
 
 /* Global Context */
 struct avs_service {
@@ -56,6 +57,7 @@ struct avs_service {
 	} log;
 
 	int worker_count;
+	uint64_t fir_timeout;
 	bool use_turn;
 };
 struct avs_service avsd = {
@@ -74,7 +76,7 @@ static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T\n");
+			 "[-u <URL>] [-b <blacklist>] [-k <timeout_ms> [-l <prefix>] [-q] [-w <count>] -T\n");
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
@@ -91,6 +93,7 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
 	(void)re_fprintf(stderr, "\t-T              Use TURN servers when gathering\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
+	(void)re_fprintf(stderr, "\t-k <timeout_ms> Key frame timeout (default: %u)\n", TIMEOUT_FIR);
 }
 
 static void signal_handler(int sig)
@@ -208,11 +211,12 @@ int main(int argc, char *argv[])
 	memset(&avsd, 0, sizeof(avsd));
 
 	avsd.worker_count = NUM_WORKERS;
+	avsd.fir_timeout = TIMEOUT_FIR;
 	lock_alloc(&avsd.log.lock);
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "A:b:I:l:M:p:qr:Tu:w:");
+		const int c = getopt(argc, argv, "A:b:I:k:l:M:p:qr:Tu:w:");
 		if (0 > c)
 			break;
 
@@ -230,6 +234,10 @@ int main(int argc, char *argv[])
 					 DEFAULT_REQ_PORT);
 			if (err)
 				goto out;
+			break;
+
+		case 'k':
+			avsd.fir_timeout = (uint64_t)atoi(optarg);
 			break;
 
 		case 'l':
@@ -401,4 +409,9 @@ int avs_service_worker_count(void)
 bool avs_service_use_turn(void)
 {
 	return avsd.use_turn;
+}
+
+uint64_t avs_service_fir_timeout(void)
+{
+	return avsd.fir_timeout;
 }

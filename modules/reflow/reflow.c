@@ -688,7 +688,13 @@ static int reflow_dce_send(struct iflow *flow, const uint8_t *data, size_t len)
 {
 	struct reflow *rf = (struct reflow *)flow;
 
-	return reflow_send_dc_data(rf, data, len);
+	if (!rf)
+		return EINVAL;
+	
+	if (rf->data.ready)
+		return reflow_send_dc_data(rf, data, len);
+	else
+		return EAGAIN;
 }
 
 
@@ -4295,8 +4301,13 @@ static int mf_send_dc(struct mediaflow *mf, const uint8_t *data, size_t len)
 		return EINVAL;
 
 	rf = mf->flow;
-
-	return reflow_send_dc_data(rf, data, len);
+	if (!rf)
+		return EINVAL;
+	
+	if (rf->data.ready)
+		return reflow_send_dc_data(rf, data, len);
+	else
+		return EAGAIN;
 }
 
 
