@@ -81,6 +81,9 @@ struct turn_conn {
 	struct sa mapped_addr;
 
 	struct list *connl;
+
+	uint16_t lcid; /* local connection id */
+	uint16_t rcid; /* remote connection id */
 };
 
 int turnconn_alloc(struct turn_conn **connp,
@@ -100,6 +103,9 @@ int turnconn_start(struct turn_conn *tc, struct list *connl,
 		   turnconn_estab_h *estabh, turnconn_data_h *datah,
 		   turnconn_error_h *errorh, void *arg);
 int turnconn_send(struct turn_conn *tc, struct sa *dst, struct mbuf *mb);
+int turnconn_add_cid(struct turn_conn *tc, uint16_t cid);
+uint16_t turnconn_lcid(struct turn_conn *tc);
+uint16_t turnconn_rcid(struct turn_conn *tc);
 int turnconn_add_permission(struct turn_conn *conn, const struct sa *peer);
 int turnconn_add_channel(struct turn_conn *conn, const struct sa *peer);
 struct turn_conn *turnconn_find_allocated(const struct list *turnconnl,

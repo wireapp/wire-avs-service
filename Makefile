@@ -5,7 +5,7 @@
 PROJECT	  := sftd
 
 SFT_VER_MAJOR := 3
-SFT_VER_MINOR := 0
+SFT_VER_MINOR := 1
 ifeq ($(BUILD_NUMBER),)
 SFT_VER_BUILD := local
 else

@@ -77,6 +77,8 @@ static void turnc_handler(int err, uint16_t scode, const char *reason,
 {
 	struct turn_conn *tc = arg;
 	struct stun_attr *attr;
+	struct stun_attr *chan;
+	
 	(void)mapped_addr;  /* NOTE: TCP-mapped address unused */
 
 	if (err) {
@@ -152,6 +154,12 @@ static void turnc_handler(int err, uint16_t scode, const char *reason,
 		stun_keepalive_enable(tc->ska, TURNPING_INTERVAL);
 	}
 
+	chan = stun_msg_attr(msg, STUN_ATTR_CHANNEL_NUMBER);
+	if (chan) {
+		tc->lcid = chan->v.channel_number;
+		info("turnconn(%p): local cid: %d\n", tc, tc->lcid);
+	}
+	
 	tc->estabh(tc, relay_addr, mapped_addr, msg, tc->arg);
 
 	return;
@@ -960,4 +968,24 @@ int turnconn_send(struct turn_conn *tc, struct sa *dst, struct mbuf *mb)
 	}
 
 	return err;
+}
+
+int turnconn_add_cid(struct turn_conn *tc, uint16_t cid)
+{
+	if (!tc)
+		return EINVAL;
+
+	tc->rcid = cid;
+
+	return 0;
+}
+
+uint16_t turnconn_lcid(struct turn_conn *tc)
+{
+	return tc ? tc->lcid : 0;
+}
+
+uint16_t turnconn_rcid(struct turn_conn *tc)
+{
+	return tc ? tc->rcid : 0;
 }

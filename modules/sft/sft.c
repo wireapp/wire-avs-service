@@ -38,8 +38,6 @@
 #include <avs_service_turn.h>
 #include <avs_audio_level.h>
 
-#define DEBUG_PACKET 0
-
 #define SFT_TOKEN "sft-"
 
 /* Use libre internal rtcp function */
@@ -57,6 +55,7 @@
 
 #define RTP_LEVELK 0.5f
 
+#define DEBUG_PACKET 0
 
 enum select_mode {
 	SELECT_MODE_NONE = 0x0,
@@ -246,7 +245,9 @@ enum rtp_stream_type {
         RTP_STREAM_TYPE_NONE  = 0,
         RTP_STREAM_TYPE_AUDIO = 1,
         RTP_STREAM_TYPE_VIDEO = 2,
+	RTP_STREAM_TYPE_ANY = 3
 };
+
 struct rtp_stream {
 	enum rtp_stream_type type;
 
@@ -273,7 +274,8 @@ struct call {
 	struct http_conn *hconn;
 	
 	char *sft_url;
-	char *sft_tuple;
+	struct sa sft_tuple;
+	uint16_t sft_cid;
 	char *origin_url;
 	char *userid;
 	char *clientid;
@@ -356,6 +358,7 @@ struct call {
 		struct turn_conn *tc;
 		struct list tcl;
 		char *url;
+		char *dstid;
 	} federate;
 };
 
@@ -402,7 +405,8 @@ static int alloc_call(struct call **callp, struct sft *sft,
 		      const char *userid, const char *clientid,
 		      const char *callid, const char *sessid,
 		      bool selective_audio, bool selective_video,
-		      int astreams, int vstreams);
+		      int astreams, int vstreams,
+		      bool locked);
 static int start_icall(struct call *call);
 static int remove_participant(struct call *call, void *arg);
 static int send_dce_msg(struct call *call, void *arg);
@@ -428,6 +432,7 @@ static int ecall_propsync_handler(struct ecall *ecall,
 				  void *arg);
 static void part_destructor(void *arg);
 
+static void call_close_handler(struct call *call, bool locked);
 
 static void tc_estab_handler(struct turn_conn *tc,
 			     const struct sa *relay_addr,
@@ -436,6 +441,8 @@ static void tc_estab_handler(struct turn_conn *tc,
 static void tc_data_handler(struct turn_conn *tc, const struct sa *src,
 			    struct mbuf *mb, void *arg);
 static void tc_err_handler(int err, void *arg);
+
+static void reflow_rtp_recv(struct mbuf *mb, void *arg);
 
 
 static void ref_locked(void *ref)
@@ -454,20 +461,27 @@ static void deref_locked(void *ref)
 	
 }
 
-static int start_federation(struct group *group,
-			    struct zapi_ice_server *turn)
+struct start_fed_arg {
+	struct group *group;
+	struct zapi_ice_server turn;
+};
+
+static int start_federation_task(void *arg)
 {
+	struct start_fed_arg *f = arg;
 	int err = 0;
 
-	turnconn_alloc(&group->federate.tc,
-		       &group->federate.tcl,
-		       turn,
+	turnconn_alloc(&f->group->federate.tc,
+		       &f->group->federate.tcl,
+		       &f->turn,
 		       NULL,
 		       tc_estab_handler,
 		       tc_data_handler,
 		       tc_err_handler,
-		       group);
+		       f->group);
 
+	mem_deref(f);
+	
 	return err;
 }
 
@@ -1528,6 +1542,11 @@ static bool exist_ssrc(struct call *call, bool ishost, uint32_t ssrc,
 			found = ssrc == part->ssrcv;
 			break;
 
+		case RTP_STREAM_TYPE_ANY:
+			found = ssrc == part->ssrca
+				|| ssrc == part->ssrcv;
+			break;
+
 		default:
 			break;
 		}
@@ -1537,6 +1556,50 @@ static bool exist_ssrc(struct call *call, bool ishost, uint32_t ssrc,
 	return found;
 }
 
+static int tc_send(struct turn_conn *tc,
+		   struct sa *dst, uint16_t cid,
+		   uint8_t *data, size_t len)
+{
+	struct mbuf *mb = NULL;
+	size_t hdr_len;
+	int err = 0;
+	
+	if (!sa_isset(dst, SA_ALL)) {
+		err = EINVAL;
+		goto out;
+	}
+
+	hdr_len = cid ? 4 : 0;
+	
+	mb = mbuf_alloc(len + TURN_HEADROOM + hdr_len);
+	if (!mb)
+		goto out;
+	
+	mb->pos = TURN_HEADROOM;
+	if (hdr_len > 0) {
+		mbuf_write_u16(mb, htons(cid));
+		mbuf_write_u16(mb, htons(len));
+	}
+	mbuf_write_mem(mb, data, len);
+	mb->pos = TURN_HEADROOM;
+
+#if DEBUG_PACKET
+	info("tc_send(%p): sending %zu bytes to: %J(cid=%u)\n",
+	     tc, len, dst, cid);
+#endif
+	//err = udp_send_anon(&dst, &mb);
+	err = turnconn_send(tc, dst, mb);
+	if (err) {
+		info("tc_send: sending to: %J(cid=%u) failed: %m\n",
+		     dst, cid, err);
+		goto out;
+	}
+
+ out:
+	mem_deref(mb);
+
+	return err;
+}
 
 static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 {
@@ -1835,6 +1898,21 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 				mediaflow_send_rtp(rcall->mf,
 						   mbuf_buf(mb), len);
 			}
+			else if (rcall->issft
+				 && sa_isset(&rcall->sft_tuple, SA_ADDR)
+				 && rcall->sft_cid) {
+#if DEBUG_PACKET
+				info("RTP_RX: sending to SFT-tc: "
+				     "%p --> %J/%u\n",
+				     rcall->federate.tc,
+				     &rcall->sft_tuple,
+				     rcall->sft_cid);
+#endif
+
+				tc_send(rcall->federate.tc,
+					&rcall->sft_tuple, rcall->sft_cid,
+					mbuf_buf(mb), len);
+			}
 		}
 		else {
 			struct rtp_stream *rs;
@@ -1876,12 +1954,24 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 		 	rtp.csrc[0] = ssrc;
 			rmb.pos = 0;
 			rtp_hdr_encode(&rmb, &rtp);
+			rmb.pos = 0;
 
 #if DEBUG_PACKET
-			info("RTP_RX: selective: sending rcall=%p[%p]\n",
-			     rcall, rcall->mf);
+			info("RTP_RX: selective: sending rcall=%p[%p] issft:%d\n",
+			     rcall, rcall->mf, rcall->issft);
 #endif
-			if (rcall->mf) {
+			if (rcall->issft
+			    && sa_isset(&rcall->sft_tuple, SA_ADDR)
+			    && rcall->sft_cid) {
+#if DEBUG_PACKET
+				info("RTP_RX: sending to tc: %p --> %J/%u\n",
+				     rcall->federate.tc, &rcall->sft_tuple, rcall->sft_cid);
+#endif
+				tc_send(rcall->federate.tc,
+					&rcall->sft_tuple, rcall->sft_cid,
+					(uint8_t *)rdata, rlen);
+			}
+			else if (rcall->mf) {
 				mediaflow_send_rtp(rcall->mf, rdata, rlen);
 			}
 		}
@@ -2022,42 +2112,6 @@ static void ctx_destructor(void *arg)
 	mem_deref(ctx->http_req);
 }
 
-static int send_provisional_turn(struct call *call,
-				 const uint8_t *data, size_t len)
-{
-	struct sa dst;
-	struct mbuf *mb = NULL;
-	int err;
-
-	err = sa_decode(&dst, call->sft_tuple, str_len(call->sft_tuple));
-	if (err) {
-		warning("send_provisional_turn: could not decode dst: %s\n",
-			call->sft_tuple);
-		goto out;
-	}
-
-	mb = mbuf_alloc(len + TURN_HEADROOM);
-	if (!mb)
-		goto out;
-	
-	mb->pos = TURN_HEADROOM;
-	mbuf_write_mem(mb, data, len);
-	mb->pos = TURN_HEADROOM;
-	
-	info("send_provisional_turn: sending %zu bytes to: %J\n", len, &dst);
-	//err = udp_send_anon(&dst, &mb);
-	err = turnconn_send(call->federate.tc, &dst, mb);
-	if (err) {
-		info("send_provisional_turn: sending to: %J failed: %m\n",
-		     &dst, err);
-		goto out;
-	}
-
- out:
-	mem_deref(mb);
-	
-	return err;
-}
 
 static int send_provisional_http(struct call *call,
 				 const uint8_t *data, size_t len)
@@ -2126,8 +2180,8 @@ static int send_provisional(struct call *call,
 	char *data;
 	int err;
 
-	info("send_provisional(%p): prov=%d sessid=%s sft_url=%s sft_tuple=%s msg=%H\n",
-	     call, call->isprov, call->sessid, call->sft_url, call->sft_tuple,
+	info("send_provisional(%p): prov=%d sessid=%s sft_url=%s sft_tuple=%j(cid=%u) msg=%H\n",
+	     call, call->isprov, call->sessid, call->sft_url, &call->sft_tuple, call->sft_cid,
 	     econn_message_brief, msg);
 
 	if (call->sessid) {
@@ -2141,10 +2195,10 @@ static int send_provisional(struct call *call,
 
 	group = call->group;
 	if (call->isprov) {
-		if (call->sft_tuple) {
-			send_provisional_turn(call,
-					      (const uint8_t *)data,
-					      str_len(data));
+		if (sa_isset(&call->sft_tuple, SA_ADDR)) {
+			tc_send(call->federate.tc,
+				&call->sft_tuple, call->sft_cid,
+				(uint8_t *)data, str_len(data));
 		}
 		else {
 			send_provisional_http(call,
@@ -2170,6 +2224,31 @@ static void pm_destructor(void *arg)
 	mem_deref(pm->call);
 }
 
+static char *sft_tuple(struct call *call, struct group *group)
+{
+	const size_t slen = 512;
+	char *tuple;
+	uint16_t cid;
+
+	cid = turnconn_lcid(group->federate.tc);
+
+	if (!cid)
+		str_dup(&tuple, group->federate.relay_str);
+	else {		
+		tuple = mem_zalloc(slen, NULL);
+		info("sft_tuple: tuple=%p cid=%u\n", tuple, cid);
+		if (!tuple)
+			return NULL;
+
+		re_snprintf(tuple, slen, "%s/%u",
+			    group->federate.relay_str,
+			    cid);
+	}
+
+	return tuple;
+}
+
+
 static int icall_send_handler(struct icall *icall,
 			      const char *userid_sender,
 			      struct econn_message *msg,
@@ -2187,10 +2266,12 @@ static int icall_send_handler(struct icall *icall,
 
 	SFTLOG(LOG_LEVEL_INFO,
 	       "icall: %p/%p(issft:%d/isprov:%d) userid: %s "
-	       "sft_tuple: %s msg: %H\n",
+	       "sft_tuple: %J(cid=%u) msg: %H\n",
 	       call,
 	       icall, call->icall, call->issft, call->isprov,
-	       userid_sender, call->sft_tuple ? call->sft_tuple : "???",
+	       userid_sender,
+	       &call->sft_tuple,
+	       call->sft_cid,
 	       econn_message_brief, msg);
 
 	/* Override the sessid with the convid associated
@@ -2209,8 +2290,10 @@ static int icall_send_handler(struct icall *icall,
 		if (group && group->federate.tc && group->federate.isready) {
 			msg->u.setup.sft_tuple =
 				mem_deref(msg->u.setup.sft_tuple);
-			str_dup(&msg->u.setup.sft_tuple,
-				group->federate.relay_str);
+
+			msg->u.setup.sft_tuple = sft_tuple(call, group);
+
+			info("call(%p): setting tuple: %s\n", call, msg->u.setup.sft_tuple);
 		}
 		
 		/* In the case the call is in update state
@@ -2356,7 +2439,10 @@ static int send_dce_msg(struct call *call, void *arg)
 	return err;
 }
 
-static int send_conf_conn(struct call *call, bool resp)
+static int send_conf_conn(struct call *call, bool resp,
+			  const char *sessid,
+			  const char *srcid,
+			  const char *dstid)
 {
 	struct group *group = call->group;
 	struct econn_message *msg;
@@ -2365,7 +2451,7 @@ static int send_conf_conn(struct call *call, bool resp)
 	if (!group)
 		return EINVAL;
 
-	if (!call->dc_estab)
+	if (!call->dc_estab && !call->sft_cid)
 		return 0;
 	
 	msg = econn_message_alloc();
@@ -2374,10 +2460,29 @@ static int send_conf_conn(struct call *call, bool resp)
 		goto out;
 	}
 
-	econn_message_init(msg, ECONN_CONF_CONN, group->id);
+	econn_message_init(msg, ECONN_CONF_CONN, sessid ? sessid : group->id);
 
 	msg->resp = resp;
-	assign_task(call, send_dce_msg, msg, false);
+	if (0 == call->sft_cid) {
+		assign_task(call, send_dce_msg, msg, false);
+	}
+	else {
+		char *rstr = NULL;
+
+		if (srcid)
+			str_ncpy(msg->src_userid, srcid, sizeof(msg->src_userid));
+		if (dstid)
+			str_ncpy(msg->dest_userid, dstid, sizeof(msg->dest_userid));
+
+		err = econn_message_encode(&rstr, msg);
+		if (!err) {
+			tc_send(group->federate.tc,
+				&call->sft_tuple, call->sft_cid,
+				(uint8_t *)rstr, str_len(rstr));
+		}
+
+		mem_deref(rstr);
+	}
 
  out:
 	mem_deref(msg);
@@ -2409,7 +2514,7 @@ static int send_conf_part(struct call *call, uint64_t ts,
 	if (!group)
 		return EINVAL;
 
-	if (!call->dc_estab)
+	if (!call->dc_estab && !call->sft_cid)
 		return 0;
 	
 	msg = econn_message_alloc();
@@ -2447,22 +2552,28 @@ static int send_conf_part(struct call *call, uint64_t ts,
 	}
 	stringlist_append(&msg->u.confpart.sftl, g_sft->url);
 
+	info("send_conf_part: group(%p)->calll has: %u elements ishost: %d\n",
+	     group, (uint32_t)list_count(&group->calll), group->sft.ishost);
+	
 	LIST_FOREACH(&group->calll, le) {
 		struct call *pcall = le->data;
 		struct econn_group_part *part;
 
-		if (!pcall || !pcall->mf)
+		if (!pcall || (!pcall->mf && !pcall->sft_cid))
 			continue;
 
-		if (!pcall->dc_estab)
+		if (!pcall->dc_estab && !pcall->sft_cid)
 			continue;
 
+		info("send_conf_part: group(%p)->pcall(%p) issft:%d\n", group, pcall, pcall->issft);
 		/* only host SFTs collate participants */
 		if (pcall->issft && !group->sft.ishost)
 			continue;
 
 		if (pcall->issft) {
 			struct le *rle;
+
+			info("send_confpart: call=%p pcall=%d include_self=%d\n", call, pcall, include_self);
 
 			if (pcall->federate.url) {
 				stringlist_append(&msg->u.confpart.sftl,
@@ -2471,6 +2582,7 @@ static int send_conf_part(struct call *call, uint64_t ts,
 			if (!include_self && pcall == call)
 				continue;
 
+			info("send_confpart: pcall(%p)->partl=%u\n", pcall, (uint32_t)list_count(&pcall->partl));
 			LIST_FOREACH(&pcall->partl, rle) {
 				struct participant *rpart = rle->data;
 
@@ -2540,7 +2652,30 @@ static int send_conf_part(struct call *call, uint64_t ts,
 		list_sort(&msg->u.confpart.partl, part_sort_handler, NULL);
 
 	if (n > 0) {
-		assign_task(call, send_dce_msg, msg, false);
+		if (call->dc_estab)
+			assign_task(call, send_dce_msg, msg, false);
+		else if (call->sft_cid) {
+			char *mstr = NULL;
+
+			str_ncpy(msg->sessid_sender, call->group->id,
+				 ARRAY_SIZE(msg->sessid_sender));
+			str_ncpy(msg->src_userid, call->callid,
+				 ARRAY_SIZE(msg->src_userid));
+			str_ncpy(msg->dest_userid, call->federate.dstid,
+				 ARRAY_SIZE(msg->dest_userid));
+			
+			err = econn_message_encode(&mstr, msg);
+			if (err) {
+				warning("send_conf_part: failed to "
+					"encode message: %m\n", err);
+			}
+			else {
+				tc_send(call->federate.tc,
+					&call->sft_tuple, call->sft_cid,
+					(uint8_t *)mstr, str_len(mstr));
+				mem_deref(mstr);
+			}
+		}
 	}
 
  out:
@@ -2602,7 +2737,8 @@ static void group_send_conf_part(struct group *group,
 		 * from the host SFT
 		 */
 		if (call && call->active && !call->issft
-		    && !(call->sft_url || call->sft_tuple)) {
+		    && !call->sft_url
+		    && !sa_isset(&call->sft_tuple, SA_ADDR)) {
 			sent = true;
 			send_conf_part(call, now, entropy, entropylen,
 				       true, false);
@@ -2860,7 +2996,8 @@ out:
 
 static void start_provisional(struct group *group,
 			      const char *url,
-			      const char *tuple,
+			      struct sa *tuple,
+			      uint16_t cid,
 			      uint8_t *entropy, size_t entropylen)
 {
 	struct call *call;
@@ -2886,7 +3023,8 @@ static void start_provisional(struct group *group,
 			 "sft", "_",
 			 provid, provid,
 			 false, false,
-			 NUM_RTP_STREAMS, NUM_RTP_STREAMS);
+			 NUM_RTP_STREAMS, NUM_RTP_STREAMS,
+			 true);
 
 	if (err) {
 		warning("start_provisional: could not allocate call: %m\n",
@@ -2899,14 +3037,46 @@ static void start_provisional(struct group *group,
 	mem_deref(call);
 	
 	str_dup(&call->sft_url, url);
-	str_dup(&call->sft_tuple, tuple);
+	sa_cpy(&call->sft_tuple, tuple);
+	call->sft_cid = cid;
 	call->issft = true;
 	call->isprov = true;
 	call->federate.tc = group->federate.tc;
 	call->group = mem_ref(group);
 	append_group(group, call);
 	group->sft.call = mem_ref(call);
-	start_icall(call);
+	if (0 == call->sft_cid)
+		start_icall(call);
+	else {
+		struct econn_message msg;
+		struct econn_props *props;
+		char ltup[256];
+		uint16_t lcid;
+
+		lcid = turnconn_lcid(group->federate.tc);
+		econn_message_init(&msg, ECONN_SETUP, provid);
+
+		if (cid) {
+			re_snprintf(ltup, sizeof(ltup), "%s/%u",
+				    group->federate.relay_str, lcid);
+		}
+		else {
+			re_snprintf(ltup, sizeof(ltup), "%s",
+				    group->federate.relay_str);
+		}
+		msg.u.setup.sft_tuple = ltup;
+
+		err = econn_props_alloc(&props, NULL);
+		if (!err)
+			err = econn_props_add(props, "sft_call", "true");
+		if (err)
+			goto out;
+		msg.u.setup.props = props;
+		
+		send_provisional(call, &msg);
+
+		mem_deref(props);
+	}
 
  out:
 	mem_deref(provid);
@@ -2959,7 +3129,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 		ecall_set_confmsg_handler((struct ecall *)call->icall,
 					  ecall_confmsg_handler);
 		if (group) {
-			send_conf_conn(call, false);
+			send_conf_conn(call, false, NULL, call->callid, NULL);
 		}
 	}
 	else {
@@ -2967,7 +3137,8 @@ static void icall_datachan_estab_handler(struct icall *icall,
 		tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
 
 		/* send initial CONPART only to non-federated calls */
-		if (group && !(call->sft_url || call->sft_tuple)) {
+		if (group && !call->sft_url
+		    && !sa_isset(&call->sft_tuple, SA_ADDR)) {
 			uint8_t *entropy;
 			size_t entropylen;
 
@@ -2989,7 +3160,9 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	 * a request for a provisional call on the host SFT
 	 */
 	if (!call->issft) {
-		if ((call->sft_url || call->sft_tuple) && !update) {
+		if ((call->sft_url
+		     || sa_isset(&call->sft_tuple, SA_ADDR))
+		    && !update) {
 			uint8_t *entropy;
 			size_t entropylen;
 
@@ -2998,7 +3171,8 @@ static void icall_datachan_estab_handler(struct icall *icall,
 			if (entropy) {
 				start_provisional(group,
 						  call->sft_url,
-						  call->sft_tuple,
+						  &call->sft_tuple,
+						  call->sft_cid,
 						  entropy, entropylen);
 				mem_deref(entropy);
 			}
@@ -3041,6 +3215,9 @@ static bool group_exist_handler(char *key, void *val, void *arg)
 static bool group_exists(struct sft *sft, struct group *group)
 {
 	struct group *g;
+
+	if (!group)
+		return false;
 	
 	g = dict_apply(sft->groups, group_exist_handler, group);
 
@@ -3090,7 +3267,28 @@ static void close_sfts(struct group *group)
 		info("close_sfts(%p): closing SFT call %p(%s)\n",
 		     group, call, call->callid);
 
-		ICALL_CALL(call->icall, end);
+		if (call->icall) {
+			ICALL_CALL(call->icall, end);
+		}
+		else if (call->sft_cid) {
+			struct econn_message msg;
+			char *rstr;
+			int err;
+
+			econn_message_init(&msg, ECONN_HANGUP, call->callid);
+			str_ncpy(msg.dest_userid,
+				 call->federate.dstid,
+				 sizeof(msg.dest_userid));
+			err = econn_message_encode(&rstr, &msg);
+			if (!err) {
+				tc_send(group->federate.tc,
+					&call->sft_tuple, call->sft_cid,
+					(uint8_t *)rstr, str_len(rstr));
+
+				mem_deref(rstr);
+			}
+			call_close_handler(call, false);
+		}
 	}
 }
 
@@ -3118,10 +3316,8 @@ static void close_call(struct call *call)
 		if (call && other)
 			assign_task(other, remove_participant, call, false);
 	}
-	info("close_call(%p): flushing partl: refs=%u\n", call, mem_nrefs(call));
 	list_flush(&call->partl);
 	list_flush(&call->sft_partl);
-	info("close_call(%p): flushed partl: refs=%u\n", call, mem_nrefs(call));
 }
 
 static void sft_send_conf_part(struct group *group,
@@ -3151,15 +3347,8 @@ static void sft_send_conf_part(struct group *group,
 	}
 }
 
-static void icall_close_handler(struct icall *icall,
-				int err,
-				const char *metrics_json,
-				uint32_t msg_time,
-				const char *userid,
-				const char *clientid,
-				void *arg)
+static void call_close_handler(struct call *call, bool locked)
 {
-	struct call *call = arg;
 	char *callid = NULL;
 	struct group *group = call->group;
 	struct sft *sft = call->sft;
@@ -3167,27 +3356,23 @@ static void icall_close_handler(struct icall *icall,
 	bool issft;
 	bool ishost = false;
 
+	info("call_close_handler(%p): group=%p\n", call, group);
 	tmr_cancel(&call->tmr_conn);
-	
-	SFTLOG(LOG_LEVEL_INFO,
-	       "[%u] icall=%p callid=%s err=%d userid=%s clientid=%s "
-	       "metrics: %s\n",
-	       call, mem_nrefs(call), icall, call->callid, err,
-	       userid, clientid, metrics_json);
 
 	issft = call->issft;
 	if (group) {
 		ishost = group->sft.ishost
-			|| (!(call->sft_url || call->sft_tuple));
+		|| (!(call->sft_url || sa_isset(&call->sft_tuple, SA_ADDR)));
 	}
 	str_dup(&callid, call->callid);
 
-	lock_write_get(sft->lock);
+	if (locked)
+		lock_write_get(sft->lock);
 	close_call(call);
 	if (group && group->sft.call == call) {
 		group->sft.call = mem_deref(call);
 	}
-	info("icall_close_handler(%p): ishost=%d issft=%d refs=%u\n",
+	info("call_close_handler(%p): ishost=%d issft=%d refs=%u\n",
 	     call, ishost, issft, mem_nrefs(call));
 	dict_remove(sft->calls, callid);
 	
@@ -3217,10 +3402,31 @@ static void icall_close_handler(struct icall *icall,
 		}
 	}
 
-	lock_rel(sft->lock);
+	if (locked)
+		lock_rel(sft->lock);
 
 	mem_deref(callid);
 }
+
+static void icall_close_handler(struct icall *icall,
+				int err,
+				const char *metrics_json,
+				uint32_t msg_time,
+				const char *userid,
+				const char *clientid,
+				void *arg)
+{
+	struct call *call = arg;
+
+	SFTLOG(LOG_LEVEL_INFO,
+	       "[%u] icall=%p callid=%s err=%d userid=%s clientid=%s "
+	       "metrics: %s\n",
+	       call, mem_nrefs(call), icall, call->callid, err,
+	       userid, clientid, metrics_json);
+	
+	call_close_handler(call, true);
+}
+
 
 #if 0
 static void icall_metrics_handler(const char *metrics_json, void *arg)
@@ -3280,9 +3486,11 @@ static int send_propsync(struct call *call, struct econn_props *props,
 	if (!call || !props)
 		return EINVAL;
 
-	if (!call->mf || !call->dc_estab)
-		return ENOSYS;
-	
+	if (call->mf) {
+		if (!call->dc_estab)
+			return ENOSYS;
+	}
+
 	econn_message_init(&pmsg, ECONN_PROPSYNC, NULL);
 
 	pmsg.resp = resp;
@@ -3290,6 +3498,11 @@ static int send_propsync(struct call *call, struct econn_props *props,
 	pmsg.u.propsync.props = props;
 	str_ncpy(pmsg.src_userid, userid, sizeof(pmsg.src_userid));
 	str_ncpy(pmsg.src_clientid, clientid, sizeof(pmsg.src_clientid));
+	/* Add a destination id if we are sending a federation request */
+	if (!call->mf && call->federate.dstid) {
+		str_ncpy(pmsg.dest_userid, call->federate.dstid,
+			 sizeof(pmsg.dest_userid));
+	}
 
 	err = econn_message_encode(&pstr, &pmsg);
 	if (err) {
@@ -3307,6 +3520,13 @@ static int send_propsync(struct call *call, struct econn_props *props,
 		ecall_trace((struct ecall *)call->icall, &pmsg, true,
 			    ECONN_TRANSP_DIRECT, "DataChan %H\n",
 			    econn_message_brief, &pmsg);
+	}
+	else {
+		if (call->group && call->group->federate.tc && call->sft_cid) {
+			tc_send(call->group->federate.tc,
+				&call->sft_tuple, call->sft_cid,
+				(uint8_t *)pstr, plen);
+		}
 	}
  out:
 	mem_deref(pstr);
@@ -3339,7 +3559,7 @@ static int ecall_ping_handler(struct ecall *ecall,
 {
 	struct call *call = arg;
 
-	info("ecall_ping_handler\n");
+	SFTLOG(LOG_LEVEL_INFO, "\n", call);
 	
 	tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
 
@@ -3387,11 +3607,9 @@ static int ecall_propsync_handler(struct ecall *ecall,
 
 		if (auth) {
 			ref_locked(part->call);
-			if (part->call->dc_estab) {
-				send_propsync(part->call, call->props,
-					      msg->src_userid,
-					      msg->src_clientid, true);
-			}
+			send_propsync(part->call, call->props,
+				      msg->src_userid,
+				      msg->src_clientid, true);
 			deref_locked(part->call);
 		}
 	}
@@ -3399,15 +3617,35 @@ static int ecall_propsync_handler(struct ecall *ecall,
 	return 0;
 }
 
+/*
+static int deref_tc_handler(void *arg)
+{
+	mem_deref(arg);
+
+	return 0;
+}
+*/
 
 static void group_destructor(void *arg)
 {
 	struct group *group = arg;
+	//void *tc;
 
 	info("group_destructor(%p): id=%s\n", group, group->id);
+
+	//tc = group->federate.tc;
+	//group->federate.tc = NULL;
 	
+	//worker_assign_main(deref_tc_handler, tc);
 	mem_deref(group->federate.tc);
 	mem_deref(group->id);
+}
+
+static void farg_destructor(void *arg)
+{
+	struct start_fed_arg *farg = arg;
+
+	mem_deref(farg->group);
 }
 
 static int alloc_group(struct sft *sft,
@@ -3437,7 +3675,14 @@ static int alloc_group(struct sft *sft,
 	sft->stats.group_cnt++;
 
 	if (isfederated) {
-		start_federation(group, turn);
+		struct start_fed_arg *f;
+
+		f = mem_zalloc(sizeof(*f), farg_destructor);
+		f->group = mem_ref(group);
+		f->turn = *turn;
+		worker_assign_task(worker_get(group->id),
+				   start_federation_task,
+				   f);
 	}
 
 	if (groupp)
@@ -3511,7 +3756,6 @@ static void call_destructor(void *arg)
 	mem_deref(call->sessid);
 	mem_deref(call->props);
 	mem_deref(call->sft_url);
-	mem_deref(call->sft_tuple);
 	mem_deref(call->origin_url);
 	mem_deref(call->icall);
 	mem_deref(call->http_cli);
@@ -3538,6 +3782,7 @@ static void call_destructor(void *arg)
 	
 	mem_deref(call->group);
 	mem_deref(call->federate.url);
+	mem_deref(call->federate.dstid);
 	mem_deref(call->lock);
 }
 
@@ -3595,8 +3840,7 @@ static struct econn_group_part *find_in_confpart(const struct list *partl,
 }
 
 
-static void sft_confpart_handler(struct ecall *ecall,
-				 const struct econn_message *msg,
+static void sft_confpart_handler(const struct econn_message *msg,
 				 void *arg)
 {
 	struct call *call = arg;
@@ -3753,10 +3997,8 @@ static void ecall_confpart_handler(struct ecall *ecall,
 		list_append(&lpart->authl, &aup->le, aup);
 
 		lpart->auth = part->authorized;
-		if (rpart->call->dc_estab) {
-			send_propsync(rpart->call, call->props,
-				      call->userid, call->clientid, true);
-		}
+		send_propsync(rpart->call, call->props,
+			      call->userid, call->clientid, true);
 	}
 }
 
@@ -3846,7 +4088,7 @@ static void ecall_confmsg_handler(struct ecall *ecall,
 	switch (msg->msg_type) {
 	case ECONN_CONF_PART:
 		if (call->issft) {
-			sft_confpart_handler(ecall, msg, arg);
+			sft_confpart_handler(msg, arg);
 		}
 		else {
 			ecall_confpart_handler(ecall, msg, arg);
@@ -3908,41 +4150,32 @@ static void ecall_confmsg_handler(struct ecall *ecall,
 					groupid);
 			}
 			else {
-				char *callid;
-				
-				info("ecall_confmsg_handler(%p): appending SFT "
-				     "call to group: %s(%p)\n",
-				     call, groupid, group);
-				
 				lock_write_get(g_sft->lock);
-				callid = make_callid(groupid,
-						     msg->src_userid,
-						     call->callid);
+				if (ecall) {
+					char *callid;
+				
+					info("ecall_confmsg_handler(%p): appending SFT "
+					     "call to group: %s(%p)\n",
+					     call, groupid, group);
+				
+					callid = make_callid(groupid,
+							     msg->src_userid,
+							     call->callid);
 
-				info("%p(%s): adding to calls refs=%u\n",
-				     call, callid, mem_nrefs(call));
-				dict_add(g_sft->calls, callid, call);
-				info("%p(%s): removing from provs refs=%u\n",
-				     call, call->callid, mem_nrefs(call));
-				dict_remove(g_sft->provisional.calls,
-					    call->callid);
-				info("%p(%s): removed from provs refs=%u\n",
-				     call, groupid, mem_nrefs(call));
-				call->callid = mem_deref(call->callid);
-				call->callid = callid;
+					dict_add(g_sft->calls, callid, call);
+					dict_remove(g_sft->provisional.calls,
+						    call->callid);
+					call->callid = mem_deref(call->callid);
+					call->callid = callid;				
+					if (!call->group) {
+						call->group = group;
+						append_group(group, call);
+					}
+				}
 				
 				/* Only host SFTs receive CONFCONN-Reqs */
 				group->sft.ishost = !msg->resp;
-				if (!call->group) {
-					call->group = group;
-					info("pre-append refs: %u\n",
-					     mem_nrefs(call));
-					append_group(group, call);
-					info("post-append refs: %u\n",
-					     mem_nrefs(call));
-					//call->join_ts =	tmr_jiffies();
-				}
-				send_conf_conn(call, true);
+				send_conf_conn(call, true, NULL, call->callid, call->federate.dstid);
 				lock_rel(g_sft->lock);
 			}
 		}
@@ -4051,7 +4284,8 @@ static int alloc_call(struct call **callp, struct sft *sft,
 		      const char *userid, const char *clientid,
 		      const char *callid, const char *sessid,
 		      bool selective_audio, bool selective_video,
-		      int astreams, int vstreams)
+		      int astreams, int vstreams,
+		      bool locked)
 {
 	struct call *call = NULL;
 	size_t i;
@@ -4115,14 +4349,16 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	tmr_init(&call->tmr_rr);
 	tmr_init(&call->tmr_fir);
 
-	lock_write_get(sft->lock);
+	if (locked)
+		lock_write_get(sft->lock);
 	if (group) {
 		dict_add(sft->calls, callid, call);
 		//mem_deref(call); /* call is now owned by dictionary */
 		sft->stats.call_cnt++;
 		append_group(group, call);
 	}
-	lock_rel(sft->lock);
+	if (locked)
+		lock_rel(sft->lock);
 
  out:
 	if (err) {
@@ -4211,7 +4447,7 @@ static int new_call(struct call *call, void *arg)
 	struct http_conn *hc = arg;
 	int err;
 
-	SFTLOG(LOG_LEVEL_INFO, "\n", call);
+	SFTLOG(LOG_LEVEL_INFO, "sft_tuple=%J(cid=%u)\n", call, &call->sft_tuple, call->sft_cid);
 		
 	call->hconn = mem_ref(hc);
 	err = start_icall(call);
@@ -4423,36 +4659,155 @@ static struct call *find_provisional(struct sft *sft, const char *provid)
 	return call;
 }
 
-static struct call *federate_request(struct group *group, struct mbuf *mb,
+static void split_tuple(struct call *call, const char *tuple)
+{
+	char *tp;
+	char *c;
+	int err;
+
+	info("split_tuple: %s\n", tuple);
+
+	err = str_dup(&tp, tuple);
+	if (err)
+		return;
+	
+	c = strrchr(tp, '/');
+
+	info("split_tuple: split at: %s\n", c);
+	
+	if (c && str_len(c) > 1) {		
+		call->sft_cid = (uint16_t)atoi(&c[1]);
+		info("split_tuple: extract cid=%u\n", call->sft_cid);
+	}
+	else {
+		call->sft_cid = 0;
+		info("split_tuple: no cid\n");
+	}
+
+	/* Truncate the sft_tuple at the cid */
+	if (c) {
+		*c = '\0';
+		sa_decode(&call->sft_tuple, tp, str_len(tp));
+		info("split_tuple: decoding tuple: %s --> %J\n", tp, &call->sft_tuple);
+	}
+
+	mem_deref(tp);
+}
+
+static struct call *federate_request(struct group *group,
+				     struct mbuf *mb,
 				     const char *convid)
 {
 	struct econn_message *cmsg = NULL;
 	struct call *call = NULL;
+	char *srcid;
+	char *dstid;
 	int err = 0;
+
+	if (!group)
+		return NULL;
 
 	err = econn_message_decode(&cmsg, 0, 0,
 				   (const char *)mbuf_buf(mb),
 				   mbuf_get_left(mb));
-	if (err)
+	if (err) {
+		warning("federate_request: group(%p): failed to decode econn message: %s\n",
+			(char *)mbuf_buf(mb));
 		goto out;
+	}
 
 	if (!convid) {
 		convid = cmsg->sessid_sender;
 	}
 
 	switch(cmsg->msg_type) {
+	case ECONN_CONF_CONN:
+		srcid = cmsg->src_userid;
+		dstid = cmsg->dest_userid;
+
+		info("federate_request: CONF_CONN-%s "
+		     "convid=%s srcid=%s dstid=%s\n",
+		     cmsg->resp ? "resp" : "req", convid, srcid, dstid);
+
+		if (cmsg->resp) {
+			lock_write_get(g_sft->lock);
+			call = dict_lookup(g_sft->calls, dstid);
+			if (call)
+				str_dup(&call->federate.dstid, srcid);
+			lock_rel(g_sft->lock);
+		}
+		else {
+			lock_write_get(g_sft->lock);
+			call = find_provisional(g_sft, convid);
+
+			if (!call) {
+				warning("federate_request: provisional call: "
+					"%s not found\n",
+					convid);
+				err = ENOSYS;
+				lock_rel(g_sft->lock);				
+				goto out;
+			}
+			call->callid = mem_deref(call->callid);
+			call->callid = make_callid("sft", convid, srcid);
+
+			dict_add(g_sft->calls, call->callid, call);
+			dict_remove(g_sft->provisional.calls, convid);
+			call->isprov = false;
+
+			str_dup(&call->federate.dstid, srcid);
+
+			if (!call->group) {
+				call->group = mem_ref(group);
+				append_group(group, call);
+			}
+			lock_rel(g_sft->lock);			
+		}
+		if (!call) {
+			warning("federate_request: no call found\n");
+			err = ENOSYS;
+			goto out;
+		}
+		ecall_confmsg_handler(NULL, cmsg, call);
+		break;
+
+	case ECONN_CONF_PART:
+		dstid = cmsg->dest_userid;
+
+		info("federate_request: CONF_PART-%s convid=%s dstid=%s\n",
+		     cmsg->resp ? "resp" : "req", convid, dstid);
+		lock_write_get(g_sft->lock);
+		call = dict_lookup(g_sft->calls, dstid);		
+		lock_rel(g_sft->lock);
+		if (!call) {
+			warning("federate_request: cannot find call: %s\n",
+				dstid);
+			err = ENOSYS;
+			goto out;
+		}
+		ecall_confmsg_handler(NULL, cmsg, call);
+		break;
+
 	case ECONN_SETUP:
+		lock_write_get(g_sft->lock);
 		call = find_provisional(g_sft, convid);
+		lock_rel(g_sft->lock);
 		info("federate_request: SETUP-%s convid=%s call=%p\n",
 		     cmsg->resp ? "resp" : "req", convid, call);
 		if (call) {
 			if (cmsg->resp) {
 				dict_add(g_sft->calls, call->callid, call);
 				dict_remove(g_sft->provisional.calls, convid);
+				if (call->sft_cid) {
+					send_conf_conn(call, false, convid,
+						       call->callid,
+						       call->callid);
+				}
 			}
 			else {
 				warning("sft: provisional call: %s "
 					"already exists\n");
+				call = NULL;
 				err = EALREADY;
 				goto out;
 			}
@@ -4464,7 +4819,8 @@ static struct call *federate_request(struct group *group, struct mbuf *mb,
 					 "prov", "_",
 					 convid, cmsg->sessid_sender,
 					 false, false,
-					 NUM_RTP_STREAMS, NUM_RTP_STREAMS);
+					 NUM_RTP_STREAMS, NUM_RTP_STREAMS,
+					 true);
 			if (err) {
 				warning("federate_request: failed to "
 					"alloc_call: %m\n", err);
@@ -4474,12 +4830,17 @@ static struct call *federate_request(struct group *group, struct mbuf *mb,
 			call->issft = true;
 			call->isprov = true;
 			call->federate.tc = group->federate.tc;
+			
 			if (cmsg->u.setup.sft_tuple) {
-				str_dup(&call->sft_tuple,
-					cmsg->u.setup.sft_tuple);
+				split_tuple(call, cmsg->u.setup.sft_tuple);
 				info("federate_request(%p): setting call: %p "
-				     "sft_tuple=%s\n",
-				     group, call, call->sft_tuple);
+				     "sft_tuple=%J sft_cid=%u\n",
+				     group, call,
+				     &call->sft_tuple, call->sft_cid);
+				if (call->sft_cid && call->federate.tc) {
+					turnconn_add_cid(call->federate.tc,
+							 call->sft_cid);
+				}
 			}
 			if (cmsg->u.setup.url) {
 				call->federate.url =
@@ -4487,14 +4848,18 @@ static struct call *federate_request(struct group *group, struct mbuf *mb,
 				str_dup(&call->federate.url, cmsg->u.setup.url);
 			}
 
-			err = alloc_icall(call, NULL, 0, convid, true);
-			if (err) {
-				warning("sft: failed to alloc icall: %m\n",
-					err);
-				goto out;
+			if (0 == call->sft_cid) {
+				err = alloc_icall(call, NULL, 0, convid, true);
+				if (err) {
+					warning("sft: failed to alloc icall: %m\n",
+						err);
+					goto out;
+				}
 			}
+			lock_write_get(g_sft->lock);
 			err = dict_add(g_sft->provisional.calls,
 				       convid, call);
+			lock_rel(g_sft->lock);
 			if (err) {
 				warning("sft_req_handler: failed to "
 					"add provisional: %m\n", err);
@@ -4505,19 +4870,85 @@ static struct call *federate_request(struct group *group, struct mbuf *mb,
 			mem_deref(call);
 			info("add_provisional(%p): refs=%u\n",
 			     call, mem_nrefs(call));
+
+			if (0 == call->sft_cid) {
+				info("federate_request: icall SETUP-%s: %s\n",
+				     cmsg->resp ? "Resp" : "Req",
+				     cmsg->u.setup.sdp_msg);
+
+				ecall_msg_recv((struct ecall *)call->icall,
+					       0, 0,
+					       "prov",
+					       "_",
+					       cmsg);
+			}
+			else {
+				struct econn_message rmsg;
+				char ltup[256];
+				uint16_t lcid;
+				char *rstr;
+
+				lcid = turnconn_lcid(group->federate.tc);
+				if (lcid) {
+					re_snprintf(ltup, sizeof(ltup), "%s/%u",
+						    group->federate.relay_str, lcid);
+				}
+				else {
+					re_snprintf(ltup, sizeof(ltup), "%s",
+						    group->federate.relay_str);
+				}
+			
+				err = econn_message_init(&rmsg, ECONN_SETUP, convid);
+				if (err)
+					goto out;
+
+				rmsg.resp = true;
+				rmsg.u.setup.props = cmsg->u.setup.props;
+				rmsg.u.setup.sft_tuple = ltup;
+
+				err = econn_message_encode(&rstr, &rmsg);
+				if (err)
+					goto out;
+
+				tc_send(group->federate.tc,
+					&call->sft_tuple, call->sft_cid,
+					(uint8_t *)rstr, str_len(rstr));
+
+				mem_deref(rstr);
+			}
 		}
-	
-		info("federate_request: SETUP-%s: %s\n",
-		     cmsg->resp ? "Resp" : "Req",
-		     cmsg->u.setup.sdp_msg);
-		
-		ecall_msg_recv((struct ecall *)call->icall,
-			       0, 0,
-			       "prov",
-			       "_",
-			       cmsg);
 		break;
-	
+
+	case ECONN_HANGUP:
+		srcid = cmsg->src_userid;
+		dstid = cmsg->dest_userid;
+
+		info("federate_request: HANGUP-%s "
+		     "convid=%s srcid=%s dstid=%s\n",
+		     cmsg->resp ? "resp" : "req", convid, srcid, dstid);
+
+		lock_write_get(g_sft->lock);
+		call = dict_lookup(g_sft->calls, dstid);
+		if (call)
+			call_close_handler(call, false);
+		lock_rel(g_sft->lock);
+		break;
+
+	case ECONN_PROPSYNC:
+		srcid = cmsg->src_userid;
+		dstid = cmsg->dest_userid;
+
+		info("federate_request: PROPSYNC-%s "
+		     "convid=%s srcid=%s dstid=%s\n",
+		     cmsg->resp ? "resp" : "req", convid, srcid, dstid);
+
+		lock_write_get(g_sft->lock);
+		call = dict_lookup(g_sft->calls, dstid);
+		lock_rel(g_sft->lock);
+		if (call)
+			ecall_propsync_handler(NULL, cmsg, call);
+		break;
+		
 	default:
 		err = ENOENT;
 		break;
@@ -4772,7 +5203,7 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 	struct turn_chan_hdr hdr;
 	int err = 0;
 
-#if 0	
+#if DEBUG_PACKET
 	info("group(%p): tc_recv_handler: tc=%p src=%J "
 	     "data(%zu bytes)=\n%w\n",
 	     group, group->federate.tc, src,
@@ -4780,6 +5211,8 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 #endif
 
 	if (stun_msg_decode(&msg, mb, &ua)) {
+		uint8_t *b;
+		
 		err = turn_chan_hdr_decode(&hdr, mb);
 		if (err)
 			goto out;
@@ -4787,8 +5220,38 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 		if (mbuf_get_left(mb) < hdr.len)
 			goto out;
 
-		federate_request(group, mb, NULL);
-	
+		/* Is this a RTP packet? */
+		b = mbuf_buf(mb);
+		if (b[0] > 127) {
+			struct rtp_header rtp;
+			size_t pos;
+			struct call *call;
+			bool found = false;
+			struct le *le = group->calll.head;
+
+			pos = mb->pos;
+			rtp_hdr_decode(&rtp, mb);
+			mb->pos = pos;
+
+			while(!found && le) {
+				call = le->data;
+				le = le->next;
+				
+				found = call->issft &&
+					exist_ssrc(call, group->sft.ishost,
+						   rtp.ssrc,
+						   RTP_STREAM_TYPE_ANY);
+			}
+			if (found) {
+				reflow_rtp_recv(mb, call);
+				return true;
+			}
+		}
+		else {
+			info("tc_recv: signalling on group: %p\n", group);
+			federate_request(group, mb, NULL);
+		}
+		
 		return true;
 	}
 
@@ -4839,8 +5302,8 @@ static void tc_estab_handler(struct turn_conn *tc,
 			cmsg->u.setup.sft_tuple =
 				mem_deref(cmsg->u.setup.sft_tuple);
 
-			str_dup(&cmsg->u.setup.sft_tuple,
-				group->federate.relay_str);
+			cmsg->u.setup.sft_tuple = sft_tuple(pm->call, group);
+			info("call(%p): postponed sft_tuple=%s\n", pm->call, cmsg->u.setup.sft_tuple);
 		}
 		send_sft_msg(pm->call, cmsg, 0);
 
@@ -4877,6 +5340,8 @@ static void tc_err_handler(int err, void *arg)
 		send_sft_msg(pm->call, NULL, 500);
 		mem_deref(pm);
 	}
+
+	group->federate.tc = mem_deref(group->federate.tc);
 }
 
 
@@ -5119,7 +5584,8 @@ static void http_req_handler(struct http_conn *hc,
 				 cmsg->u.confconn.selective_audio,
 				 cmsg->u.confconn.selective_video,
 				 NUM_RTP_STREAMS,
-				 cmsg->u.confconn.vstreams);
+				 cmsg->u.confconn.vstreams,
+				 true);
 		if (err)
 			goto out;
 
@@ -5138,7 +5604,8 @@ static void http_req_handler(struct http_conn *hc,
 		}
 		if (cmsg->u.confconn.sft_tuple &&
 		    str_len(cmsg->u.confconn.sft_tuple) > 0) {
-			str_dup(&call->sft_tuple, cmsg->u.confconn.sft_tuple);
+			split_tuple(call, cmsg->u.confconn.sft_tuple);
+			info("new_call: tuple: %J(cid=%u)\n", &call->sft_tuple, call->sft_cid);
 			group->isfederated = true;
 		}
 		
