@@ -324,6 +324,9 @@ struct auth_part {
 };
 
 static int remove_participant(struct call *call, void *arg);
+static void ecall_confmsg_handler(struct ecall *ecall,
+				  const struct econn_message *msg,
+				  void *arg);
 
 static void ref_locked(void *ref)
 {
@@ -2655,6 +2658,25 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 			     &msg->u.confstreams.streaml);
 }
 
+static void ecall_confmsg_handler(struct ecall *ecall,
+				  const struct econn_message *msg,
+				  void *arg)
+{
+	switch (msg->msg_type) {
+	case ECONN_CONF_PART:
+		ecall_confpart_handler(ecall, msg, arg);
+		break;
+
+	case ECONN_CONF_STREAMS:
+		ecall_confstreams_handler(ecall, msg, arg);
+		break;
+
+	default:
+		warning("ecall_confmsg_handler: unhandled message: %s\n",
+			econn_msg_name(msg->msg_type));
+		break;
+	}
+}
 
 static int alloc_icall(struct call *call,
 		       struct zapi_ice_server *turnv, size_t turnc,
@@ -2675,8 +2697,7 @@ static int alloc_icall(struct call *call,
 		       call, err);
 		goto out;
 	}
-	ecall_set_confpart_handler(ecall, ecall_confpart_handler);
-	ecall_set_confstreams_handler(ecall, ecall_confstreams_handler);
+	ecall_set_confmsg_handler(ecall, ecall_confmsg_handler);
 	
 	/* Add any turn servers we may have */
 	info("sf: call(%p): adding %d TURN servers\n", call, turnc);
