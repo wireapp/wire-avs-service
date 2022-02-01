@@ -168,6 +168,11 @@ struct worker *worker_get(const char *id)
 	return w;
 }
 
+struct worker *worker_main(void)
+{
+	return workb->main;
+}
+
 static int push_task(struct worker *w, enum worker_task_id tid,
 		     worker_task_h *taskh, void *arg)
 {

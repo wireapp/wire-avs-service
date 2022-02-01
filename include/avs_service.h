@@ -41,9 +41,20 @@ int module_load(const char *name);
 struct sa  *avs_service_req_addr(void);
 struct sa  *avs_service_media_addr(void);
 struct sa  *avs_service_metrics_addr(void);
+struct sa  *avs_service_sft_req_addr(void);
 const char *avs_service_url(void);
+
 const char *avs_service_blacklist(void);
 bool avs_service_use_turn(void);
+bool avs_service_use_sft_turn(void);
+
+struct dnsc *avs_service_dnsc(void);
+const char *avs_service_federation_url(void);
+
+const char *avs_service_turn_url(void);
+const char *avs_service_turn_username(void);
+const char *avs_service_turn_credential(void);
+
 
 /*
  * Config
@@ -55,7 +66,6 @@ int  config_init(void);
 void config_close(void);
 struct conf *avs_service_conf(void);
 int avs_service_worker_count(void);
-uint64_t avs_service_fir_timeout(void);
 
 /*
  * Workers
@@ -82,6 +92,7 @@ int worker_init(void);
 void worker_close(void);
 
 struct worker *worker_get(const char *id);
+struct worker *worker_main(void);
 int worker_assign_task(struct worker *worker,
 		       worker_task_h *taskh,
 		       void *arg);
@@ -154,3 +165,15 @@ int mediaflow_send_dc(struct mediaflow *mf,
 		      const uint8_t *data, size_t len);
 uint32_t mediaflow_get_ssrc(struct mediaflow *mf, const char *type, bool local);
 void mediapump_remove_ssrc(struct mediaflow *mf, uint32_t ssrc);
+
+
+/* Protocol stack layers (order is important) */
+enum {
+	/*LAYER_RTP  =  40,*/
+	LAYER_DTLS =  20,       /* must be above zero */
+	LAYER_DTLS_TRANSPORT = 15,  /* below DTLS */
+	LAYER_SRTP =  10,       /* must be below RTP */
+	LAYER_ICE  = -10,
+	LAYER_TURN = -20,       /* must be below ICE */
+	LAYER_STUN = -30,       /* must be below TURN */
+};

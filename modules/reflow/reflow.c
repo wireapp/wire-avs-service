@@ -26,7 +26,6 @@
 #include "aucodec.h"
 #include "avs_uuid.h"
 #include "avs_zapi.h"
-#include "avs_turn.h"
 #include "avs_base.h"
 #include "avs_keystore.h"
 #include "avs_icall.h"
@@ -42,6 +41,7 @@
 #include "avs_string.h"
 
 #include "avs_service.h"
+#include "avs_service_turn.h"
 #include "dce.h"
 
 #ifdef __APPLE__
@@ -319,19 +319,6 @@ struct reflow {
 };
 
 
-struct lookup_entry {
-	struct reflow *rf;
-	struct zapi_ice_server turn;
-	char *host;
-	int port;
-	int proto;
-	bool secure;
-	uint64_t ts;
-	
-	struct le le;
-};
-
-
 struct vid_ref {
 	struct vidcodec *vc;
 	struct reflow *rf;
@@ -382,6 +369,7 @@ static void add_permission_to_remotes_ds(struct reflow *rf,
 static void external_rtp_recv(struct reflow *rf,
 			      const struct sa *src, struct mbuf *mb);
 static bool headroom_via_turn(size_t headroom);
+
 
 #if 0
 static void rf_log(const struct reflow *rf, enum log_level level,
@@ -688,13 +676,7 @@ static int reflow_dce_send(struct iflow *flow, const uint8_t *data, size_t len)
 {
 	struct reflow *rf = (struct reflow *)flow;
 
-	if (!rf)
-		return EINVAL;
-	
-	if (rf->data.ready)
-		return reflow_send_dc_data(rf, data, len);
-	else
-		return EAGAIN;
+	return reflow_send_dc_data(rf, data, len);
 }
 
 
@@ -711,7 +693,7 @@ static int dce_send_data_handler(struct mbuf *mb, void *arg)
 		return EINTR;
 	}
 
-#if 0
+#if 1
 	info("reflow(%p): sending DCE packet: %zu tls_conn=%p\n",
 	     rf, len, rf->tls_conn);
 #endif
@@ -4301,13 +4283,8 @@ static int mf_send_dc(struct mediaflow *mf, const uint8_t *data, size_t len)
 		return EINVAL;
 
 	rf = mf->flow;
-	if (!rf)
-		return EINVAL;
-	
-	if (rf->data.ready)
-		return reflow_send_dc_data(rf, data, len);
-	else
-		return EAGAIN;
+
+	return reflow_send_dc_data(rf, data, len);
 }
 
 
@@ -5163,8 +5140,10 @@ static struct interface *default_interface(const struct reflow *rf)
 /*
  * Gather RELAY and SRFLX candidates (UDP only)
  */
-int reflow_gather_turn(struct reflow *rf, const struct sa *turn_srv,
-			  const char *username, const char *password)
+int reflow_gather_turn(struct reflow *rf,
+		       struct turn_conn *tc,
+		       const struct sa *turn_srv,
+		       const char *username, const char *password)
 {
 	struct interface *ifc;
 	struct sa turn_srv6;
@@ -5222,7 +5201,7 @@ int reflow_gather_turn(struct reflow *rf, const struct sa *turn_srv,
 
 	info("reflow(%p): gather_turn: %J\n", rf, turn_srv);
 
-	err = turnconn_alloc(NULL, &rf->turnconnl,
+	err = turnconn_start(tc, &rf->turnconnl,
 			     turn_srv, IPPROTO_UDP, false,
 			     username, password,
 			     rf->af, sock,
@@ -5230,23 +5209,22 @@ int reflow_gather_turn(struct reflow *rf, const struct sa *turn_srv,
 			     turnconn_estab_handler,
 			     turnconn_data_handler,
 			     turnconn_error_handler, rf);
-	if (err) {
+	if (err)
 		warning("reflow(%p): turnc_alloc failed (%m)\n", rf, err);
-		return err;
-	}
 
-	return 0;
+	return err;
 }
 
 
 /*
  * Add a new TURN-server and gather RELAY candidates (TCP or TLS)
  */
-int reflow_gather_turn_tcp(struct reflow *rf, const struct sa *turn_srv,
-			      const char *username, const char *password,
-			      bool secure)
+int reflow_gather_turn_tcp(struct reflow *rf,
+			   struct turn_conn *tc,
+			   const struct sa *turn_srv,
+			   const char *username, const char *password,
+			   bool secure)
 {
-	struct turn_conn *tc;
 	int err = 0;
 
 	if (!rf || !turn_srv)
@@ -5255,15 +5233,14 @@ int reflow_gather_turn_tcp(struct reflow *rf, const struct sa *turn_srv,
 	info("reflow(%p): gather_turn_tcp: %J(secure=%d)\n",
 	     rf, turn_srv, secure);
 
-	err = turnconn_alloc(&tc, &rf->turnconnl,
+	err = turnconn_start(tc, &rf->turnconnl,
 			     turn_srv, IPPROTO_TCP, secure,
 			     username, password,
 			     rf->af, NULL,
 			     LAYER_STUN, LAYER_TURN,
 			     turnconn_estab_handler,
 			     turnconn_data_handler,
-			     turnconn_error_handler, rf
-			     );
+			     turnconn_error_handler, rf);
 	if (err)
 		return err;
 
@@ -5433,7 +5410,7 @@ bool reflow_is_gathered(const struct iflow *iflow)
 	if (rf->turnc)
 		return false;
 
-	return true;
+	return list_count(&rf->interfacel) > 0;
 }
 
 
@@ -5765,8 +5742,10 @@ void reflow_video_set_disabled(struct reflow *rf, bool dis)
 
 
 static void gather_turn(struct reflow *rf,
-			struct zapi_ice_server *turn,
+			struct turn_conn *tc,
 			const struct sa *srv,
+			const char *username,
+			const char *password,
 			int proto,
 			bool secure)
 {
@@ -5778,8 +5757,7 @@ static void gather_turn(struct reflow *rf,
 			warning("reflow(%p): secure UDP not supported\n",
 				rf);
 		}
-		err = reflow_gather_turn(rf, srv,
-					    turn->username, turn->credential);
+		err = reflow_gather_turn(rf, tc, srv, username, password);
 		if (err) {
 			warning("reflow(%p): gather_turn: failed (%m)\n",
 				rf, err);
@@ -5788,10 +5766,9 @@ static void gather_turn(struct reflow *rf,
 		break;
 
 	case IPPROTO_TCP:
-		err = reflow_gather_turn_tcp(rf, srv,
-						turn->username,
-						turn->credential,
-						secure);
+		err = reflow_gather_turn_tcp(rf, tc, srv,
+					     username, password,
+					     secure);
 		if (err) {
 			warning("reflow(%p): gather_turn_tcp: failed (%m)\n",
 				rf, err);
@@ -5809,40 +5786,18 @@ static void gather_turn(struct reflow *rf,
 	return;
 }
 
-
-static void dns_handler(int dns_err, const struct sa *srv, void *arg)
+static void turnconn_ready_handler(struct turn_conn *tc,
+				   const struct sa *srv,
+				   const char *username,
+				   const char *password,
+				   int proto,
+				   bool secure,
+				   void *arg)
 {
-	struct lookup_entry *lent = arg;
-	struct reflow *rf = lent->rf;
-	struct sa turn_srv;
-	char addr[32];
-	size_t i;
+	struct reflow *rf = arg;
 
-	if (rf->closed)
-		goto out;
-
-	sa_cpy(&turn_srv, srv);
-	sa_set_port(&turn_srv, lent->port);
-
-	re_snprintf(addr, sizeof(addr), "%J", &turn_srv);
-	for (i = 0; i < strlen(addr); ++i) {
-		if (addr[i] == '.')
-			addr[i] = '-';
-	}
-	
-	info("reflow(%p): dns_handler: err=%d [%s] -> [%s] took: %dms\n",
-	     rf, dns_err, lent->host, addr,
-	     (int)(tmr_jiffies() - lent->ts));
-
-	if (dns_err)
-		goto out;
-
-	gather_turn(rf, &lent->turn, &turn_srv, lent->proto, lent->secure);
-	
- out:
-	mem_deref(lent);
+	gather_turn(rf, tc, srv, username, password, proto, secure);
 }
-
 
 int reflow_add_turnserver(struct iflow *iflow,
 			  const char *url,
@@ -5867,52 +5822,6 @@ int reflow_add_turnserver(struct iflow *iflow,
 	++rf->turnc;
 
 	return 0;
-}
-
-
-static void lent_destructor(void *arg)
-{
-	struct lookup_entry *lent = arg;
-
-	mem_deref(lent->host);
-	mem_deref(lent->rf);
-}
-
-
-static int turn_dns_lookup(struct reflow *rf,
-			   struct zapi_ice_server *turn,
-			   struct stun_uri *uri)
-{
-	struct lookup_entry *lent;
-	int err = 0;
-
-	lent = mem_zalloc(sizeof(*lent), lent_destructor);
-	if (!lent)
-		return ENOMEM;
-
-	lent->rf = mem_ref(rf);
-	lent->turn = *turn;
-	lent->ts = tmr_jiffies();
-	lent->proto = uri->proto;
-	lent->secure = uri->secure;
-	lent->port = uri->port;
-	err = str_dup(&lent->host, uri->host);
-	if (err)
-		goto out;
-
-	info("reflow(%p): dns_lookup for: %s:%d\n",
-	     rf, lent->host, lent->port);
-	
-	err = dns_lookup(lent->host, dns_handler, lent);
-	if (err) {
-		warning("reflow(%p): dns_lookup failed\n", rf);
-		goto out;
-	}
- out:
-	if (err)
-		mem_deref(lent);
-
-	return err;
 }
 
 
@@ -6034,34 +5943,28 @@ int reflow_gather_all_turn(struct iflow *iflow, bool offer)
 		return EINVAL;
 	
 	for (i = 0; i < rf->turnc; ++i) {
-		struct stun_uri uri;
 		struct zapi_ice_server *turn;
+		struct turn_conn *tc;
 		int err;
 
 		turn = &rf->turnv[i];
-	
-		err = stun_uri_decode(&uri, turn->url);
-		if (err) {
-			info("reflow(%p): resolving turn uri (%s)\n",
-			     rf, turn->url);
 
-			turn_dns_lookup(rf, turn, &uri);
-			continue;
+		err = turnconn_alloc(&tc, &rf->turnconnl,
+				     turn,
+				     turnconn_ready_handler,
+				     turnconn_estab_handler,
+				     turnconn_data_handler,
+				     turnconn_error_handler,
+				     rf);
+		if (err != EAGAIN) {
+			warning("reflow(%p): turnconn alloc failed: %m\n",
+				rf, err);
 		}
-
-		if (STUN_SCHEME_TURN != uri.scheme) {
-			warning("reflow(%p): ignoring scheme %d\n",
-				rf, uri.scheme);
-			continue;
-		}
-
-		gather_turn(rf, turn, &uri.addr, uri.proto, uri.secure);
 	}
 
 	net_if_apply(interface_handler, rf);
 	if (rf->turnc == 0 && list_count(&rf->interfacel) > 0) {
-		IFLOW_CALL_CB(rf->iflow, gatherh,
-			rf->iflow.arg);
+		IFLOW_CALL_CB(rf->iflow, gatherh, rf->iflow.arg);
 	}
 
 	return 0;

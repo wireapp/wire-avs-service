@@ -36,7 +36,6 @@
 #include "score.h"
 
 #define NUM_WORKERS 16
-#define TIMEOUT_FIR 3000
 
 /* Global Context */
 struct avs_service {
@@ -45,9 +44,17 @@ struct avs_service {
 	struct sa req_addr;
 	struct sa media_addr;
 	struct sa metrics_addr;
+	struct sa sft_req_addr;
 
 	char url[256];
+	char federation_url[256];
 	char blacklist[256];
+
+	struct {
+		char url[256];
+		char username[256];
+		char credential[256];
+	} turn;
 
 	struct {
 		char prefix[256];	
@@ -57,12 +64,17 @@ struct avs_service {
 	} log;
 
 	int worker_count;
-	uint64_t fir_timeout;
 	bool use_turn;
+	bool use_sft_turn;
+
+	struct dnsc *dnsc;
+	
 };
-struct avs_service avsd = {
+static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
        .use_turn = false,
+       .use_sft_turn = true,
+       .dnsc = NULL,
 };
 
 #define DEFAULT_REQ_ADDR "127.0.0.1"
@@ -71,12 +83,15 @@ struct avs_service avsd = {
 #define DEFAULT_METRICS_ADDR "127.0.0.1"
 #define DEFAULT_METRICS_PORT 49090
 
+#define DEFAULT_SFT_REQ_ADDR "127.0.0.1"
+#define DEFAULT_SFT_REQ_PORT 9999
+
 
 static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist>] [-k <timeout_ms> [-l <prefix>] [-q] [-w <count>] -T\n");
+			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <username> -c <credential>\n");
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
@@ -92,8 +107,10 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
 	(void)re_fprintf(stderr, "\t-T              Use TURN servers when gathering\n");
+	(void)re_fprintf(stderr, "\t-t <url>        Multi SFT TURN URL\n");
+	(void)re_fprintf(stderr, "\t-v <username>   Multi SFT TURN username\n");
+	(void)re_fprintf(stderr, "\t-c <credential> Multi SFT TURN credential\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
-	(void)re_fprintf(stderr, "\t-k <timeout_ms> Key frame timeout (default: %u)\n", TIMEOUT_FIR);
 }
 
 static void signal_handler(int sig)
@@ -202,8 +219,9 @@ static struct log logh = {
 
 int main(int argc, char *argv[])
 {
-	enum log_level log_level = LOG_LEVEL_INFO;
+	enum log_level log_level = LOG_LEVEL_DEBUG;
 	char log_file_name[255];
+	struct sa goog;
 	int err;
 	
 	(void)sys_coredump_set(true);
@@ -211,12 +229,12 @@ int main(int argc, char *argv[])
 	memset(&avsd, 0, sizeof(avsd));
 
 	avsd.worker_count = NUM_WORKERS;
-	avsd.fir_timeout = TIMEOUT_FIR;
+	avsd.use_sft_turn = true;
 	lock_alloc(&avsd.log.lock);
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "A:b:I:k:l:M:p:qr:Tu:w:");
+		const int c = getopt(argc, argv, "A:b:c:f:I:l:M:p:qr:S:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -226,18 +244,25 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'b':
-			str_ncpy(avsd.blacklist, optarg, sizeof(avsd.blacklist));
+			str_ncpy(avsd.blacklist, optarg,
+				 sizeof(avsd.blacklist));
+			break;
+
+		case 'c':
+			str_ncpy(avsd.turn.credential, optarg,
+				 sizeof(avsd.turn.credential));
 			break;
 			
+		case 'f':
+			str_ncpy(avsd.federation_url, optarg,
+				 sizeof(avsd.federation_url));
+			break;
+
 		case 'I':
 			err = sa_set_str(&avsd.req_addr, optarg,
 					 DEFAULT_REQ_PORT);
 			if (err)
 				goto out;
-			break;
-
-		case 'k':
-			avsd.fir_timeout = (uint64_t)atoi(optarg);
 			break;
 
 		case 'l':
@@ -256,27 +281,52 @@ int main(int argc, char *argv[])
 			sa_set_port(&avsd.req_addr, atoi(optarg));
 			break;
 
+		case 'q':
+			log_level = LOG_LEVEL_WARN;
+			break;
+
 		case 'r':
 			sa_set_port(&avsd.metrics_addr, atoi(optarg));
+			break;
+
+		case 'S':
+			err = sa_set_str(&avsd.sft_req_addr, optarg,
+					 DEFAULT_SFT_REQ_PORT);
+			info("avsd: setting sft_req_addr:%s err=%m\n", optarg, err);
+			break;
+			
+		case 's':
+			sa_set_port(&avsd.sft_req_addr, atoi(optarg));
+			info("avsd: setting sft_req_port:%p\n", atoi(optarg));
 			break;
 
 		case 'T':
 			info("avsd: using TURN\n");
 			avsd.use_turn = true;
 			break;
-			
+
+		case 't':
+			str_ncpy(avsd.turn.url, optarg,
+				 sizeof(avsd.turn.url));
+			break;
+
 		case 'u':
 			str_ncpy(avsd.url, optarg, sizeof(avsd.url));
 			break;
 
-		case 'q':
-			log_level = LOG_LEVEL_WARN;
-			break;
+		case 'v':
+			re_fprintf(stderr, "version: %s\n", SFT_VERSION);
+			goto out;
 
 		case 'w':
 			avsd.worker_count = atoi(optarg);
 			break;
 
+		case 'x':
+			str_ncpy(avsd.turn.username, optarg,
+				 sizeof(avsd.turn.username));
+			break;
+			
 		default:
 			err = EINVAL;
 			usage();
@@ -350,6 +400,15 @@ int main(int argc, char *argv[])
 	re_printf("welcome to AVS-service -- using '%s'\n", avs_version_str());
 	info("welcome to AVS-service -- using '%s'\n", avs_version_str());
 
+	sa_init(&goog, AF_INET);
+	sa_set_str(&goog, "8.8.8.8", DNS_PORT);
+	err = dnsc_alloc(&avsd.dnsc, NULL, &goog, 1);
+	if (err) {
+		warning("dns: dnsc_alloc failed: %m\n", err);
+		goto out;
+	}
+
+	
 	re_main(signal_handler);
 
  out:
@@ -358,6 +417,7 @@ int main(int argc, char *argv[])
 	avs_close();
 	libre_close();
 
+	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.log.lock = mem_deref(avsd.log.lock);
 	
 	/* check for memory leaks */
@@ -390,6 +450,13 @@ struct sa  *avs_service_metrics_addr(void)
 	return &avsd.metrics_addr;
 }
 
+
+struct sa *avs_service_sft_req_addr(void)
+{
+	return &avsd.sft_req_addr;
+}
+	
+
 const char *avs_service_url(void)
 {
 	return avsd.url[0] != '\0' ? avsd.url : NULL;
@@ -411,7 +478,33 @@ bool avs_service_use_turn(void)
 	return avsd.use_turn;
 }
 
-uint64_t avs_service_fir_timeout(void)
+bool avs_service_use_sft_turn(void)
 {
-	return avsd.fir_timeout;
+	return avsd.use_sft_turn;
+}
+
+
+struct dnsc *avs_service_dnsc(void)
+{
+	return avsd.dnsc;
+}
+
+const char *avs_service_federation_url(void)
+{
+	return avsd.federation_url[0] != '\0' ? avsd.federation_url : NULL;
+}
+
+const char *avs_service_turn_url(void)
+{
+	return avsd.turn.url[0] != '\0' ? avsd.turn.url : NULL;
+}
+
+const char *avs_service_turn_username(void)
+{
+	return avsd.turn.username[0] != '\0' ? avsd.turn.username : NULL;
+}
+
+const char *avs_service_turn_credential(void)
+{
+	return avsd.turn.credential[0] != '\0' ? avsd.turn.credential : NULL;
 }

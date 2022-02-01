@@ -17,18 +17,6 @@
 */
 
 
-/* Protocol stack layers (order is important) */
-enum {
-	/*LAYER_RTP  =  40,*/
-	LAYER_DTLS =  20,       /* must be above zero */
-	LAYER_DTLS_TRANSPORT = 15,  /* below DTLS */
-	LAYER_SRTP =  10,       /* must be below RTP */
-	LAYER_ICE  = -10,
-	LAYER_TURN = -20,       /* must be below ICE */
-	LAYER_STUN = -30,       /* must be below TURN */
-};
-
-
 extern const char *avs_software;
 
 

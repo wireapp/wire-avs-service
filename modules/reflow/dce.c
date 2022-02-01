@@ -1744,7 +1744,9 @@ receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
 		return 1;
 	}
 
-	debug("receive_cb: sock=%p dce=%p dce->pc=%p\n", sock, dce, &dce->pc);
+#if 0
+	debug("dce(%p): receive_cb: sock=%p pc=%p\n", dce, sock, &dce->pc);
+#endif
 
 	lock_write_get(g_dce.lock);
 	if (!exist_dce(&g_dce.dcel, dce)) {
@@ -1826,7 +1828,7 @@ int dce_connect(struct dce *dce, bool dtls_role_active)
 #endif
 	sconn.sconn_port = htons(port);
 	sconn.sconn_addr = dce;
-	
+
 	sctp_err = usrsctp_connect(dce->sock, (struct sockaddr *)&sconn,
 				   sizeof(sconn));
 	if (sctp_err < 0) {
@@ -2018,7 +2020,11 @@ static int usrsctp_send_handler(void *addr, void *buf, size_t len,
 	struct payload *pld;
 	struct mbuf *mb;
 	int err;
-    
+
+
+#if 0
+	info("usrsctp_send_handler(%p): len=%zu\n", dce, len);
+#endif
 	if (!dce)
 		return EINVAL;
 
@@ -2061,7 +2067,7 @@ static int usrsctp_send_handler(void *addr, void *buf, size_t len,
 	assign_task(dce, pld, false);
  out:
 	lock_rel(g_dce.lock);
-
+	
 	return err ? 1 : 0;
 }
 

@@ -124,11 +124,16 @@ int reflow_send_raw_rtcp(struct reflow *rf,
 			    const uint8_t *buf, size_t len);
 bool reflow_is_ready(const struct reflow *rf);
 int reflow_gather_stun(struct reflow *rf, const struct sa *stun_srv);
-int reflow_gather_turn(struct reflow *rf, const struct sa *turn_srv,
-			  const char *username, const char *password);
-int reflow_gather_turn_tcp(struct reflow *rf, const struct sa *turn_srv,
-			      const char *username, const char *password,
-			      bool secure);
+struct turn_conn;
+int reflow_gather_turn(struct reflow *rf,
+		       struct turn_conn *tc,
+		       const struct sa *turn_srv,
+		       const char *username, const char *password);
+int reflow_gather_turn_tcp(struct reflow *rf,
+			   struct turn_conn *tc,
+			   const struct sa *turn_srv,
+			   const char *username, const char *password,
+			   bool secure);
 size_t reflow_remote_cand_count(const struct reflow *rf);
 int reflow_summary(struct re_printf *pf, const struct reflow *rf);
 int reflow_rtp_summary(struct re_printf *pf, const struct reflow *rf);
