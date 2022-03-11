@@ -2941,6 +2941,7 @@ static int restart_call(struct call *call, void *arg)
 	call->hconn = mem_ref(hc);
 	
 	deauth_call(call);
+	tmr_cancel(&call->tmr_conn);
 
 	/* We want to move this call to the end of the list,
 	 * so it loses its KG privilage on the clients
