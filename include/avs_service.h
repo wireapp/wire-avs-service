@@ -52,8 +52,7 @@ struct dnsc *avs_service_dnsc(void);
 const char *avs_service_federation_url(void);
 
 const char *avs_service_turn_url(void);
-const char *avs_service_turn_username(void);
-const char *avs_service_turn_credential(void);
+const char *avs_service_secret_path(void);
 
 
 /*
