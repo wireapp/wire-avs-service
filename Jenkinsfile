@@ -36,7 +36,7 @@ pipeline {
                         changelog: true,
                         userRemoteConfigs: scm.userRemoteConfigs,
                         branches: scm.branches,
-                        extensions: scm.extensions + [
+                        extensions: [
                             [
                             $class: 'SubmoduleOption',
                             disableSubmodules: false,
