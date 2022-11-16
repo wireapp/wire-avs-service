@@ -1,0 +1,21 @@
+FROM docker.io/ubuntu:18.04
+
+# the multi-sft feature of sftd requires obtaining turn connection details by
+# querying a restund endpoint
+RUN apt-get update && apt-get install -y curl jq
+
+COPY ./sftd /usr/local/bin/sftd
+
+RUN chmod 555 /usr/local/bin/sftd
+
+# NOTE: 'kubectl exec' does not support '--user' to override the
+#       directive being set here, hence it's not possible, when
+#       in k8s running in k8s, to allocate a privileged interactive
+#       shell for debugging purpose. So, USER won't be set for the
+#       time being. It, instead, becames a recommendation to set it
+#       to the value below
+# ISSUE: https://github.com/kubernetes/kubernetes/issues/30656
+#
+#USER 1000
+
+ENTRYPOINT [ "sftd" ]

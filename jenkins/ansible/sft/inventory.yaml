@@ -1,0 +1,8 @@
+all:
+  vars:
+    ansible_python_interpreter: '/usr/bin/env python3'
+  hosts:
+    avs-test-sft01:
+      ansible_host: 'sft01.avs.zinfra.io'
+      service_name: 'sftd'
+      sft_fqdn: "{{ ansible_host }}"
