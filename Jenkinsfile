@@ -63,8 +63,8 @@ pipeline {
                     version = "${RELEASE_VERSION}.${ buildNumber }"
                     }
                 }
-                sh 'cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }" && make contrib_clean'
-                sh 'cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }" && make clean'
+                sh 'cd $SOURCE_FOLDER_NAME && make contrib_clean'
+                sh 'cd $SOURCE_FOLDER_NAME && make clean'
 
                 echo '### Obtaining build information'
                 script {
@@ -275,7 +275,7 @@ pipeline {
         success {
             node( 'built-in' ) {
                 withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
-                    wireSend secret: "$jenkinsbot_secret", message: "✅ SFT ${ params.RELEASE_VERSION != null ? params.RELEASE_VERSION : 'main' } (${ BUILD_ID }) succeeded\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
+                    wireSend secret: "$jenkinsbot_secret", message: "✅ ${JOB_NAME} #${ BUILD_ID } succeeded\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
                 }
             }
         }
@@ -283,7 +283,7 @@ pipeline {
         failure {
             node( 'built-in' ) {
                 withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
-                    wireSend secret: "$jenkinsbot_secret", message: "❌ SFT ${ params.RELEASE_VERSION != null ? params.RELEASE_VERSION : 'main' } (${ BUILD_ID }) failed\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
+                    wireSend secret: "$jenkinsbot_secret", message: "❌ ${JOB_NAME} #${ BUILD_ID } failed\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
                 }
             }
         }
