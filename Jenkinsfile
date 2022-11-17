@@ -4,8 +4,6 @@ CREDENTIALS_ID_GITHUB_TOKEN = 'github-repo-access'
 AWS_ROOT_URL = 'https://s3-eu-west-1.amazonaws.com'
 ASSETS_BUCKET_PREFIX = 'public.wire.com/artifacts'
 
-SOURCE_FOLDER_NAME = 'sources'
-
 buildNumber = currentBuild.id
 version = null
 branchName = null
@@ -48,7 +46,7 @@ pipeline {
                             ],
                             [
                                 $class: 'RelativeTargetDirectory',
-                                relativeTargetDir: SOURCE_FOLDER_NAME
+                                relativeTargetDir: 'sources'
                             ]
                         ]
 		            ])
@@ -63,8 +61,8 @@ pipeline {
                     version = "${RELEASE_VERSION}.${ buildNumber }"
                     }
                 }
-                sh 'cd $SOURCE_FOLDER_NAME && make contrib_clean'
-                sh 'cd $SOURCE_FOLDER_NAME && make clean'
+                sh 'cd sources && make contrib_clean'
+                sh 'cd sources && make clean'
 
                 echo '### Obtaining build information'
                 script {
@@ -73,7 +71,7 @@ pipeline {
                         script: """
                             #!/usr/bin/env bash
 
-                            cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }"
+                            cd sources
 
                             make dump \
                                 | grep TARGET_ARCH \
@@ -87,7 +85,7 @@ pipeline {
                     script: """
                         #!/usr/bin/env bash
 
-                        cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }"
+                        cd sources
 
                         # TODO: remove when Makefile has been fixed (ask Chris)
                         mkdir -p ./build-x86_64/src
@@ -116,7 +114,7 @@ pipeline {
                     script: """
                         #!/usr/bin/env bash
 
-                        cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }"
+                        cd sources
 
                         buildah bud \
                             --file "${ env.WORKSPACE }/jenkins/containers/Containerfile.sftd" \
@@ -167,7 +165,7 @@ pipeline {
                         script: """
                             #!/usr/bin/env bash
 
-                            cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }"
+                            cd sources
 
                             AWS_ACCESS_KEY_ID=${ keyId } \
                             AWS_SECRET_ACCESS_KEY=${ accessKey } \
@@ -236,7 +234,7 @@ pipeline {
                         script: """
                             #!/usr/bin/env bash
 
-                            cd "${ env.WORKSPACE }/${ SOURCE_FOLDER_NAME }"
+                            cd sources
 
                             git tag ${ version }
 
@@ -261,7 +259,7 @@ pipeline {
                             GITHUB_TOKEN=${ accessToken } \
                             python3 ./jenkins/release-on-github.py \
                                 ${ repoName } \
-                                ./${ SOURCE_FOLDER_NAME }/upload \
+                                ./sources/upload \
                                 ${ version } \
                                 ${ AWS_ROOT_URL }/${ ASSETS_BUCKET_PREFIX }
                         """
