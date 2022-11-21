@@ -32,9 +32,10 @@ WORKDIR /build/sftd
 
 # Needed to workaround JENKINS-38438
 RUN chown -R 1001:1001 /build/sftd
-ENV PATH="/build/sftd/.cargo/bin:${PATH}"
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+
+ENV PATH="/build/sftd/.cargo/bin:${PATH}"
 
 RUN make -C /build/sftd RELEASE=1 EXTRA_CFLAGS="" 
 
