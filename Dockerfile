@@ -29,6 +29,7 @@ RUN apt-get update \
 
 COPY . /build/sftd
 WORKDIR /build/sftd
+ENV HOME /build/sftd
 
 # Needed to workaround JENKINS-38438
 RUN chown -R 1001:1001 /build/sftd
