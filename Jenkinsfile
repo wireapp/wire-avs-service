@@ -84,6 +84,8 @@ pipeline {
         stage( 'Create archives' ) {
             steps {
                 sh """
+                        echo $version
+                        echo $platform
                         cp $WORKSPACE/sftd ./wire-sftd
 
                         mkdir upload
