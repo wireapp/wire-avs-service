@@ -76,7 +76,7 @@ pipeline {
                         """
                     ).trim()
                 }
-                archiveArtifacts artifacts: 'sftd'
+                archiveArtifacts artifacts: '/build/sftd/sftd'
             }
         }
 
@@ -102,8 +102,6 @@ pipeline {
                 sh(
                     script: """
                         #!/usr/bin/env bash
-
-                        cd sources
 
                         buildah bud \
                             --file "${ env.WORKSPACE }/jenkins/containers/Containerfile.sftd" \
@@ -153,8 +151,6 @@ pipeline {
                     sh(
                         script: """
                             #!/usr/bin/env bash
-
-                            cd sources
 
                             AWS_ACCESS_KEY_ID=${ keyId } \
                             AWS_SECRET_ACCESS_KEY=${ accessKey } \
@@ -223,8 +219,6 @@ pipeline {
                         script: """
                             #!/usr/bin/env bash
 
-                            cd sources
-
                             git tag ${ version }
 
                             git \
@@ -248,7 +242,7 @@ pipeline {
                             GITHUB_TOKEN=${ accessToken } \
                             python3 ./jenkins/release-on-github.py \
                                 ${ repoName } \
-                                ./sources/upload \
+                                ./upload \
                                 ${ version } \
                                 ${ AWS_ROOT_URL }/${ ASSETS_BUCKET_PREFIX }
                         """
