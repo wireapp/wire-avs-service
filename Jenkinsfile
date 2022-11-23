@@ -83,6 +83,7 @@ pipeline {
 
         stage( 'Create archives' ) {
             steps {
+                unarchive()
                 sh """
                         echo $version
                         echo $platform
