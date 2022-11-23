@@ -11,7 +11,7 @@ commitId = null
 repoName = null
 
 pipeline {
-    agent none
+    agent { label 'linuxbuild' }
 
     options {
         disableConcurrentBuilds()
@@ -23,10 +23,7 @@ pipeline {
     }
 
     stages {
-        stage('Build') {
-            agent {
-                dockerfile true
-            }
+        stage( 'Checkout' ) {
             steps {
                 script {
                     def vcs = checkout([
@@ -43,10 +40,6 @@ pipeline {
                             ],
                             [
                                 $class: 'WipeWorkspace'
-                            ],
-                            [
-                                $class: 'RelativeTargetDirectory',
-                                relativeTargetDir: 'sources'
                             ]
                         ]
 		            ])
@@ -55,13 +48,21 @@ pipeline {
                     repoName = vcs.GIT_URL.tokenize( '/' ).last().tokenize( '.' ).first()
                     repoUser = vcs.GIT_URL.tokenize( '/' )[-2]
 
-                    if ( params.RELEASE_VERSION == null ) {
-                    version = "0.0.${ buildNumber }"
+                    release_version = branchName.replaceAll("[^\\d\\.]", "");
+                    if (release_version.length() > 0 || branchName.contains('release')) {
+                        version = release_version + "." + buildNumber
                     } else {
-                    version = "${RELEASE_VERSION}.${ buildNumber }"
+                        version = "0.0.${buildNumber}"
                     }
                 }
+            }
+        }
 
+        stage('Build') {
+            agent {
+                dockerfile true
+            }
+            steps {
                 echo '### Obtaining build information'
                 script {
                     platform = sh(
@@ -69,29 +70,17 @@ pipeline {
                         script: """
                             #!/usr/bin/env bash
 
-                            cd sources
-
                             make dump \
                                 | grep TARGET_ARCH \
                                 | awk -F "=" '{print \$2}'
                         """
                     ).trim()
                 }
-
-                echo "### Building version: ${ version }"
-                sh(
-                    script: """
-                        cd sources
-
-                        # NOTE: this environment varibales is used within the build process
-                        make BUILD_NUMBER=${ buildNumber }
-                    """
-                )
                 archiveArtifacts artifacts: 'sftd'
             }
         }
 
-        stage( '' ) {
+        stage( 'Create archives' ) {
             steps {
                 sh(
                     script: """
@@ -108,10 +97,8 @@ pipeline {
             }
         }
 
-        stage( 'Building artifacts' ) {
+        stage( 'Build container' ) {
             steps {
-                echo "### Building container image: ${ version }"
-
                 sh(
                     script: """
                         #!/usr/bin/env bash
