@@ -94,7 +94,7 @@ pipeline {
 
         stage( 'Build container' ) {
             steps {
-                mapping: ['sftd' : 'sftd']
+                unarchive mapping: ['sftd' : 'sftd']
                 sh(
                     script: """
                         buildah bud \
