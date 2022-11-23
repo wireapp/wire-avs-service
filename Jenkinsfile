@@ -76,31 +76,25 @@ pipeline {
                         """
                     ).trim()
                 }
-                sh "cp /build/sftd/sftd $WORKSPACE"
-                archiveArtifacts artifacts: "sftd"
-            }
-        }
-
-        stage( 'Create archives' ) {
-            steps {
-                unarchive()
                 sh """
-                        echo $version
-                        echo $platform
-                        cp $WORKSPACE/sftd ./wire-sftd
+                    cp /build/sftd/sftd ./wire-sftd
+                    mkdir upload
+                    cd upload
+                    tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
+                    openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
+                    # COMPAT: using one file for potentially multiple checksums is deprecated
+                    openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
 
-                        mkdir upload
-                        cd upload
-                        tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
-                        openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
-                        # COMPAT: using one file for potentially multiple checksums is deprecated
-                        openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
+                    cp /build/sftd/sftd $WORKSPACE
+                    cp upload/wire-sft-* $WORKSPACE
                 """
+                archiveArtifacts artifacts: "sftd,wire-sft-*"
             }
         }
 
         stage( 'Build container' ) {
             steps {
+                mapping: ['sftd' : 'sftd']
                 sh(
                     script: """
                         buildah bud \
