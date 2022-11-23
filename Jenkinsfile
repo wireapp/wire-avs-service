@@ -124,11 +124,8 @@ pipeline {
             steps {
                 echo '### Creating a new local Python environment and installing dependencies'
 
-                sh(
-                    script: """
-                        #!/usr/bin/env bash
-
-                        cd "${ env.WORKSPACE }"
+                sh """
+                        cd "$WORKSPACE"
 
                         rm -rf ./.venv
                         python3 -m venv .venv
@@ -137,16 +134,14 @@ pipeline {
                         pip3 install wheel
 
                         pip3 install -r ./jenkins/ansible/sft/requirements.txt
-                    """
-                )
+                """
 
                 echo '### Uploading assets to s3'
 
-                withCredentials([ usernamePassword( credentialsId: CREDENTIALS_ID_S3_UPLOADER, usernameVariable: 'keyId', passwordVariable: 'accessKey' ) ]) {
-                    sh(
-                        script: """
-                            #!/usr/bin/env bash
+                unarchive mapping: ['upload' : 'upload']
 
+                withCredentials([ usernamePassword( credentialsId: CREDENTIALS_ID_S3_UPLOADER, usernameVariable: 'keyId', passwordVariable: 'accessKey' ) ]) {
+                    sh """
                             AWS_ACCESS_KEY_ID=${ keyId } \
                             AWS_SECRET_ACCESS_KEY=${ accessKey } \
                             AWS_DEFAULT_REGION=eu-west-1 \
@@ -155,8 +150,7 @@ pipeline {
                                 s3://${ ASSETS_BUCKET_PREFIX }/ \
                                 --recursive \
                                 --include "wire-sft-${ version }-${ platform }-amd64.*"
-                        """
-                    )
+                    """
                 }
             }
         }
@@ -174,11 +168,8 @@ pipeline {
             steps {
                 echo '### Creating a new local Python environment and installing dependencies'
 
-                sh(
-                    script: """
-                        #!/usr/bin/env bash
-
-                        cd "${ env.WORKSPACE }"
+                sh """
+                        cd "$WORKSPACE"
 
                         rm -rf ./.venv
                         python3 -m venv .venv
@@ -187,31 +178,25 @@ pipeline {
                         pip3 install wheel
 
                         pip3 install -r ./jenkins/ansible/sft/requirements.txt
-                    """
-                )
+                """
 
                 echo '### Pushing container image to registry'
 
                 withCredentials([ file( credentialsId: CREDENTIALS_ID_IMAGE_REGISTRY, variable: 'authJsonPath' ) ]) {
-                    sh(
-                        script: """
-                            #!/usr/bin/env bash
-
-                            cd "${ env.WORKSPACE }"
+                    sh """
+                            cd "$WORKSPACE"
 
                             buildah push \
                                 --authfile ${ authJsonPath } \
                                 sftd:${ version } \
                                 quay.io/wire/sftd:${ version }
-                        """
-                    )
+                    """
                 }
 
                 echo "### Tagging as ${ version }"
 
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
-                    sh(
-                        script: """
+                    sh """
                             #!/usr/bin/env bash
 
                             git tag ${ version }
@@ -220,18 +205,14 @@ pipeline {
                                 -c core.sshCommand='ssh -i ${ sshPrivateKeyPath }' \
                                 push \
                                 origin ${ version }
-                        """
-                    )
+                    """
                 }
 
                 echo '### Creating release on Github'
 
                 withCredentials([ string( credentialsId: CREDENTIALS_ID_GITHUB_TOKEN, variable: 'accessToken' ) ]) {
-                    sh(
-                        script: """
-                            #!/usr/bin/env bash
-
-                            cd "${ env.WORKSPACE }"
+                    sh """
+                            cd "$WORKSPACE"
 
                             GITHUB_USER=${ repoUser } \
                             GITHUB_TOKEN=${ accessToken } \
@@ -240,8 +221,7 @@ pipeline {
                                 ./upload \
                                 ${ version } \
                                 ${ AWS_ROOT_URL }/${ ASSETS_BUCKET_PREFIX }
-                        """
-                    )
+                    """
                 }
             }
         }
