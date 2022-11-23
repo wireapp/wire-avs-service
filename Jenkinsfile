@@ -78,8 +78,9 @@ pipeline {
                 }
                 sh """
                     cp /build/sftd/sftd ./wire-sftd
-                    mkdir upload
+                    mkdir -p upload
                     cd upload
+                    rm -f wire-sft-*
                     tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
                     # COMPAT: using one file for potentially multiple checksums is deprecated
