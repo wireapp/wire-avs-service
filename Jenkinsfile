@@ -86,7 +86,7 @@ pipeline {
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
 
                     cp /build/sftd/sftd $WORKSPACE
-                    cp upload/wire-sft-* $WORKSPACE
+                    cp /build/sftd/upload/wire-sft-* $WORKSPACE
                 """
                 archiveArtifacts artifacts: "sftd,wire-sft-*"
             }
