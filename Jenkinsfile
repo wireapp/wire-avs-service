@@ -61,8 +61,6 @@ pipeline {
                     version = "${RELEASE_VERSION}.${ buildNumber }"
                     }
                 }
-                sh 'cd sources && make contrib_clean'
-                sh 'cd sources && make clean'
 
                 echo '### Obtaining build information'
                 script {
@@ -83,16 +81,20 @@ pipeline {
                 echo "### Building version: ${ version }"
                 sh(
                     script: """
-                        #!/usr/bin/env bash
-
                         cd sources
-
-                        # TODO: remove when Makefile has been fixed (ask Chris)
-                        mkdir -p ./build-x86_64/src
 
                         # NOTE: this environment varibales is used within the build process
                         make BUILD_NUMBER=${ buildNumber }
+                    """
+                )
+                archiveArtifacts artifacts: 'sftd'
+            }
+        }
 
+        stage( '' ) {
+            steps {
+                sh(
+                    script: """
                         cp ./sftd ./wire-sftd
 
                         mkdir ./upload
