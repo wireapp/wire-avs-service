@@ -83,18 +83,16 @@ pipeline {
 
         stage( 'Create archives' ) {
             steps {
-                sh(
-                    script: """
-                        cp ./sftd ./wire-sftd
+                sh """
+                        cp $WORKSPACE/sftd ./wire-sftd
 
-                        mkdir ./upload
-                        cd ./upload
+                        mkdir upload
+                        cd upload
                         tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
                         openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
                         # COMPAT: using one file for potentially multiple checksums is deprecated
                         openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
-                    """
-                )
+                """
             }
         }
 
@@ -102,8 +100,6 @@ pipeline {
             steps {
                 sh(
                     script: """
-                        #!/usr/bin/env bash
-
                         buildah bud \
                             --file "${ env.WORKSPACE }/jenkins/containers/Containerfile.sftd" \
                             --squash \
