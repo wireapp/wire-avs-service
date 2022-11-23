@@ -76,7 +76,7 @@ pipeline {
                         """
                     ).trim()
                 }
-                archiveArtifacts artifacts: '/build/sftd/sftd'
+                archiveArtifacts artifacts: '$WORKSPACE/sftd'
             }
         }
 
