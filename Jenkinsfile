@@ -76,7 +76,8 @@ pipeline {
                         """
                     ).trim()
                 }
-                archiveArtifacts artifacts: "$WORKSPACE/sftd"
+                sh "cp /build/sftd/sftd $WORKSPACE"
+                archiveArtifacts artifacts: "sftd"
             }
         }
 
