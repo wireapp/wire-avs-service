@@ -78,6 +78,7 @@ pipeline {
             steps {
                 unarchive mapping: ['sftd' : 'sftd']
                 sh """
+                    cp sftd wire-sftd
                     mkdir -p upload
                     cd upload
                     rm -f wire-sft-*
