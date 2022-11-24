@@ -70,13 +70,13 @@ pipeline {
                     ).trim()
                 }
                 sh "make BUILD_NUMBER=$buildNumber"
-                sh "cp sftd $WORKSPACE/sftd"
-                sh "cp sftd $WORKSPACE/wire-sftd"
+                archiveArtifacts artifacts: "sftd"
             }
         }
 
         stage( 'Create upload artifacts' ) {
             steps {
+                unarchive mapping: ['sftd' : 'sftd']
                 sh """
                     mkdir -p upload
                     cd upload
@@ -86,12 +86,6 @@ pipeline {
                     # COMPAT: using one file for potentially multiple checksums is deprecated
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
                 """
-            }
-        }
-
-        stage( 'Archive' ) {
-            steps {
-                archiveArtifacts artifacts: "sftd,wire-sft-*"
             }
         }
 
