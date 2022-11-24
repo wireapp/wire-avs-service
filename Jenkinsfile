@@ -23,12 +23,6 @@ pipeline {
     }
 
     stages {
-        stage( 'Checkout' ) {
-            steps {
-                echo '# Nothing'
-            }
-        }
-
         stage('Build') {
             agent {
                 dockerfile true
@@ -76,10 +70,16 @@ pipeline {
                     ).trim()
                 }
                 sh "make BUILD_NUMBER=$buildNumber"
+            }
+        }
+
+        stage( 'Create upload artifacts' ) {
+            steps {
                 sh """
                     mkdir -p upload
                     cd upload
                     rm -f wire-sft-*
+                    cp sftd wire-sftd
                     tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
                     # COMPAT: using one file for potentially multiple checksums is deprecated
@@ -88,9 +88,14 @@ pipeline {
             }
         }
 
-        stage( 'Build container' ) {
+        stage( 'Archive' ) {
             steps {
                 archiveArtifacts artifacts: "sftd,wire-sft-*"
+            }
+        }
+
+        stage( 'Build container' ) {
+            steps {
                 sh(
                     script: """
                         buildah bud \
