@@ -25,6 +25,15 @@ pipeline {
     stages {
         stage( 'Checkout' ) {
             steps {
+                echo '# Nothing'
+            }
+        }
+
+        stage('Build') {
+            agent {
+                dockerfile true
+            }
+            steps {
                 script {
                     def vcs = checkout([
                         $class: 'GitSCM',
@@ -55,14 +64,6 @@ pipeline {
                         version = "0.0.${buildNumber}"
                     }
                 }
-            }
-        }
-
-        stage('Build') {
-            agent {
-                dockerfile true
-            }
-            steps {
                 echo '### Obtaining build information'
                 script {
                     platform = sh(

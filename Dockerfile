@@ -27,7 +27,6 @@ RUN apt-get update \
        libxrender-dev \
        libprotobuf-c-dev
 
-COPY . /build/sftd
 WORKDIR /build/sftd
 ENV HOME /build/sftd
 
