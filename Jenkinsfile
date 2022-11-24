@@ -68,14 +68,13 @@ pipeline {
                     platform = sh(
                         returnStdout: true,
                         script: """
-                            #!/usr/bin/env bash
-
                             make dump \
                                 | grep TARGET_ARCH \
                                 | awk -F "=" '{print \$2}'
                         """
                     ).trim()
                 }
+                sh "make BUILD_NUMBER=$buildNumber"
                 sh """
                     cp /build/sftd/sftd ./wire-sftd
                     mkdir -p upload
