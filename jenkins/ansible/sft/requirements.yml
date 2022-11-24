@@ -1,0 +1,3 @@
+- src: 'git+https://github.com/wireapp/ansible-sft.git'
+  name: sft
+  version: 'v0.4.1'

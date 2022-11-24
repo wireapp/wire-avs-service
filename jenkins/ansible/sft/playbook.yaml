@@ -1,0 +1,11 @@
+- hosts: avs-test-sft01
+  tasks:
+    - import_role:
+        name: 'sft-server'
+        tasks_from: 'install'
+    - import_role:
+        name: 'sft-server'
+        tasks_from: 'start'
+    - import_role:
+        name: 'sft-server'
+        tasks_from: 'test'
