@@ -70,6 +70,8 @@ pipeline {
                     ).trim()
                 }
                 sh "make BUILD_NUMBER=$buildNumber"
+                sh "cp sftd $WORKSPACE/sftd"
+                sh "cp sftd $WORKSPACE/wire-sftd"
             }
         }
 
@@ -79,7 +81,6 @@ pipeline {
                     mkdir -p upload
                     cd upload
                     rm -f wire-sft-*
-                    cp sftd wire-sftd
                     tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
                     # COMPAT: using one file for potentially multiple checksums is deprecated
