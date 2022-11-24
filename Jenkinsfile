@@ -77,7 +77,6 @@ pipeline {
                 }
                 sh "make BUILD_NUMBER=$buildNumber"
                 sh """
-                    cp /build/sftd/sftd ./wire-sftd
                     mkdir -p upload
                     cd upload
                     rm -f wire-sft-*
@@ -85,17 +84,13 @@ pipeline {
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
                     # COMPAT: using one file for potentially multiple checksums is deprecated
                     openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
-
-                    cp /build/sftd/sftd $WORKSPACE
-                    cp /build/sftd/upload/wire-sft-* $WORKSPACE
                 """
-                archiveArtifacts artifacts: "sftd,wire-sft-*"
             }
         }
 
         stage( 'Build container' ) {
             steps {
-                unarchive mapping: ['sftd' : 'sftd']
+                archiveArtifacts artifacts: "sftd,wire-sft-*"
                 sh(
                     script: """
                         buildah bud \
@@ -137,8 +132,6 @@ pipeline {
                 """
 
                 echo '### Uploading assets to s3'
-
-                unarchive mapping: ['upload' : 'upload']
 
                 withCredentials([ usernamePassword( credentialsId: CREDENTIALS_ID_S3_UPLOADER, usernameVariable: 'keyId', passwordVariable: 'accessKey' ) ]) {
                     sh """
