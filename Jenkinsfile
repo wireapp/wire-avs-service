@@ -50,7 +50,6 @@ pipeline {
                     branchName = vcs.GIT_BRANCH
                     commitId = "${vcs.GIT_COMMIT}"[0..6]
                     repoName = vcs.GIT_URL.tokenize( '/' ).last().tokenize( '.' ).first()
-                    repoUser = vcs.GIT_URL.tokenize( '/' )[-2]
 
                     release_version = branchName.replaceAll("[^\\d\\.]", "");
                     if (release_version.length() > 0 || branchName.contains('release')) {
@@ -209,7 +208,7 @@ pipeline {
                     sh """
                             cd "$WORKSPACE"
 
-                            GITHUB_USER=${ repoUser } \
+                            GITHUB_USER=wireapp \
                             GITHUB_TOKEN=${ accessToken } \
                             python3 ./jenkins/release-on-github.py \
                                 ${ repoName } \
