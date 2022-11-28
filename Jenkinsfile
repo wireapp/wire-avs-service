@@ -77,6 +77,7 @@ pipeline {
         stage( 'Create upload artifacts' ) {
             steps {
                 unarchive mapping: ['sftd' : 'sftd']
+                echo("$branchName")
                 sh """
                     cp sftd wire-sftd
                     mkdir -p upload
@@ -107,9 +108,7 @@ pipeline {
 
         stage( 'Uploading new artifact' ) {
             when {
-                anyOf {
-                    expression { return "${ branchName }".startsWith( 'release' ) }
-                }
+                expression { return "$branchName".startsWith("release") }
             }
 
             environment {
@@ -151,7 +150,7 @@ pipeline {
 
         stage( 'Releasing new version' ) {
             when {
-                expression { return "${ branchName }".startsWith( 'release' ) }
+                expression { return "$branchName".startsWith("release") }
             }
 
             environment {
