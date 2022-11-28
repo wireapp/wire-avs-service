@@ -1,3 +1,4 @@
+CREDENTIALS_ID_IMAGE_REGISTRY = 'quayio-image-push'
 CREDENTIALS_ID_SSH_GITHUB = 'avs-github-ssh'
 CREDENTIALS_ID_S3_UPLOADER = 'aws-artifact-uploader'
 CREDENTIALS_ID_GITHUB_TOKEN = 'github-repo-access'
