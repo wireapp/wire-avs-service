@@ -46,7 +46,7 @@ pipeline {
                             ]
                         ]
 		            ])
-                    branchName = vcs.GIT_BRANCH.tokenize( '/' ).drop( 1 ).join( '/' )
+                    branchName = vcs.GIT_BRANCH
                     commitId = "${vcs.GIT_COMMIT}"[0..6]
                     repoName = vcs.GIT_URL.tokenize( '/' ).last().tokenize( '.' ).first()
                     repoUser = vcs.GIT_URL.tokenize( '/' )[-2]
