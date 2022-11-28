@@ -4,11 +4,11 @@ CREDENTIALS_ID_GITHUB_TOKEN = 'github-repo-access'
 AWS_ROOT_URL = 'https://s3-eu-west-1.amazonaws.com'
 ASSETS_BUCKET_PREFIX = 'public.wire.com/artifacts'
 
-buildNumber = currentBuild.id
-version = null
-branchName = null
-commitId = null
-repoName = null
+def buildNumber = currentBuild.id
+def branchName = null
+def version = null
+def commitId = null
+def repoName = null
 
 pipeline {
     agent { label 'linuxbuild' }
@@ -58,7 +58,8 @@ pipeline {
                         version = "0.0.${buildNumber}"
                     }
                 }
-                echo '### Obtaining build information'
+                echo "Building version $version"
+                echo "Obtaining build information"
                 script {
                     platform = sh(
                         returnStdout: true,
@@ -77,7 +78,7 @@ pipeline {
         stage( 'Create upload artifacts' ) {
             steps {
                 unarchive mapping: ['sftd' : 'sftd']
-                echo("$branchName")
+                echo "Branch: $branchName"
                 sh """
                     cp sftd wire-sftd
                     mkdir -p upload
@@ -117,7 +118,7 @@ pipeline {
             }
 
             steps {
-                echo '### Creating a new local Python environment and installing dependencies'
+                echo 'Creating a new local Python environment and installing dependencies'
 
                 sh """
                         cd "$WORKSPACE"
@@ -131,7 +132,7 @@ pipeline {
                         pip3 install -r ./jenkins/ansible/sft/requirements.txt
                 """
 
-                echo '### Uploading assets to s3'
+                echo 'Uploading assets to s3'
 
                 withCredentials([ usernamePassword( credentialsId: CREDENTIALS_ID_S3_UPLOADER, usernameVariable: 'keyId', passwordVariable: 'accessKey' ) ]) {
                     sh """
@@ -159,7 +160,7 @@ pipeline {
             }
 
             steps {
-                echo '### Creating a new local Python environment and installing dependencies'
+                echo 'Creating a new local Python environment and installing dependencies'
 
                 sh """
                         cd "$WORKSPACE"
@@ -173,7 +174,7 @@ pipeline {
                         pip3 install -r ./jenkins/ansible/sft/requirements.txt
                 """
 
-                echo '### Pushing container image to registry'
+                echo 'Pushing container image to registry'
 
                 withCredentials([ file( credentialsId: CREDENTIALS_ID_IMAGE_REGISTRY, variable: 'authJsonPath' ) ]) {
                     sh """
@@ -186,7 +187,7 @@ pipeline {
                     """
                 }
 
-                echo "### Tagging as ${ version }"
+                echo "Tagging as ${ version }"
 
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
                     sh """
@@ -201,7 +202,7 @@ pipeline {
                     """
                 }
 
-                echo '### Creating release on Github'
+                echo 'Creating release on Github'
 
                 withCredentials([ string( credentialsId: CREDENTIALS_ID_GITHUB_TOKEN, variable: 'accessToken' ) ]) {
                     sh """
