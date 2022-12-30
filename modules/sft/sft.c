@@ -5897,11 +5897,15 @@ static int module_init(void)
 	if (spath) {
 		FILE *fp = fopen(spath, "ra");
 		info("sft: opening: %s fp=%p\n", spath, fp);
-		if (fp) {
+		if (!fp) {
+			warning("sft: failed to openj secret file: %s\n", spath);
+		}
+		else {
 			char secret[256];
 			size_t clen = sizeof(sft->fed_turn.credential) - 1;
+
 			if (fscanf(fp, "%256s", secret) > 0) {
-				size_t slen = strlen(secret); 
+				info("sft: secret %s read\n", secret);
 				
 				zauth_get_username(sft->fed_turn.username,
 					       sizeof(sft->fed_turn.username));
@@ -5911,6 +5915,10 @@ static int module_init(void)
 					       secret, strlen(secret));
 				sft->fed_turn.credential[clen] = '\0';
 			}
+			else {
+				warning("sft: failed to parse secret from file\n");
+			}
+			info("sft: username: %s cred: %s\n", sft->fed_turn.username, sft->fed_turn.credential);
 				
 			fclose(fp);
 		}
