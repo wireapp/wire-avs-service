@@ -809,7 +809,7 @@ static void dns_handler(int dns_err, const struct sa *srv, void *arg)
 		if (addr[i] == '.')
 			addr[i] = '-';
 	}
-	
+
 	info("turnconn(%p): dns_handler: err=%d [%s] -> [%s] took: %dms\n",
 	     tc, dns_err, lent->host, addr,
 	     (int)(tmr_jiffies() - lent->ts));
@@ -825,7 +825,7 @@ static void dns_handler(int dns_err, const struct sa *srv, void *arg)
 	else {
 		err = turnconn_start(tc, tc->connl,
 				     &turn_srv, lent->proto, lent->secure,
-				     tc->username, tc->password,
+				     lent->turn.username, lent->turn.credential,
 				     AF_INET, NULL,
 				     LAYER_STUN, LAYER_TURN,
 				     tc->estabh,
