@@ -4276,8 +4276,9 @@ static int alloc_icall(struct call *call,
 			    NULL, // muted_changed_handler
 			    icall_quality_handler,
 			    NULL, // norelay_handler
-			    NULL, // req_clients_handler,
-			    NULL, // audio_level_handler,
+			    NULL, // req_clients_handler
+			    NULL, // audio_level_handler
+			    NULL, // new_epoch_handler
 			    call);
 	ICALL_CALL(icall, set_media_laddr, &g_sft->mediasa);
 
@@ -4504,7 +4505,7 @@ static int restart_call(struct call *call, void *arg)
 	 */
 	list_unlink(&call->group_le);
 	err = ecall_restart((struct ecall *)call->icall,
-			    ICALL_CALL_TYPE_VIDEO);
+			    ICALL_CALL_TYPE_VIDEO, false);
 	if (err)
 		return err;
 
