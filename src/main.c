@@ -52,8 +52,7 @@ struct avs_service {
 
 	struct {
 		char url[256];
-		char username[256];
-		char credential[256];
+		char secret_path[256];
 	} turn;
 
 	struct {
@@ -91,7 +90,7 @@ static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <username> -c <credential>\n");
+			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path>\n");
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
@@ -101,15 +100,17 @@ static void usage(void)
 			 DEFAULT_METRICS_ADDR);
 	(void)re_fprintf(stderr, "\t-r <port>       Port for metrics requests (default: %d)\n",
 			 DEFAULT_METRICS_PORT);
-	(void)re_fprintf(stderr, "\t-u <URL>        Url to use in responses\n");
+	(void)re_fprintf(stderr, "\t-u <URL>        URL to use in responses\n");
 	(void)re_fprintf(stderr, "\t-b <blacklist>  Comma seperated client version blacklist\n"
 			         "\t\t\t Example: <6.2.9,6.2.11\n");
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
 	(void)re_fprintf(stderr, "\t-T              Use TURN servers when gathering\n");
 	(void)re_fprintf(stderr, "\t-t <url>        Multi SFT TURN URL\n");
-	(void)re_fprintf(stderr, "\t-v <username>   Multi SFT TURN username\n");
-	(void)re_fprintf(stderr, "\t-c <credential> Multi SFT TURN credential\n");
+	(void)re_fprintf(stderr, "\t-s <path>       "
+			 "Multi SFT TURN path to file with secret\n");
+	
+
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 }
 
@@ -234,7 +235,7 @@ int main(int argc, char *argv[])
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "A:b:c:f:I:l:M:p:qr:S:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "A:b:c:f:I:l:M:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -248,11 +249,6 @@ int main(int argc, char *argv[])
 				 sizeof(avsd.blacklist));
 			break;
 
-		case 'c':
-			str_ncpy(avsd.turn.credential, optarg,
-				 sizeof(avsd.turn.credential));
-			break;
-			
 		case 'f':
 			str_ncpy(avsd.federation_url, optarg,
 				 sizeof(avsd.federation_url));
@@ -289,17 +285,11 @@ int main(int argc, char *argv[])
 			sa_set_port(&avsd.metrics_addr, atoi(optarg));
 			break;
 
-		case 'S':
-			err = sa_set_str(&avsd.sft_req_addr, optarg,
-					 DEFAULT_SFT_REQ_PORT);
-			info("avsd: setting sft_req_addr:%s err=%m\n", optarg, err);
+		case 's':
+			str_ncpy(avsd.turn.secret_path, optarg,
+				 sizeof(avsd.turn.secret_path));
 			break;
 			
-		case 's':
-			sa_set_port(&avsd.sft_req_addr, atoi(optarg));
-			info("avsd: setting sft_req_port:%p\n", atoi(optarg));
-			break;
-
 		case 'T':
 			info("avsd: using TURN\n");
 			avsd.use_turn = true;
@@ -322,11 +312,6 @@ int main(int argc, char *argv[])
 			avsd.worker_count = atoi(optarg);
 			break;
 
-		case 'x':
-			str_ncpy(avsd.turn.username, optarg,
-				 sizeof(avsd.turn.username));
-			break;
-			
 		default:
 			err = EINVAL;
 			usage();
@@ -499,12 +484,7 @@ const char *avs_service_turn_url(void)
 	return avsd.turn.url[0] != '\0' ? avsd.turn.url : NULL;
 }
 
-const char *avs_service_turn_username(void)
+const char *avs_service_secret_path(void)
 {
-	return avsd.turn.username[0] != '\0' ? avsd.turn.username : NULL;
-}
-
-const char *avs_service_turn_credential(void)
-{
-	return avsd.turn.credential[0] != '\0' ? avsd.turn.credential : NULL;
+	return avsd.turn.secret_path[0] != '\0' ? avsd.turn.secret_path : NULL;
 }

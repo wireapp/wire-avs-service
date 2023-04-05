@@ -38,6 +38,8 @@
 #include <avs_service_turn.h>
 #include <avs_audio_level.h>
 
+#include "zauth.h"
+
 #define SFT_TOKEN "sft-"
 
 /* Use libre internal rtcp function */
@@ -102,6 +104,11 @@ struct sft {
 	struct list ecalls;
 
 	struct list cbl; /* client blacklist */
+
+	struct {
+		char username[256];
+		char credential[256];
+	} fed_turn;
 
 	uint64_t start_ts;
 
@@ -5552,10 +5559,10 @@ static void http_req_handler(struct http_conn *hc,
 				isfederated = true;
 				str_ncpy(turn.url, turl, sizeof(turn.url));
 				str_ncpy(turn.username,
-					 avs_service_turn_username(),
+					 sft->fed_turn.username,
 					 sizeof(turn.username));
 				str_ncpy(turn.credential,
-					 avs_service_turn_credential(),
+					 sft->fed_turn.credential,
 					 sizeof(turn.credential));
 			}
 			err = alloc_group(sft, &group, convid,
@@ -5787,6 +5794,7 @@ static int module_init(void)
 	struct sa *laddr;
 	struct mediapump *mp;
 	const char *blacklist;
+	const char *spath;	
 	int err;
 	
 	info("sft: module loading...\n");
@@ -5885,6 +5893,37 @@ static int module_init(void)
 	msystem_set_project(SFT_PROJECT);
 	msystem_set_version(SFT_VERSION);
 
+	spath = avs_service_secret_path();
+	if (spath) {
+		FILE *fp = fopen(spath, "ra");
+		info("sft: opening: %s fp=%p\n", spath, fp);
+		if (!fp) {
+			warning("sft: failed to openj secret file: %s\n", spath);
+		}
+		else {
+			char secret[256];
+			size_t clen = sizeof(sft->fed_turn.credential) - 1;
+
+			if (fscanf(fp, "%256s", secret) > 0) {
+				info("sft: secret %s read\n", secret);
+				
+				zauth_get_username(sft->fed_turn.username,
+					       sizeof(sft->fed_turn.username));
+				zauth_get_password(sft->fed_turn.credential,
+					       &clen,
+					       sft->fed_turn.username,
+					       secret, strlen(secret));
+				sft->fed_turn.credential[clen] = '\0';
+			}
+			else {
+				warning("sft: failed to parse secret from file\n");
+			}
+			info("sft: username: %s cred: %s\n", sft->fed_turn.username, sft->fed_turn.credential);
+				
+			fclose(fp);
+		}
+	}
+	
 	worker_init();
 
  out:
