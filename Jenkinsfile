@@ -93,6 +93,9 @@ pipeline {
         }
 
         stage( 'Build container' ) {
+            agent {
+                docker { image 'noenv/buildah:1.28.0' }
+            }
             steps {
                 sh(
                     script: """
