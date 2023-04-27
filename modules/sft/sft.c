@@ -5112,7 +5112,8 @@ static bool is_blacklisted(const char *ver, struct list *cbl)
 	return found;
 }
 
-static int reply_blacklist(struct http_conn *hc, struct econn_message *msg)
+static int reply_connerror(struct http_conn *hc, struct econn_message *msg,
+			   enum econn_confconn_status conn_status)
 {
 	struct econn_message *rmsg;
 	char *rstr;
@@ -5123,11 +5124,12 @@ static int reply_blacklist(struct http_conn *hc, struct econn_message *msg)
 		return ENOMEM;
 
 	econn_message_init(rmsg, ECONN_CONF_CONN, msg->sessid_sender);
-	rmsg->u.confconn.status = ECONN_CONFCONN_REJECTED_BLACKLIST;
+	rmsg->u.confconn.status = conn_status;
+	//ECONN_CONFCONN_REJECTED_BLACKLIST;
 
 	err = econn_message_encode(&rstr, rmsg);
 	if (err) {
-		warning("reply_blacklist: failed to encode message: %m\n", err);
+		warning("reply_connerror: failed to encode message: %m\n", err);
 		return err;
 	}
 
@@ -5481,7 +5483,36 @@ static void http_req_handler(struct http_conn *hc,
 			     "from client with toolver: %s\n", toolver);
 			if (is_blacklisted(toolver, &sft->cbl)) {
 				warning("sft: client version: %s is blacklisted\n", toolver);
-				err = reply_blacklist(hc, cmsg);
+				err = reply_connerror(hc, cmsg,
+					     ECONN_CONFCONN_REJECTED_BLACKLIST);
+				goto out;
+			}
+
+			user = cmsg->u.confconn.username;
+			cred = cmsg->u.confconn.credential;
+			if (user && cred) {
+				auth_state = zrest_authenticate(user, cred);
+				switch (auth) {
+				case ZREST_OK:
+					break;
+
+				case ZREST_EXPIRED:
+				case ZREST_UNAUTHORIZED:
+					err = EACCESS;
+					break;
+
+				case ZREST_ERROR:
+					err = EPROTO;
+					break;
+				}
+			}
+			else if (avsd_force_auth()) {
+				return UNAUTHOROZED;
+			}
+
+			if (err) {
+				err = reply_connerror(hc, cmsg,
+						      auth_status);
 				goto out;
 			}
 
@@ -5540,7 +5571,8 @@ static void http_req_handler(struct http_conn *hc,
 		if (is_blacklisted(toolver, &sft->cbl)) {
 			warning("sft: client version: %s is blacklisted\n",
 				toolver);
-			reply_blacklist(hc, cmsg);
+			reply_connerror(hc, cmsg,
+					ECONN_CONFCONN_REJECTED_BLACKLIST);
 			err = 0;
 			goto out;
 		}
