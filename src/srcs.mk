@@ -9,6 +9,7 @@ SRCS    += mediapump.c
 SRCS	+= module.c
 SRCS    += turnconn.c
 SRCS    += worker.c
+SRCS	+= zrest.c
 
 ifneq ($(STATIC),)
 SRCS    += static.c
