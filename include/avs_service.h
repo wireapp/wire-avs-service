@@ -47,6 +47,7 @@ const char *avs_service_url(void);
 const char *avs_service_blacklist(void);
 bool avs_service_use_turn(void);
 bool avs_service_use_sft_turn(void);
+bool avs_service_use_auth(void);
 
 struct dnsc *avs_service_dnsc(void);
 const char *avs_service_federation_url(void);
@@ -54,6 +55,7 @@ const char *avs_service_federation_url(void);
 const char *avs_service_turn_url(void);
 const char *avs_service_secret_path(void);
 
+const struct pl *avs_service_secret(void);
 
 /*
  * Config
@@ -176,3 +178,18 @@ enum {
 	LAYER_TURN = -20,       /* must be below ICE */
 	LAYER_STUN = -30,       /* must be below TURN */
 };
+
+/* ZREST */
+enum zrest_state {
+	ZREST_OK,
+	ZREST_JOIN,
+	ZREST_EXPIRED,
+	ZREST_UNAUTHORIZED,
+	ZREST_ERROR,
+};
+
+int zrest_get_password(char *pass, size_t *passlen, const char *user,
+		       const char *secret, size_t sec_len);
+void zrest_generate_sft_username(char *user, size_t sz);
+enum zrest_state zrest_authenticate(const char *user, const char *credential);
+

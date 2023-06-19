@@ -64,7 +64,8 @@ struct avs_service {
 
 	int worker_count;
 	bool use_turn;
-	bool use_sft_turn;
+	bool use_auth;
+	struct pl secret;
 
 	struct dnsc *dnsc;
 	
@@ -72,7 +73,8 @@ struct avs_service {
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
        .use_turn = false,
-       .use_sft_turn = true,
+       .use_auth = false,
+       .secret = PL_INIT,
        .dnsc = NULL,
 };
 
@@ -89,8 +91,9 @@ static struct avs_service avsd = {
 static void usage(void)
 {
 	(void)re_fprintf(stderr,
-			 "usage: sftd [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
+			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
 			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path>\n");
+	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
@@ -110,7 +113,6 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-s <path>       "
 			 "Multi SFT TURN path to file with secret\n");
 	
-
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 }
 
@@ -217,6 +219,35 @@ static struct log logh = {
 	.h = log_handler
 };
 
+static int load_secret(const char *path)
+ {
+	 char secret[256];
+	 FILE *fp;
+	 int err = 0;
+
+	 if (!path)
+		 return EINVAL;
+	 
+	 fp = fopen(path, "ra");
+	 info("sft: opening: %s fp=%p\n", path, fp);
+	 if (!fp) {
+		 warning("sft: failed to openj secret file: %s\n", path);
+		 return EBADF;
+	 }
+	 if (fscanf(fp, "%256s", secret) > 0) {
+		 char *psec;
+		 info("sft: secret %s read\n", secret);
+
+		 err = str_dup(&psec, secret);		 
+		 if (!err) {
+			 avsd.secret.p = psec;
+			 avsd.secret.l = str_len(secret);
+		 }
+	 }
+
+	 return err;
+ }
+ 
 
 int main(int argc, char *argv[])
 {
@@ -230,16 +261,19 @@ int main(int argc, char *argv[])
 	memset(&avsd, 0, sizeof(avsd));
 
 	avsd.worker_count = NUM_WORKERS;
-	avsd.use_sft_turn = true;
 	lock_alloc(&avsd.log.lock);
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "A:b:c:f:I:l:M:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:b:c:f:I:l:M:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
 		switch (c) {
+		case 'a':
+			avsd.use_auth = true;
+			break;
+			
 		case 'A':
 			sa_set_str(&avsd.media_addr, optarg, 0);
 			break;
@@ -286,8 +320,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 's':
-			str_ncpy(avsd.turn.secret_path, optarg,
-				 sizeof(avsd.turn.secret_path));
+			load_secret(optarg);
 			break;
 			
 		case 'T':
@@ -403,6 +436,7 @@ int main(int argc, char *argv[])
 	libre_close();
 
 	avsd.dnsc = mem_deref(avsd.dnsc);
+	avsd.secret.p = mem_deref((void *)avsd.secret.p);
 	avsd.log.lock = mem_deref(avsd.log.lock);
 	
 	/* check for memory leaks */
@@ -463,11 +497,6 @@ bool avs_service_use_turn(void)
 	return avsd.use_turn;
 }
 
-bool avs_service_use_sft_turn(void)
-{
-	return avsd.use_sft_turn;
-}
-
 
 struct dnsc *avs_service_dnsc(void)
 {
@@ -484,7 +513,17 @@ const char *avs_service_turn_url(void)
 	return avsd.turn.url[0] != '\0' ? avsd.turn.url : NULL;
 }
 
+bool avs_service_use_auth(void)
+{
+	return avsd.use_auth;
+}
+
 const char *avs_service_secret_path(void)
 {
 	return avsd.turn.secret_path[0] != '\0' ? avsd.turn.secret_path : NULL;
+}
+
+const struct pl *avs_service_secret(void)	
+{
+	return pl_isset(&avsd.secret) ? &avsd.secret : NULL;
 }

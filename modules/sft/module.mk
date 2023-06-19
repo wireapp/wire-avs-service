@@ -3,6 +3,6 @@
 #
 
 MOD		:= sft
-$(MOD)_SRCS	+= sft.c zauth.c
+$(MOD)_SRCS	+= sft.c
 
 include mk/mod.mk

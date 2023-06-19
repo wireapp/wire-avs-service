@@ -573,19 +573,6 @@ static int assign_task(struct call *call, sft_task_h *taskh, void *arg, bool loc
 
 static int append_group(struct group *group, struct call *call);
 
-#if 0
-static char *find_query(const char *path)
-{
-	char *query;
-	
-	query = strchr(path, '?');
-	if (query)
-		++query;
-
-	return query;
-}
-#endif
-
 static int split_paths(char *path, char **parts, int max_parts)
 {
 	int i = 0;
@@ -613,42 +600,6 @@ static int split_paths(char *path, char **parts, int max_parts)
 
 	return i;
 }
-
-
-
-#if 0
-static int parse_query(char *query, struct query_param *params, int max_params)
-{
-	struct query_param *p;
-	int i = 0;
-
-	if (!query || !(*query))
-		return -1;
-
-	params[0].key = query;
-	++i;
-	while (i < max_params && (query = strchr(query, '&'))) {
-		*query = '\0';
-		params[i].key = ++query;
-		params[i].val = NULL;
-
-		/* Go back and split previous param */
-		p = &params[i - 1];
-		p->val = strchr(p->key, '=');
-		if (p->val)
-			*(p->val)++ = '\0';
-		++i;
-	}
-
-	p = &params[i - 1];
-	/* Go back and split last param */
-	p->val = strchr(p->key, '='); 
-	if (p->val)
-		*(p->val)++ = '\0';
-
-	return i;
-}
-#endif
 
 
 static void calc_rr(struct rtcp_rr *rr, struct ssrc_stats *s)
@@ -2260,6 +2211,7 @@ static int icall_send_handler(struct icall *icall,
 			      const char *userid_sender,
 			      struct econn_message *msg,
 			      struct list *targets,
+			      bool my_clients_only,
 			      void *arg)
 {
 	struct call *call = arg;
@@ -2268,6 +2220,7 @@ static int icall_send_handler(struct icall *icall,
 	int err = 0;
 
 	(void)targets;
+	(void)my_clients_only;
 
 	group = call ? call->group : NULL;
 
@@ -4179,7 +4132,7 @@ static void ecall_confmsg_handler(struct ecall *ecall,
 						append_group(group, call);
 					}
 				}
-				
+
 				/* Only host SFTs receive CONFCONN-Reqs */
 				group->sft.ishost = !msg->resp;
 				send_conf_conn(call, true, NULL, call->callid, call->federate.dstid);
@@ -5112,7 +5065,8 @@ static bool is_blacklisted(const char *ver, struct list *cbl)
 	return found;
 }
 
-static int reply_blacklist(struct http_conn *hc, struct econn_message *msg)
+static int reply_connerror(struct http_conn *hc, struct econn_message *msg,
+			   enum econn_confconn_status conn_status)
 {
 	struct econn_message *rmsg;
 	char *rstr;
@@ -5123,11 +5077,11 @@ static int reply_blacklist(struct http_conn *hc, struct econn_message *msg)
 		return ENOMEM;
 
 	econn_message_init(rmsg, ECONN_CONF_CONN, msg->sessid_sender);
-	rmsg->u.confconn.status = ECONN_CONFCONN_REJECTED_BLACKLIST;
+	rmsg->u.confconn.status = conn_status;
 
 	err = econn_message_encode(&rstr, rmsg);
 	if (err) {
-		warning("reply_blacklist: failed to encode message: %m\n", err);
+		warning("reply_connerror: failed to encode message: %m\n", err);
 		return err;
 	}
 
@@ -5359,11 +5313,6 @@ static void http_req_handler(struct http_conn *hc,
 			     void *arg)
 {
 	struct sft *sft = arg;
-#if 0
-	struct query_param qp[2];
-	char *query;
-	int i;
-#endif
 	struct econn_message *cmsg = NULL;
 	char *paths[2];
 	char *url;
@@ -5377,10 +5326,14 @@ static void http_req_handler(struct http_conn *hc,
 	struct call *call = NULL;
 	const struct sa *sa;
 	char *toolver;
+	char *user;
+	char *cred;
+	enum zrest_state auth_state;
 	char *body = NULL;
 	struct zapi_ice_server *turnv;
 	size_t turnc;
 	int n;
+	enum econn_confconn_status errcode = ECONN_CONFCONN_OK;
 	int err = 0;
 
 	pl_strdup(&url, &msg->path);
@@ -5389,15 +5342,6 @@ static void http_req_handler(struct http_conn *hc,
 	sa = http_conn_peer(hc);
 	info("sft: incoming HTTP from: %J URL=%s\n", sa, url);
 	
-#if 0
-	query = find_query(params);
-	if (!query) {
-		warning("sft: missing query\n");
-		err = EINVAL;
-		goto bad_req;
-	}
-#endif
-       
 	n = split_paths(url, paths, ARRAY_SIZE(paths));
 	if (n != 2) {
 		warning("sft: path missmatch expecting 2 got %d\n", n);
@@ -5406,7 +5350,6 @@ static void http_req_handler(struct http_conn *hc,
 	}
 
 	convid = paths[1];
-	info("sft: convid=%s\n", convid);
 
 	if (streq(convid, "status")) {
 		http_creply(hc, 200, "OK", "text/plain", "Debug\n");
@@ -5475,13 +5418,45 @@ static void http_req_handler(struct http_conn *hc,
 			}
 			break;
 
-		case ECONN_CONF_CONN:
+		case ECONN_CONF_CONN:			
 			toolver = cmsg->u.confconn.toolver;
 			info("sft: incoming request for updating call "
 			     "from client with toolver: %s\n", toolver);
 			if (is_blacklisted(toolver, &sft->cbl)) {
 				warning("sft: client version: %s is blacklisted\n", toolver);
-				err = reply_blacklist(hc, cmsg);
+				err = reply_connerror(hc, cmsg,
+						      ECONN_CONFCONN_REJECTED_BLACKLIST);
+				goto out;
+			}
+
+			user = cmsg->u.confconn.sft_username;
+			cred = cmsg->u.confconn.sft_credential;
+			if (!avs_service_use_auth()) {
+				auth_state = ZREST_OK;
+			}
+			else {
+				auth_state = ZREST_UNAUTHORIZED;
+				if (user && cred) {
+					auth_state = zrest_authenticate(user, cred);
+				}				
+			}
+
+			switch (auth_state) {
+			case ZREST_OK:
+			case ZREST_JOIN:
+				break;
+
+			case ZREST_EXPIRED:
+				errcode = ECONN_CONFCONN_REJECTED_AUTH_EXPIRED;
+				break;
+				       
+			default:
+				errcode = ECONN_CONFCONN_REJECTED_AUTH_INVALID;
+				break;					
+			}
+
+			if (errcode) {			
+				err = reply_connerror(hc, cmsg, errcode);
 				goto out;
 			}
 
@@ -5517,6 +5492,9 @@ static void http_req_handler(struct http_conn *hc,
 		}
 	}
 	else {
+		const char *sft_url;
+		const char *sft_tuple;
+		
 		if (pl_strcmp(&msg->met, "POST") != 0) {
 			err = EINVAL;
 			goto bad_req;
@@ -5527,21 +5505,33 @@ static void http_req_handler(struct http_conn *hc,
 			goto bad_req;
 		}
 
+		if (!avs_service_use_auth()) {
+			auth_state = ZREST_OK;
+		}
+		else {
+			user = cmsg->u.confconn.sft_username;
+			cred = cmsg->u.confconn.sft_credential;
+			auth_state = ZREST_UNAUTHORIZED;
+			if (user && cred) {
+				auth_state = zrest_authenticate(user, cred);
+			}
+		}
+
 		toolver = cmsg->u.confconn.toolver;
+		sft_url = cmsg->u.confconn.sft_url ?
+			cmsg->u.confconn.sft_url : "LOCAL",
+		sft_tuple = cmsg->u.confconn.sft_tuple ?
+			cmsg->u.confconn.sft_tuple : "LOCAL";
 
 		info("sft: incoming request for new call from toolver: %s "
 		     "sft_url=%s sft_tuple=%s\n",
-		     toolver,
-		     cmsg->u.confconn.sft_url ? cmsg->u.confconn.sft_url
-		                              : "LOCAL",
-		     cmsg->u.confconn.sft_tuple ? cmsg->u.confconn.sft_tuple
-		                                : "LOCAL");
+		     toolver, sft_url, sft_tuple);
 		
 		if (is_blacklisted(toolver, &sft->cbl)) {
 			warning("sft: client version: %s is blacklisted\n",
 				toolver);
-			reply_blacklist(hc, cmsg);
-			err = 0;
+			err = reply_connerror(hc, cmsg,
+					      ECONN_CONFCONN_REJECTED_BLACKLIST);
 			goto out;
 		}
 
@@ -5553,7 +5543,33 @@ static void http_req_handler(struct http_conn *hc,
 			};
 			bool isfederated = false;
 			const char *turl;
+			
+			switch(auth_state) {
+			case ZREST_OK:
+				break;
 
+			case ZREST_JOIN:
+				errcode = ECONN_CONFCONN_REJECTED_AUTH_CANTSTART;
+				break;
+
+			case ZREST_EXPIRED:
+				errcode = ECONN_CONFCONN_REJECTED_AUTH_EXPIRED;
+				break;
+				       
+			default:
+				errcode = ECONN_CONFCONN_REJECTED_AUTH_INVALID;
+				break;					
+			}
+
+			if (errcode) {
+				warning("sft: access denied for toolver: %s "
+					"sft_url=%s sft_tuple=%s\n",
+					toolver, sft_url, sft_tuple);
+				err = reply_connerror(hc, cmsg, errcode);
+
+				goto out;
+			}
+				
 			/* If we have a TURN URL it means we are federated */
 			turl = avs_service_turn_url();
 			if (turl) {
@@ -5795,7 +5811,7 @@ static int module_init(void)
 	struct sa *laddr;
 	struct mediapump *mp;
 	const char *blacklist;
-	const char *spath;	
+	const struct pl *secret;
 	int err;
 	
 	info("sft: module loading...\n");
@@ -5875,7 +5891,6 @@ static int module_init(void)
 			goto out;
 		}
 	}
-	
 
 	strcpy(sft->uuid, "_");
 	sft->url = avs_service_url();
@@ -5894,36 +5909,20 @@ static int module_init(void)
 	msystem_set_project(SFT_PROJECT);
 	msystem_set_version(SFT_VERSION);
 
-	spath = avs_service_secret_path();
-	if (spath) {
-		FILE *fp = fopen(spath, "ra");
-		info("sft: opening: %s fp=%p\n", spath, fp);
-		if (!fp) {
-			warning("sft: failed to openj secret file: %s\n", spath);
-		}
-		else {
-			char secret[256];
-			size_t clen = sizeof(sft->fed_turn.credential) - 1;
-
-			if (fscanf(fp, "%256s", secret) > 0) {
-				info("sft: secret %s read\n", secret);
-				
-				zauth_get_username(sft->fed_turn.username,
-					       sizeof(sft->fed_turn.username));
-				zauth_get_password(sft->fed_turn.credential,
-					       &clen,
-					       sft->fed_turn.username,
-					       secret, strlen(secret));
-				sft->fed_turn.credential[clen] = '\0';
-			}
-			else {
-				warning("sft: failed to parse secret from file\n");
-			}
-			info("sft: username: %s cred: %s\n", sft->fed_turn.username, sft->fed_turn.credential);
-				
-			fclose(fp);
-		}
+	secret = avs_service_secret();
+	if (secret) {
+		size_t clen = sizeof(sft->fed_turn.credential) - 1;
+		
+		zrest_generate_sft_username(sft->fed_turn.username,
+					    sizeof(sft->fed_turn.username));
+		zrest_get_password(sft->fed_turn.credential,
+				   &clen,
+				   sft->fed_turn.username,
+				   secret->p, secret->l);
+		sft->fed_turn.credential[clen] = '\0';
 	}
+
+	info("sft: username: %s cred: %s\n", sft->fed_turn.username, sft->fed_turn.credential);
 	
 	worker_init();
 
