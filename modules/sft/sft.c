@@ -1512,7 +1512,7 @@ static void reflow_recv_rtp(struct mbuf *mb, void *arg)
 			rcall = part ? mem_ref(part->call) : NULL;
 		}
 		lock_rel(g_sft->lock);
-			
+
 		if (!part || !rcall)
 			continue;
 
@@ -2473,6 +2473,7 @@ static void call_destructor(void *arg)
 	mem_deref(call->lock);
 }
 
+static void deauth_parts(struct call *call);
 
 static void ecall_confpart_handler(struct ecall *ecall,
 				   const struct econn_message *msg,
@@ -2488,6 +2489,7 @@ static void ecall_confpart_handler(struct ecall *ecall,
 	SFTLOG(LOG_LEVEL_INFO, "participants: %d\n",
 	       call, list_count(partl));
 
+	deauth_parts(call);
 	LIST_FOREACH(partl, le) {
 		struct econn_group_part *part = le->data;
 		struct auth_part *aup;
@@ -2502,6 +2504,8 @@ static void ecall_confpart_handler(struct ecall *ecall,
 		if (!rpart || !rpart->call)
 			continue;
 
+		rpart->auth = part->authorized;
+
 		/* lookup ourselves in the remote participant's list */
 		lpart = call2part(rpart->call,
 				  call->userid, call->clientid);
@@ -2515,7 +2519,6 @@ static void ecall_confpart_handler(struct ecall *ecall,
 
 		list_append(&lpart->authl, &aup->le, aup);
 
-		lpart->auth = part->authorized;
 		send_propsync(rpart->call, call->props,
 			      call->userid, call->clientid);
 	}
@@ -2927,6 +2930,20 @@ static void deauth_call(struct call *call)
 		}
 	}
 	call->dc_estab = false;
+}
+
+static void deauth_parts(struct call *call)
+{
+	struct le *le;
+
+	LIST_FOREACH(&call->partl, le) {
+		struct participant *part = le->data;
+
+		if (!part)
+			continue;
+
+		part->auth = false;
+	}
 }
 
 
