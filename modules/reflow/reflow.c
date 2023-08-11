@@ -78,7 +78,7 @@ enum {
 enum {
 	AUDIO_BANDWIDTH = 32,   /* kilobits/second */
 	AUDIO_PTIME     = 40,   /* ms */
-	VIDEO_BANDWIDTH = 300,  /* kilobits/second */	
+	VIDEO_BANDWIDTH = 600,  /* kilobits/second */
 };
 
 enum {
@@ -306,8 +306,6 @@ struct reflow {
 
 	struct mediaflow *mf;
 	struct worker *worker;
-
-	bool use_transcc;
 
 	/* RTP streams */
 	struct {
@@ -2452,7 +2450,6 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	rf->use_transcc = USE_TRANSCC;
 	rf->dtls   = mem_ref(g_reflow.dtls);
 	rf->setup_local    = SETUP_ACTPASS;
 	rf->setup_remote   = SETUP_ACTPASS;
@@ -2516,10 +2513,10 @@ int reflow_alloc(struct iflow		**flowp,
 		"extmap", "1 urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on");
 	sdp_media_set_lattr(rf->audio.sdpm, false,
 			    "extmap", "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-	if (rf->use_transcc) {
-		sdp_media_set_lattr(rf->audio.sdpm, false,
-				    "extmap", "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-	}
+#if USE_TRANSCC
+	sdp_media_set_lattr(rf->audio.sdpm, false,
+			    "extmap", "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif
 	
 	rand_str(rf->cname, sizeof(rf->cname));
 	rand_str(rf->msid, sizeof(rf->msid));
@@ -2527,8 +2524,6 @@ int reflow_alloc(struct iflow		**flowp,
 	err |= uuid_v4(&rf->video.label);
 	if (err)
 		goto out;
-
-
 	
 
 	rf->lssrcv[MEDIA_AUDIO] = regen_lssrc(rf->lssrcv[MEDIA_AUDIO]);
@@ -2571,11 +2566,11 @@ int reflow_alloc(struct iflow		**flowp,
 		af->ac = ac;
 		list_append(&rf->audio.formatl, &af->le, af);
 
-		if (rf->use_transcc) {
-			sdp_media_set_lattr(rf->audio.sdpm, false,
-					    "rtcp-fb", "%s transport-cc",
-					    ac->pt);
-		}
+#if USE_TRANSCC
+		sdp_media_set_lattr(rf->audio.sdpm, false,
+				    "rtcp-fb", "%s transport-cc",
+				    ac->pt);
+#endif
 	}
 
 	reflow_add_video(rf, &g_reflow.vidcodecl);
@@ -2847,11 +2842,11 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	  "2 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-01");
 	*/
 
-	if (rf->use_transcc) {
-		sdp_media_set_lattr(rf->video.sdpm, false,
-				    "extmap",
-				    "4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-	}
+#if USE_TRANSCC
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif
 	
 	sdp_media_set_lattr(rf->video.sdpm, false, "rtcp-mux", NULL);
 
@@ -2926,11 +2921,17 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 				goto out;
 			}
 
-			if (rf->use_transcc) {
-				sdp_media_set_lattr(rf->video.sdpm, false,
-						    "rtcp-fb", "%s transport-cc",
-						    vc->pt);
-			}
+#if USE_TRANSCC
+			sdp_media_set_lattr(rf->video.sdpm, false,
+					    "rtcp-fb", "%s transport-cc",
+					    vc->pt);
+#endif
+#if USE_REMB
+			sdp_media_set_lattr(rf->video.sdpm, false,
+					    "rtcp-fb", "%s goog-remb",
+					    vc->pt);
+#endif
+
 			
 			ssrcv[i] = rand_u32();
 			re_snprintf(ssrc_group, sizeof(ssrc_group),
