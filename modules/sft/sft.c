@@ -45,10 +45,12 @@
 /* Use libre internal rtcp function */
 #define	RTCP_PSFB_FIR  4   /* FULL INTRA-FRAME */
 
-#define RTCP_RTPFB_TRANS_CC 15
+#define RTCP_RTPFB_TRANS_CC  15
+#define RTCP_RTPFB_REMB      15
 
 #define EXTMAP_AULEVEL 1
-#define EXTMAP_WSEQ  3
+#define EXTMAP_AUDIO_WSEQ  3
+#define EXTMAP_VIDEO_WSEQ  4
 #define EXTMAP_GFH 3
 
 #define USE_RR 0
@@ -190,9 +192,14 @@ struct pending_msg {
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 20000
 #define TIMEOUT_RR 3000
-#define TIMEOUT_FIR 3000
 #define TIMEOUT_TRANSCC 150
 #define TIMEOUT_PROVISIONAL 10000
+
+/* Moved to avs_service as cmdline param or default
+ * #define TIMEOUT_FIR 3000
+ */
+
+#define TIMEOUT_FB 400
 
 #define RTP_SEQ_MOD (1<<16)
 
@@ -241,6 +248,8 @@ struct transcc {
 	uint32_t rssrc;
 
 	struct tmr tmr;
+
+	size_t npkts;
 };
 
 #define NUM_RTP_STREAMS 5
@@ -915,7 +924,6 @@ static struct participant *call2part(struct call *call, const char *userid, cons
 }
 
 #if USE_TRANSCC
-
 /** Is x less than y? */
 static inline bool seq_less(uint16_t x, uint16_t y)
 {
@@ -961,6 +969,7 @@ static int transcc_encode_handler(struct mbuf *mb, void *arg)
 	uint32_t refcnt;
 	uint64_t ts = tcc->refts;
 	uint64_t deltats;
+	int i;
 
 	/*
 	  0                   1                   2                   3
@@ -1137,6 +1146,76 @@ static void send_gnack(struct call *call, struct transcc *tcc)
 	}
 #endif
 
+#if USE_REMB
+static int remb_encode_handler(struct mbuf *mb, void *arg)
+{
+	struct call *call = arg;
+
+   /*
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |V=2|P| FMT=15  |   PT=206      |             length            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                  SSRC of packet sender                        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                  SSRC of media source                         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  Unique identifier 'R' 'E' 'M' 'B'                            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  Num SSRC     | BR Exp    |  BR Mantissa                      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |   SSRC feedback                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  ...                                                          |
+   */
+	/* REMB */
+	mbuf_write_u8(mb, 'R');
+	mbuf_write_u8(mb, 'E');
+	mbuf_write_u8(mb, 'M');
+	mbuf_write_u8(mb, 'B');
+
+	/* 2 ssrcs with 1000kbit bandwidth */
+	mbuf_write_u32(mb, htonl(0x0271312d));
+	mbuf_write_u32(mb, htonl(call->audio.tcc.rssrc));
+	mbuf_write_u32(mb, htonl(call->video.tcc.rssrc));
+
+	return 0;
+}
+
+static void remb_handler(void *arg)
+{
+	struct call *call = arg;
+	struct mbuf *mb = NULL;
+	int err;
+
+	mb = mbuf_alloc(256);
+	if (!mb) {
+		SFTLOG(LOG_LEVEL_WARN, "remb_handler mbuf failed\n", call);
+		goto out;
+	}
+
+
+	err = rtcp_encode(mb, RTCP_PSFB, RTCP_RTPFB_REMB,
+			  call->video.tcc.lssrc,
+			  0,
+			  remb_encode_handler, call);
+	if (err) {
+		warning("remb_handler: RTCP-encode failed: %m\n", err);
+		goto out;
+	}
+
+	//re_printf("mbuf(%d): %w\n", (int)mb->end, mb->buf, mb->end);
+
+	if (call->mf)
+		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
+
+ out:
+	mem_deref(mb);
+	tmr_start(&call->video.tcc.tmr, TIMEOUT_FB, remb_handler, call);
+}
+#endif
+
 #if USE_TRANSCC
 static void transcc_handler(void *arg)	
 {
@@ -1152,11 +1231,12 @@ static void transcc_handler(void *arg)
 		SFTLOG(LOG_LEVEL_WARN, "transport_cc buf failed\n", tcc->call);
 		goto out;
 	}
+
+
 	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
 			  tcc->lssrc,
 			  tcc->rssrc,
 			  transcc_encode_handler, tcc);
-
 	if (err) {
 		warning("trans_cc: RTCP-encode failed: %m\n", err);
 		goto out;
@@ -1171,7 +1251,7 @@ static void transcc_handler(void *arg)
 
  out:
 	mem_deref(mb);
-	tmr_start(&tcc->tmr, TIMEOUT_TRANSCC, transcc_handler, tcc);
+	tmr_start(&tcc->tmr, TIMEOUT_FB, transcc_handler, tcc);
 }
 
 
@@ -1184,10 +1264,12 @@ static void update_transcc(struct call *call,
 	struct transpkt *tp;
 
 	if (tcc->refts == 0)
-		tcc->refts = ts;
+		tcc->refts = (uint32_t)((ts >> 6) & 0xffffff);
 
 	if (tcc->seqno == -1)
 		tcc->seqno = wseq;
+
+	++tcc->npkts;
 
 	tp = mem_zalloc(sizeof(*tp), transpkt_destructor);
 	tp->seqno = wseq;
@@ -1577,7 +1659,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	uint8_t *rdata = NULL;
 	size_t rlen = 0;
 	bool kg = false;
-	enum rtp_stream_type rst = RTP_STREAM_TYPE_AUDIO;
+	enum rtp_stream_type rst = RTP_STREAM_TYPE_NONE;
 	//int s_ix;
 	struct mbuf rmb;
 	size_t len;
@@ -1642,9 +1724,20 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 			break;
 			
 #if USE_TRANSCC	
-		case EXTMAP_WSEQ:
-			wseq = ntohs(mbuf_read_u16(mb));
-			//info("RTP-WSEQ: %d\n", (int)wseq);
+		case EXTMAP_AUDIO_WSEQ:
+			if (call->audio.ssrc && rtp.ssrc == call->audio.ssrc) {
+				wseq = ntohs(mbuf_read_u16(mb));
+				//info("audio: RTP-WSEQ: %d\n", (int)wseq);
+			}
+			mb->pos += xlen;
+			break;
+
+		case EXTMAP_VIDEO_WSEQ:
+			if (call->video.ssrc && rtp.ssrc == call->video.ssrc) {
+				wseq = ntohs(mbuf_read_u16(mb));
+				//info("video: RTP-WSEQ: %d\n", (int)wseq);
+			}
+			mb->pos += xlen;
 			break;
 #endif
 #if 0
@@ -1709,17 +1802,25 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	if (s) {
 		update_ssrc_stats(s, &rtp, now);
 	}
-#if USE_TRANSCC
-	if (wseq >= 0) {
+	if (rst == RTP_STREAM_TYPE_VIDEO) {
 		if (tcc) {
-			update_transcc(call, now, tcc, wseq, rtp.seq);
+#if USE_TRANSCC
+			if (wseq) {
+				update_transcc(call, now, tcc, wseq, rtp.seq);
+			}
 			if (!tmr_isrunning(&tcc->tmr)) {
-				tmr_start(&tcc->tmr, TIMEOUT_TRANSCC,
+				tmr_start(&tcc->tmr, TIMEOUT_FB,
 					  transcc_handler, tcc);
 			}
+#endif
+#if USE_REMB
+			if (!tmr_isrunning(&tcc->tmr)) {
+				tmr_start(&tcc->tmr, TIMEOUT_FB,
+					  remb_handler, call);
+			}
+#endif
 		}
 	}
-#endif
 
 	/* If we are the first in the group list (aka KeyGenerator)
 	 * always forward packet iregardless of audio level.
@@ -1785,7 +1886,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 			rcall = part ? mem_ref(part->call) : NULL;
 		}
 		lock_rel(g_sft->lock);
-			
+
 		if (!part || !rcall)
 			continue;
 
@@ -2874,7 +2975,8 @@ static void fir_handler(void *arg)
 	send_fir(call);
 	//send_pli(call);
 
-	tmr_start(&call->tmr_fir, TIMEOUT_FIR, fir_handler, call);
+	tmr_start(&call->tmr_fir, avs_service_fir_timeout(),
+		  fir_handler, call);
 }
 
 static void conn_handler(void *arg)
@@ -3093,7 +3195,8 @@ static void icall_datachan_estab_handler(struct icall *icall,
 		}
 	}
 	else {
-		tmr_start(&call->tmr_fir, TIMEOUT_FIR, fir_handler, call);
+		tmr_start(&call->tmr_fir, avs_service_fir_timeout(),
+			  fir_handler, call);
 		tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
 
 		/* send initial CONPART only to non-federated calls */
@@ -3914,6 +4017,8 @@ static void aup_destructor(void *arg)
 	mem_deref(aup->userid);
 }
 
+static void deauth_parts(struct call *call);
+
 static void ecall_confpart_handler(struct ecall *ecall,
 				   const struct econn_message *msg,
 				   void *arg)
@@ -3928,6 +4033,7 @@ static void ecall_confpart_handler(struct ecall *ecall,
 	SFTLOG(LOG_LEVEL_INFO, "participants: %d\n",
 	       call, list_count(partl));
 
+	deauth_parts(call);
 	LIST_FOREACH(partl, le) {
 		struct econn_group_part *part = le->data;
 		struct auth_part *aup;
@@ -3941,6 +4047,8 @@ static void ecall_confpart_handler(struct ecall *ecall,
 		rpart = call2part(call, part->userid, part->clientid);
 		if (!rpart || !rpart->call)
 			continue;
+
+		rpart->auth = part->authorized;
 
 		/* lookup ourselves in the remote participant's list */
 		lpart = call2part(rpart->call,
@@ -3956,7 +4064,6 @@ static void ecall_confpart_handler(struct ecall *ecall,
 
 		list_append(&lpart->authl, &aup->le, aup);
 
-		lpart->auth = part->authorized;
 		send_propsync(rpart->call, call->props,
 			      call->userid, call->clientid, true);
 	}
@@ -4439,6 +4546,20 @@ static void deauth_call(struct call *call)
 	call->dc_estab = false;
 }
 
+static void deauth_parts(struct call *call)
+{
+	struct le *le;
+
+	LIST_FOREACH(&call->partl, le) {
+		struct participant *part = le->data;
+
+		if (!part)
+			continue;
+
+		part->auth = false;
+	}
+}
+
 
 static int restart_call(struct call *call, void *arg)
 {
@@ -4452,6 +4573,7 @@ static int restart_call(struct call *call, void *arg)
 	call->hconn = mem_ref(hc);
 	
 	deauth_call(call);
+	tmr_cancel(&call->tmr_conn);
 
 	/* We want to move this call to the end of the list,
 	 * so it loses its KG privilage on the clients

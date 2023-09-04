@@ -36,6 +36,8 @@
 #include "score.h"
 
 #define NUM_WORKERS 16
+#define TIMEOUT_FIR 3000
+
 
 /* Global Context */
 struct avs_service {
@@ -63,12 +65,12 @@ struct avs_service {
 	} log;
 
 	int worker_count;
+	uint64_t fir_timeout;	
 	bool use_turn;
 	bool use_auth;
 	struct pl secret;
 
 	struct dnsc *dnsc;
-	
 };
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
@@ -261,11 +263,12 @@ int main(int argc, char *argv[])
 	memset(&avsd, 0, sizeof(avsd));
 
 	avsd.worker_count = NUM_WORKERS;
+	avsd.fir_timeout = TIMEOUT_FIR;
 	lock_alloc(&avsd.log.lock);
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:b:c:f:I:l:M:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -293,6 +296,10 @@ int main(int argc, char *argv[])
 					 DEFAULT_REQ_PORT);
 			if (err)
 				goto out;
+			break;
+
+		case 'k':
+			avsd.fir_timeout = (uint64_t)atoi(optarg);
 			break;
 
 		case 'l':
@@ -526,4 +533,9 @@ const char *avs_service_secret_path(void)
 const struct pl *avs_service_secret(void)	
 {
 	return pl_isset(&avsd.secret) ? &avsd.secret : NULL;
+}
+
+uint64_t avs_service_fir_timeout(void)
+{
+	return avsd.fir_timeout;
 }

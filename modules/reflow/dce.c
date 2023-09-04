@@ -879,6 +879,8 @@ static int dce_handler(void *data)
 #if 0
 	info("dce_handler: pld=%p type=%d dce=%p ch=%p data=%p buf=%p\n",
 	     pld, pld->type, pld->dce, pld->ch, data, buf);
+#else
+	(void)buf;
 #endif
 
 	lock_write_get(g_dce.lock);

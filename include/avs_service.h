@@ -67,6 +67,7 @@ int  config_init(void);
 void config_close(void);
 struct conf *avs_service_conf(void);
 int avs_service_worker_count(void);
+uint64_t avs_service_fir_timeout(void);
 
 /*
  * Workers
