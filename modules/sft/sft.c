@@ -3767,6 +3767,7 @@ static int remove_participant(struct call *call, void *arg)
 	if (call == other)
 		return 0;
 
+	lock_write_get(g_sft->lock);
 	le = call->partl.head;
 	while(le && !found) {
 		struct participant *part = le->data;
@@ -3787,6 +3788,7 @@ static int remove_participant(struct call *call, void *arg)
 			found = true;
 		}
 	}
+	lock_rel(g_sft->lock);
 
 	return 0;
 }
