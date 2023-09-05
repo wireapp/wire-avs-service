@@ -131,25 +131,22 @@ static void worker_timeout_handler(void *arg)
 	//info("worker_timeout: w(%p): %d\n", w, w->id);
 	
 	do {
-		struct worker_task task;
-		struct worker_task *t = NULL;
+		struct worker_task *task = NULL;
 
 		lock_write_get(w->lock);
 		le = w->taskl.head;
 		if (le) {
-			t = le->data;
-			/* Copy task to stack, so any thread that might flush the list,
-			 * does not cut the feet from under it
+			task = le->data;
+			/* Ref the task so we are sure nothing will
+			 * destruct it when the lock is released
 			 */
-			task = *t;
-			task.arg = mem_ref(t->arg);
+			task = mem_ref(task);
 			list_unlink(le);
-			mem_deref(t);
 		}
 		lock_rel(w->lock);
-		if (t) {
-			running = perform_task(w, &task);
-			mem_deref(task.arg);
+		if (task) {
+			running = perform_task(w, task);
+			mem_deref(task);
 		}
 	}
 	while(le && running);
