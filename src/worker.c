@@ -148,6 +148,7 @@ static void worker_timeout_handler(void *arg)
 			running = perform_task(w, task);
 			mem_deref(task);
 		}
+		mem_deref(task);
 	}
 	while(le && running);
 
