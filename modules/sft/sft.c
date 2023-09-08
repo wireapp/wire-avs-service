@@ -54,7 +54,7 @@
 #define EXTMAP_GFH 3
 
 #define USE_RR 0
-#define AUDIO_LEVEL_SILENCE 80
+#define AUDIO_LEVEL_SILENCE 110
 #define AUDIO_LEVEL_ABS_SILENCE 127
 
 #define RTP_LEVELK 0.5f
@@ -1493,10 +1493,12 @@ static void rtp_stream_update(struct rtp_stream *rs,
 		rs->last_seq = rtp->seq;
 		rs->last_ts = rtp->ts;
 	}
-
 	if (rtp->ssrc == rs->current_ssrc) {
-		rs->seq += rtp->seq - rs->last_seq;
-		rs->ts += rtp->ts - rs->last_ts;		
+		int seqdiff = rtp->seq - rs->last_seq;
+		int tdiff = rtp->ts - rs->last_ts;
+
+		rs->seq += seqdiff == 0 ? 1 : seqdiff;
+		rs->ts += tdiff == 0 ? tsdiff : tdiff;
 	}
 	else {
 		rs->current_ssrc = rtp->ssrc;
@@ -1665,6 +1667,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	size_t len;
 	uint8_t aulevel;
 	bool have_parts = true;
+	bool has_aulevel = false;
 
 	(void)wseq;
 
@@ -1718,6 +1721,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 						call->audio.level,
 						(int)(a & 0x7f),
 						RTP_LEVELK);
+				has_aulevel = true;
 			}
 			else
 				mb->pos += xlen;
@@ -1759,7 +1763,13 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 		rtpxlen -= xlen + sizeof(uint8_t);
 	}
 
+
  process_rtp:
+	if (!has_aulevel) {
+		info("RTP: %s-call(%p) ssrc=%u ts:%u seq: %d NO AULEVEL\n",
+		     call->issft ? "SFT" : "CLI", call,
+		     rtp.ssrc, rtp.ts, rtp.seq);
+	}
 	if (call->audio.ssrc && rtp.ssrc == call->audio.ssrc) {
 		rst = RTP_STREAM_TYPE_AUDIO;
 
@@ -2678,7 +2688,7 @@ static int send_conf_part(struct call *call, uint64_t ts,
 			continue;
 		}
 
-#if 1
+#if 0
 		info("send_confpart: adding CLIENT call:%p part_ix=%lu %s/%s\n",
 		     pcall, pcall->part_ix, pcall->userid, pcall->clientid);
 #endif
@@ -4750,19 +4760,14 @@ static void split_tuple(struct call *call, const char *tuple)
 	char *c;
 	int err;
 
-	info("split_tuple: %s\n", tuple);
-
 	err = str_dup(&tp, tuple);
 	if (err)
 		return;
 	
 	c = strrchr(tp, '/');
 
-	info("split_tuple: split at: %s\n", c);
-	
 	if (c && str_len(c) > 1) {		
 		call->sft_cid = (uint16_t)atoi(&c[1]);
-		info("split_tuple: extract cid=%u\n", call->sft_cid);
 	}
 	else {
 		call->sft_cid = 0;
@@ -5295,7 +5300,6 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 	     group, group->federate.tc, src,
 	     mbuf_get_left(mb), mbuf_buf(mb), mbuf_get_left(mb));
 #endif
-
 	if (stun_msg_decode(&msg, mb, &ua)) {
 		uint8_t *b;
 		
