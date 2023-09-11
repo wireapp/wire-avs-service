@@ -1481,24 +1481,16 @@ static void rtp_stream_update(struct rtp_stream *rs,
 		break;
 
 	case RTP_STREAM_TYPE_VIDEO:
-		tsdiff = 900;
+		tsdiff = 9000;
 		break;
 
 	default:
 		return;
 	}
 
-	if (rs->current_ssrc == 0) {
-		rs->current_ssrc = rtp->ssrc;
-		rs->last_seq = rtp->seq;
-		rs->last_ts = rtp->ts;
-	}
-	if (rtp->ssrc == rs->current_ssrc) {
-		int seqdiff = rtp->seq - rs->last_seq;
-		int tdiff = rtp->ts - rs->last_ts;
-
-		rs->seq += seqdiff == 0 ? 1 : seqdiff;
-		rs->ts += tdiff == 0 ? tsdiff : tdiff;
+       if (rtp->ssrc == rs->current_ssrc) {
+		rs->seq += rtp->seq - rs->last_seq;
+		rs->ts += rtp->ts - rs->last_ts;
 	}
 	else {
 		rs->current_ssrc = rtp->ssrc;
@@ -1667,7 +1659,6 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	size_t len;
 	uint8_t aulevel;
 	bool have_parts = true;
-	bool has_aulevel = false;
 
 	(void)wseq;
 
@@ -1721,7 +1712,6 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 						call->audio.level,
 						(int)(a & 0x7f),
 						RTP_LEVELK);
-				has_aulevel = true;
 			}
 			else
 				mb->pos += xlen;
@@ -1765,11 +1755,6 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 
 
  process_rtp:
-	if (!has_aulevel) {
-		info("RTP: %s-call(%p) ssrc=%u ts:%u seq: %d NO AULEVEL\n",
-		     call->issft ? "SFT" : "CLI", call,
-		     rtp.ssrc, rtp.ts, rtp.seq);
-	}
 	if (call->audio.ssrc && rtp.ssrc == call->audio.ssrc) {
 		rst = RTP_STREAM_TYPE_AUDIO;
 
@@ -1985,7 +1970,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 		}
 		else {
 			struct rtp_stream *rs;
-			
+
 			if (rst == RTP_STREAM_TYPE_VIDEO
 			    && rcall->video.select.mode == SELECT_MODE_LIST) {
 
@@ -2010,9 +1995,9 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 			rtp.seq = rs->seq;
 			rtp.ts = rs->ts;
 
-#if 0
-			info("ssrc: %u/%08x type=%d seq=%u ts=%u\n",
-			     ssrc, ssrc, rst, rtp.seq, rtp.ts);
+#if DEBUG_PACKET
+			info("ssrc: %u/%08x -> %u/%08x type=%d seq=%u ts=%u\n",
+			     rs->ssrc, rs->ssrc, ssrc, ssrc, rst, rtp.seq, rtp.ts);
 #endif
 				
 			rtp.ssrc = rs->ssrc;
@@ -4395,7 +4380,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	if (err)
 		goto out;
 
-	call->video.select.mode = SELECT_MODE_LEVEL;
+	call->video.select.mode = SELECT_MODE_LIST;
 
 	if (turnc > 0) {
 		call->turnv = mem_zalloc(turnc * sizeof(*turnv), NULL);
