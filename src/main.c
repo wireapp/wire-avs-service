@@ -36,7 +36,7 @@
 #include "score.h"
 
 #define NUM_WORKERS 16
-#define TIMEOUT_FIR 3000
+#define TIMEOUT_FIR 1000
 
 
 /* Global Context */
