@@ -1308,22 +1308,16 @@ static void rtp_stream_update(struct rtp_stream *rs,
 		break;
 
 	case RTP_STREAM_TYPE_VIDEO:
-		tsdiff = 900;
+		tsdiff = 9000;
 		break;
 
 	default:
 		return;
 	}
 
-	if (rs->current_ssrc == 0) {
-		rs->current_ssrc = rtp->ssrc;
-		rs->last_seq = rtp->seq;
-		rs->last_ts = rtp->ts;
-	}
-
 	if (rtp->ssrc == rs->current_ssrc) {
 		rs->seq += rtp->seq - rs->last_seq;
-		rs->ts += rtp->ts - rs->last_ts;		
+		rs->ts += rtp->ts - rs->last_ts;
 	}
 	else {
 		rs->current_ssrc = rtp->ssrc;
