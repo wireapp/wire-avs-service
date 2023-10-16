@@ -3455,8 +3455,14 @@ static void call_close_handler(struct call *call, bool locked)
 			struct pending_msg *pm = le->data;
 
 			le = le->next;
-			if (pm->call == call)
+			if (pm->call == call) {
+				if (call->hconn) {
+					warning("call_close_handler: no response from federation TURN server");
+					http_ereply(call->hconn, "501", "No response from federation TURN server");
+					call->hconn = mem_deref(call->hconn);
+				}
 				mem_deref(pm);
+			}
 		}
 	}
 
