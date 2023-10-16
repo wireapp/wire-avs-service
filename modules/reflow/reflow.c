@@ -3468,6 +3468,7 @@ static void bundle_ssrc(struct reflow *rf,
 	sdp_media_set_lattr(newm, false, "ice-pwd", "%s", rf->ice_pwd);
 	
 	sdp_media_set_lattr(newm, true, "fingerprint", "%s", fingerprint);
+	sdp_media_set_lattr(newm, true, "setup", reflow_setup_name(rf->setup_local));
 	
 	if (is_video) {
 		sdp_media_set_lattr(newm, false, "extmap",
