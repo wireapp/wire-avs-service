@@ -141,6 +141,10 @@ pipeline {
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
                     sh '''#!/usr/bin/env bash
 
+                    export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
+                    export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
+                    export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
+
                     source ./.venv/bin/activate
 
                     app_version="6.6.6"
@@ -153,7 +157,7 @@ pipeline {
 
                     chart_version=$(./bin/chart-next-version.sh release)
 
-                    chart_patched="$(yq -Mr ".version = \"$chart_version\" | .appVersion = \"$app_version\"" ./charts/sftd/Chart.yaml)"
+                    chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
 
                     echo "$chart_patched"
 
