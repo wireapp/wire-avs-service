@@ -158,6 +158,10 @@ pipeline {
                     echo "$chart_patched"
 
                     echo "$chart_patched" > ./charts/sftd/Chart.yaml
+
+                    helm package ./charts/sftd
+
+                    helm s3 push sftd-*.tgz charts-avs
                     '''
                 }
 
