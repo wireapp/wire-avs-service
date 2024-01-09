@@ -25,9 +25,57 @@ pipeline {
 
     stages {
         stage('Build') {
-            agent {
-                dockerfile true
-            }
+            // agent {
+            //     dockerfile true
+            // }
+            // steps {
+            //     script {
+            //         def vcs = checkout([
+            //             $class: 'GitSCM',
+            //             changelog: true,
+            //             userRemoteConfigs: scm.userRemoteConfigs,
+            //             branches: scm.branches,
+            //             extensions: scm.extensions + [
+            //                 [
+            //                 $class: 'SubmoduleOption',
+            //                 disableSubmodules: false,
+            //                 recursiveSubmodules: true,
+            //                 parentCredentials: true
+            //                 ],
+            //                 [
+            //                     $class: 'WipeWorkspace'
+            //                 ]
+            //             ]
+	    //                 ])
+            //         branchName = vcs.GIT_BRANCH
+            //         commitId = "${vcs.GIT_COMMIT}"[0..6]
+            //         repoName = vcs.GIT_URL.tokenize( '/' ).last().tokenize( '.' ).first()
+
+            //         release_version = branchName.replaceAll("[^\\d\\.]", "");
+            //         if (release_version.length() > 0 || branchName.contains('release')) {
+            //             version = release_version + "." + buildNumber
+            //         } else {
+            //             version = "0.0.${buildNumber}"
+            //         }
+            //     }
+            //     echo "Building version $version"
+            //     echo "Obtaining build information"
+            //     script {
+            //         platform = sh(
+            //             returnStdout: true,
+            //             script: """
+            //                 make dump \
+            //                     | grep TARGET_ARCH \
+            //                     | awk -F "=" '{print \$2}'
+            //             """
+            //         ).trim()
+            //     }
+            //     sh "make BUILD_NUMBER=$buildNumber"
+            //     archiveArtifacts artifacts: "sftd"
+            // }
+
+
+            agent { label 'linuxbuild' }
             steps {
                 script {
                     def vcs = checkout([
@@ -51,7 +99,9 @@ pipeline {
                     commitId = "${vcs.GIT_COMMIT}"[0..6]
                     repoName = vcs.GIT_URL.tokenize( '/' ).last().tokenize( '.' ).first()
 
-                    release_version = branchName.replaceAll("[^\\d\\.]", "");
+                    // release_version = branchName.replaceAll("[^\\d\\.]", "");
+                    release_version = "6.6.6"
+
                     if (release_version.length() > 0 || branchName.contains('release')) {
                         version = release_version + "." + buildNumber
                     } else {
@@ -61,25 +111,27 @@ pipeline {
                 echo "Building version $version"
                 echo "Obtaining build information"
                 script {
-                    platform = sh(
-                        returnStdout: true,
-                        script: """
-                            make dump \
-                                | grep TARGET_ARCH \
-                                | awk -F "=" '{print \$2}'
-                        """
-                    ).trim()
+                    paltform = "linux"
+                    // platform = sh(
+                    //     returnStdout: true,
+                    //     script: """
+                    //         make dump \
+                    //             | grep TARGET_ARCH \
+                    //             | awk -F "=" '{print \$2}'
+                    //     """
+                    // ).trim()
                 }
-                sh "make BUILD_NUMBER=$buildNumber"
-                archiveArtifacts artifacts: "sftd"
+                // sh "make BUILD_NUMBER=$buildNumber"
+                // archiveArtifacts artifacts: "sftd"
             }
         }
 
         stage( 'Create upload artifacts' ) {
             steps {
-                unarchive mapping: ['sftd' : 'sftd']
+                // unarchive mapping: ['sftd' : 'sftd']
                 echo "Branch: $branchName"
                 sh """
+                    echo "hi mum!" > ./sftd
                     cp sftd wire-sftd
                     mkdir -p upload
                     cd upload
@@ -92,150 +144,150 @@ pipeline {
             }
         }
 
-        stage( 'Build container' ) {
-            steps {
-                sh(
-                    script: """
-                        buildah bud \
-                            --file "${ env.WORKSPACE }/jenkins/containers/Containerfile.sftd" \
-                            --squash \
-                            --no-cache \
-                            --tag sftd:${ version } \
-                            ./
-                    """
-                )
-            }
-        }
+        // stage( 'Build container' ) {
+        //     steps {
+        //         sh(
+        //             script: """
+        //                 buildah bud \
+        //                     --file "${ env.WORKSPACE }/jenkins/containers/Containerfile.sftd" \
+        //                     --squash \
+        //                     --no-cache \
+        //                     --tag sftd:${ version } \
+        //                     ./
+        //             """
+        //         )
+        //     }
+        // }
 
-        stage( 'Uploading new artifact' ) {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
+        // stage( 'Uploading new artifact' ) {
+        //     when {
+        //         expression { return "$branchName".startsWith("release") }
+        //     }
 
-            environment {
-                // NOTE: adjust to allow precedence introduces by 'venv'
-                PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
-            }
+        //     environment {
+        //         // NOTE: adjust to allow precedence introduces by 'venv'
+        //         PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
+        //     }
 
-            steps {
-                echo 'Creating a new local Python environment and installing dependencies'
+        //     steps {
+        //         echo 'Creating a new local Python environment and installing dependencies'
 
-                sh """
-                        cd "$WORKSPACE"
+        //         sh """
+        //                 cd "$WORKSPACE"
 
-                        rm -rf ./.venv
-                        python3 -m venv .venv
+        //                 rm -rf ./.venv
+        //                 python3 -m venv .venv
 
-                        pip3 install --upgrade pip
-                        pip3 install wheel
+        //                 pip3 install --upgrade pip
+        //                 pip3 install wheel
 
-                        pip3 install -r ./jenkins/ansible/sft/requirements.txt
-                """
+        //                 pip3 install -r ./jenkins/ansible/sft/requirements.txt
+        //         """
 
-                echo 'Uploading assets to s3'
+        //         echo 'Uploading assets to s3'
 
-                withCredentials([ usernamePassword( credentialsId: CREDENTIALS_ID_S3_UPLOADER, usernameVariable: 'keyId', passwordVariable: 'accessKey' ) ]) {
-                    sh """
-                            AWS_ACCESS_KEY_ID=${ keyId } \
-                            AWS_SECRET_ACCESS_KEY=${ accessKey } \
-                            AWS_DEFAULT_REGION=eu-west-1 \
-                            aws s3 cp \
-                                ./upload/ \
-                                s3://${ ASSETS_BUCKET_PREFIX }/ \
-                                --recursive \
-                                --include "wire-sft-${ version }-${ platform }-amd64.*"
-                    """
-                }
-            }
-        }
+        //         withCredentials([ usernamePassword( credentialsId: CREDENTIALS_ID_S3_UPLOADER, usernameVariable: 'keyId', passwordVariable: 'accessKey' ) ]) {
+        //             sh """
+        //                     AWS_ACCESS_KEY_ID=${ keyId } \
+        //                     AWS_SECRET_ACCESS_KEY=${ accessKey } \
+        //                     AWS_DEFAULT_REGION=eu-west-1 \
+        //                     aws s3 cp \
+        //                         ./upload/ \
+        //                         s3://${ ASSETS_BUCKET_PREFIX }/ \
+        //                         --recursive \
+        //                         --include "wire-sft-${ version }-${ platform }-amd64.*"
+        //             """
+        //         }
+        //     }
+        // }
 
-        stage( 'Releasing new version' ) {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
+        // stage( 'Releasing new version' ) {
+        //     when {
+        //         expression { return "$branchName".startsWith("release") }
+        //     }
 
-            environment {
-                // NOTE: adjust to allow precedence introduces by 'venv'
-                PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
-            }
+        //     environment {
+        //         // NOTE: adjust to allow precedence introduces by 'venv'
+        //         PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
+        //     }
 
-            steps {
-                echo 'Creating a new local Python environment and installing dependencies'
+        //     steps {
+        //         echo 'Creating a new local Python environment and installing dependencies'
 
-                sh """
-                        cd "$WORKSPACE"
+        //         sh """
+        //                 cd "$WORKSPACE"
 
-                        rm -rf ./.venv
-                        python3 -m venv .venv
+        //                 rm -rf ./.venv
+        //                 python3 -m venv .venv
 
-                        pip3 install --upgrade pip
-                        pip3 install wheel
+        //                 pip3 install --upgrade pip
+        //                 pip3 install wheel
 
-                        pip3 install -r ./jenkins/ansible/sft/requirements.txt
-                """
+        //                 pip3 install -r ./jenkins/ansible/sft/requirements.txt
+        //         """
 
-                echo 'Pushing container image to registry'
+        //         echo 'Pushing container image to registry'
 
-                withCredentials([ file( credentialsId: CREDENTIALS_ID_IMAGE_REGISTRY, variable: 'authJsonPath' ) ]) {
-                    sh """
-                            cd "$WORKSPACE"
+        //         withCredentials([ file( credentialsId: CREDENTIALS_ID_IMAGE_REGISTRY, variable: 'authJsonPath' ) ]) {
+        //             sh """
+        //                     cd "$WORKSPACE"
 
-                            buildah push \
-                                --authfile ${ authJsonPath } \
-                                sftd:${ version } \
-                                quay.io/wire/sftd:${ version }
-                    """
-                }
+        //                     buildah push \
+        //                         --authfile ${ authJsonPath } \
+        //                         sftd:${ version } \
+        //                         quay.io/wire/sftd:${ version }
+        //             """
+        //         }
 
-                echo "Tagging as ${ version }"
+        //         echo "Tagging as ${ version }"
 
-                withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
-                    sh """
-                            #!/usr/bin/env bash
+        //         withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
+        //             sh """
+        //                     #!/usr/bin/env bash
 
-                            git tag ${ version }
+        //                     git tag ${ version }
 
-                            git \
-                                -c core.sshCommand='ssh -i ${ sshPrivateKeyPath }' \
-                                push \
-                                origin ${ version }
-                    """
-                }
+        //                     git \
+        //                         -c core.sshCommand='ssh -i ${ sshPrivateKeyPath }' \
+        //                         push \
+        //                         origin ${ version }
+        //             """
+        //         }
 
-                echo 'Creating release on Github'
+        //         echo 'Creating release on Github'
 
-                withCredentials([ string( credentialsId: CREDENTIALS_ID_GITHUB_TOKEN, variable: 'accessToken' ) ]) {
-                    sh """
-                            cd "$WORKSPACE"
+        //         withCredentials([ string( credentialsId: CREDENTIALS_ID_GITHUB_TOKEN, variable: 'accessToken' ) ]) {
+        //             sh """
+        //                     cd "$WORKSPACE"
 
-                            GITHUB_USER=wireapp \
-                            GITHUB_TOKEN=${ accessToken } \
-                            python3 ./jenkins/release-on-github.py \
-                                ${ repoName } \
-                                ./upload \
-                                ${ version } \
-                                ${ AWS_ROOT_URL }/${ ASSETS_BUCKET_PREFIX }
-                    """
-                }
-            }
-        }
+        //                     GITHUB_USER=wireapp \
+        //                     GITHUB_TOKEN=${ accessToken } \
+        //                     python3 ./jenkins/release-on-github.py \
+        //                         ${ repoName } \
+        //                         ./upload \
+        //                         ${ version } \
+        //                         ${ AWS_ROOT_URL }/${ ASSETS_BUCKET_PREFIX }
+        //             """
+        //         }
+        //     }
+        // }
     }
 
-    post {
-        success {
-            node( 'built-in' ) {
-                withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
-                    wireSend secret: "$jenkinsbot_secret", message: "✅ ${JOB_NAME} #${ BUILD_ID } succeeded\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
-                }
-            }
-        }
+    // post {
+    //     success {
+    //         node( 'built-in' ) {
+    //             withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
+    //                 wireSend secret: "$jenkinsbot_secret", message: "✅ ${JOB_NAME} #${ BUILD_ID } succeeded\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
+    //             }
+    //         }
+    //     }
 
-        failure {
-            node( 'built-in' ) {
-                withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
-                    wireSend secret: "$jenkinsbot_secret", message: "❌ ${JOB_NAME} #${ BUILD_ID } failed\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
-                }
-            }
-        }
-    }
+    //     failure {
+    //         node( 'built-in' ) {
+    //             withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
+    //                 wireSend secret: "$jenkinsbot_secret", message: "❌ ${JOB_NAME} #${ BUILD_ID } failed\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
+    //             }
+    //         }
+    //     }
+    // }
 }
