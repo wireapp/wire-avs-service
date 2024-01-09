@@ -126,23 +126,63 @@ pipeline {
             }
         }
 
-        stage( 'Create upload artifacts' ) {
+        stage('Create and upload helm chart') {
             steps {
-                // unarchive mapping: ['sftd' : 'sftd']
-                echo "Branch: $branchName"
                 sh """
-                    echo "hi mum!" > ./sftd
-                    cp sftd wire-sftd
-                    mkdir -p upload
-                    cd upload
-                    rm -f wire-sft-*
-                    tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
-                    openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
-                    # COMPAT: using one file for potentially multiple checksums is deprecated
-                    openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
+
+                cd "$WORKSPACE"
+                rm -rf ./.venv
+                python3 -m venv .venv
+                source ./.venv/bin/activate
+
+                python3 -m pip install yq
+
                 """
+
+                withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
+
+                sh """
+                source ./.venv/bin/activate
+
+                app_version="6.6.6"
+
+                export AWS_DEFAULT_REGION="eu-west-1"
+
+                helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
+
+                helm repo add charts-avs s3://public.wire.com/charts-avs
+
+                chart_version=$(./bin/chart-next-version.sh release)
+
+                chart_patched="$(yq -Mr ".version = \"$chart_version\" | .appVersion = \"$app_version\"" ./charts/sftd/Chart.yaml)"
+
+                echo "$chart_patched"
+
+                echo "$chart_patched" > ./charts/sftd/Chart.yaml
+                """
+
+                }
+
             }
         }
+
+        // stage( 'Create upload artifacts' ) {
+        //     steps {
+        //         // unarchive mapping: ['sftd' : 'sftd']
+        //         echo "Branch: $branchName"
+        //         sh """
+        //             echo "hi mum!" > ./sftd
+        //             cp sftd wire-sftd
+        //             mkdir -p upload
+        //             cd upload
+        //             rm -f wire-sft-*
+        //             tar -zcvf wire-sft-${ version }-${ platform }-amd64.tar.gz ./../wire-sftd
+        //             openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print \$2 }' > wire-sft-${ version }-${ platform }-amd64.sha256
+        //             # COMPAT: using one file for potentially multiple checksums is deprecated
+        //             openssl dgst -sha256 wire-sft-${ version }-${ platform }-amd64.tar.gz | awk '{ print "sha256:"\$2 }' > wire-sft-${ version }-${ platform }-amd64.sum
+        //         """
+        //     }
+        // }
 
         // stage( 'Build container' ) {
         //     steps {
