@@ -141,6 +141,8 @@ pipeline {
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
                     sh '''#!/usr/bin/env bash
 
+                    cd $WORKSPACE
+
                     export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
                     export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
                     export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
@@ -171,6 +173,24 @@ pipeline {
 
             }
         }
+
+        // stage('Publish to wire-builds') {
+        //
+        //    withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
+        //        sh """
+        //                #!/usr/bin/env bash
+        //
+        //                git tag ${ version }
+        //
+        //                git \
+        //                    -c core.sshCommand='ssh -i ${ sshPrivateKeyPath }' \
+        //                    push \
+        //                    origin ${ version }
+        //        """
+        //    }
+        //
+        // }
+
 
         // stage( 'Create upload artifacts' ) {
         //     steps {
