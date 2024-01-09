@@ -78,26 +78,26 @@ pipeline {
             agent { label 'linuxbuild' }
             steps {
                 script {
-                    def vcs = checkout([
-                        $class: 'GitSCM',
-                        changelog: true,
-                        userRemoteConfigs: scm.userRemoteConfigs,
-                        branches: scm.branches,
-                        extensions: scm.extensions + [
-                            [
-                            $class: 'SubmoduleOption',
-                            disableSubmodules: false,
-                            recursiveSubmodules: true,
-                            parentCredentials: true
-                            ],
-                            [
-                                $class: 'WipeWorkspace'
-                            ]
-                        ]
-		            ])
-                    branchName = vcs.GIT_BRANCH
-                    commitId = "${vcs.GIT_COMMIT}"[0..6]
-                    repoName = vcs.GIT_URL.tokenize( '/' ).last().tokenize( '.' ).first()
+              //       def vcs = checkout([
+              //           $class: 'GitSCM',
+              //           changelog: true,
+              //           userRemoteConfigs: scm.userRemoteConfigs,
+              //           branches: scm.branches,
+              //           extensions: scm.extensions + [
+              //               [
+              //               $class: 'SubmoduleOption',
+              //               disableSubmodules: false,
+              //               recursiveSubmodules: true,
+              //               parentCredentials: true
+              //               ],
+              //               [
+              //                   $class: 'WipeWorkspace'
+              //               ]
+              //           ]
+		            // ])
+                    branchName = "WPB-6026"
+                    // commitId = "${vcs.GIT_COMMIT}"[0..6]
+                    repoName = "wire-avs-service"
 
                     // release_version = branchName.replaceAll("[^\\d\\.]", "");
                     release_version = "6.6.6"
