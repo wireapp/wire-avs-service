@@ -128,16 +128,16 @@ pipeline {
 
         stage('Create and upload helm chart') {
             steps {
-                sh """
+                // sh """
 
-                cd "$WORKSPACE"
-                rm -rf ./.venv
-                python3 -m venv .venv
-                source ./.venv/bin/activate
+                // cd "$WORKSPACE"
+                // rm -rf ./.venv
+                // python3 -m venv .venv
+                // source ./.venv/bin/activate
 
-                python3 -m pip install yq
+                // python3 -m pip install yq
 
-                """
+                // """
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
 
