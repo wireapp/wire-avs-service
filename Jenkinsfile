@@ -128,20 +128,32 @@ pipeline {
 
         stage('Create and upload helm chart') {
             steps {
-                // sh """
+                sh """
 
-                // cd "$WORKSPACE"
-                // rm -rf ./.venv
-                // python3 -m venv .venv
-                // source ./.venv/bin/activate
+                cd "$WORKSPACE"
+                rm -rf ./.venv
+                python3 -m venv .venv
+                source ./.venv/bin/activate
 
-                // python3 -m pip install yq
+                python3 -m pip install yq
 
-                // """
+                """
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
 
                     sh """
+                    source ./.venv/bin/activate
+
+                    app_version="6.6.6"
+
+                    export AWS_DEFAULT_REGION="eu-west-1"
+
+                    helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
+
+                    helm repo add charts-avs s3://public.wire.com/charts-avs
+
+                    chart_version=$(./bin/chart-next-version.sh release)
+
                     """
 
                 }
