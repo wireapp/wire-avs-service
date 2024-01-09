@@ -128,7 +128,7 @@ pipeline {
 
         stage('Create and upload helm chart') {
             steps {
-                sh """#!/usr/bin/env bash
+                sh '''#!/usr/bin/env bash
 
                 cd "$WORKSPACE"
                 rm -rf ./.venv
@@ -136,11 +136,10 @@ pipeline {
                 source ./.venv/bin/activate
 
                 python3 -m pip install yq
-
-                """
+                '''
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
-                    sh """#!/usr/bin/env bash
+                    sh '''#!/usr/bin/env bash
 
                     source ./.venv/bin/activate
 
@@ -152,14 +151,14 @@ pipeline {
 
                     helm repo add charts-avs s3://public.wire.com/charts-avs
 
-                    chart_version=\$(./bin/chart-next-version.sh release)
+                    chart_version=$(./bin/chart-next-version.sh release)
 
-                    chart_patched="\$(yq -Mr ".version = \"$chart_version\" | .appVersion = \"$app_version\"" ./charts/sftd/Chart.yaml)"
+                    chart_patched="$(yq -Mr ".version = \"$chart_version\" | .appVersion = \"$app_version\"" ./charts/sftd/Chart.yaml)"
 
-                    echo "\$chart_patched"
+                    echo "$chart_patched"
 
-                    echo "\$chart_patched" > ./charts/sftd/Chart.yaml
-                    """
+                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
+                    '''
                 }
 
             }
