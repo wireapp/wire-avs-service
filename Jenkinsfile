@@ -167,6 +167,8 @@ pipeline {
 
                     helm package ./charts/sftd
 
+                    ls -1
+
                     helm s3 push sftd-*.tgz charts-avs
                     '''
                 }
