@@ -141,6 +141,12 @@ pipeline {
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
                     sh '''#!/usr/bin/env bash
 
+                    env
+
+                    pwd
+
+                    ls -1
+
                     cd $WORKSPACE
 
                     export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
