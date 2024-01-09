@@ -128,7 +128,7 @@ pipeline {
 
         stage('Create and upload helm chart') {
             steps {
-                sh """
+                bash """
 
                 cd "$WORKSPACE"
                 rm -rf ./.venv
@@ -140,7 +140,7 @@ pipeline {
                 """
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
-                    sh """
+                    bash """
                     source ./.venv/bin/activate
 
                     app_version="6.6.6"
