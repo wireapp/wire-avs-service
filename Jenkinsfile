@@ -111,7 +111,7 @@ pipeline {
                 echo "Building version $version"
                 echo "Obtaining build information"
                 script {
-                    paltform = "linux"
+                    platform = "linux"
                     // platform = sh(
                     //     returnStdout: true,
                     //     script: """
