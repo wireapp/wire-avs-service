@@ -141,25 +141,25 @@ pipeline {
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
 
-                sh """
-                source ./.venv/bin/activate
+                    sh """
+                    source ./.venv/bin/activate
 
-                app_version="6.6.6"
+                    app_version="6.6.6"
 
-                export AWS_DEFAULT_REGION="eu-west-1"
+                    export AWS_DEFAULT_REGION="eu-west-1"
 
-                helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
+                    helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
 
-                helm repo add charts-avs s3://public.wire.com/charts-avs
+                    helm repo add charts-avs s3://public.wire.com/charts-avs
 
-                chart_version=$(./bin/chart-next-version.sh release)
+                    chart_version=$(./bin/chart-next-version.sh release)
 
-                chart_patched="$(yq -Mr ".version = \"$chart_version\" | .appVersion = \"$app_version\"" ./charts/sftd/Chart.yaml)"
+                    chart_patched="$(yq -Mr ".version = \"$chart_version\" | .appVersion = \"$app_version\"" ./charts/sftd/Chart.yaml)"
 
-                echo "$chart_patched"
+                    echo "$chart_patched"
 
-                echo "$chart_patched" > ./charts/sftd/Chart.yaml
-                """
+                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
+                    """
 
                 }
 
