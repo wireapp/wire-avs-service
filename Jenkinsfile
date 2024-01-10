@@ -126,41 +126,58 @@ pipeline {
             }
         }
 
-        stage('Create and upload helm chart') {
+        // stage('Create and upload helm chart') {
+        //     steps {
+        //
+        //         withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
+        //
+        //             sh '''#!/usr/bin/env bash
+        //
+        //
+        //             rm -rf ./.venv
+        //             python3 -m venv .venv
+        //             source ./.venv/bin/activate
+        //             python3 -m pip install yq
+        //             source ./.venv/bin/activate
+        //
+        //             app_version="6.6.6"
+        //             chart_version=$(./bin/chart-next-version.sh release)
+        //             chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
+        //             echo "$chart_patched"
+        //             echo "$chart_patched" > ./charts/sftd/Chart.yaml
+        //
+        //             export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
+        //             export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
+        //             export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
+        //             helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
+        //             export AWS_DEFAULT_REGION="eu-west-1"
+        //             helm repo add charts-avs s3://public.wire.com/charts-avs
+        //             # just in case the workdir was not cleaned
+        //             rm -f sftd-*.tgz
+        //             helm package ./charts/sftd
+        //             helm s3 push sftd-*.tgz charts-avs
+        //             '''
+        //         }
+        //
+        //     }
+        // }
+
+        stage('Bump wire-builds') {
             steps {
-
-                withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
-
-                    sh '''#!/usr/bin/env bash
+                withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
+                    sh """
 
                     git config --list --show-origin --show-scope
+
                     export HOME=$WORKSPACE
                     echo "with changed home"
+                    git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
                     git config --list --show-origin --show-scope
-
-                    rm -rf ./.venv
-                    python3 -m venv .venv
-                    source ./.venv/bin/activate
-                    python3 -m pip install yq
-                    source ./.venv/bin/activate
-
-                    app_version="6.6.6"
-                    chart_version=$(./bin/chart-next-version.sh release)
-                    chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
-                    echo "$chart_patched"
-                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
-
-                    export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
-                    export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
-                    export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
-                    helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
-                    export AWS_DEFAULT_REGION="eu-west-1"
-                    helm repo add charts-avs s3://public.wire.com/charts-avs
-                    # just in case the workdir was not cleaned
-                    rm -f sftd-*.tgz
-                    helm package ./charts/sftd
-                    helm s3 push sftd-*.tgz charts-avs
-                    '''
+                    
+                    git clone --depth=1 git@github.com:wireapp/wire-builds.git
+                    cd wire-builds
+                    git log
+                    """
                 }
 
             }
