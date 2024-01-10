@@ -178,19 +178,17 @@ pipeline {
                     sh """#!/usr/bin/env bash
                     set -eo pipefail
 
-                    git config --list --show-origin --show-scope
-
+                    # Change HOME so git config remains local
                     export HOME=\$WORKSPACE
-                    echo "with changed home"
                     git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
                     git config --global user.email "avsbobwire@users.noreply.github.com"
                     git config --global user.name "avsbobwire"
-                    # git config --list --show-origin --show-scope
                     
+                    # NOTE: Add logic that determines the target branches in wire-builds here
+                    target_branches=(dev)
+
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
-
-                    target_branches=(dev)
 
                     for target_branch in \${target_branches[@]}; do
                         for retry in \$(seq 3); do
@@ -215,6 +213,10 @@ pipeline {
 
                            ) && break
                         done
+                        if (( \$? != 0 )); then
+                            echo "Retrying did't help. Failing step."
+                            exit 1
+                        fi
                     done
                     """
                 }
