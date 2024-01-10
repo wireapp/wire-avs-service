@@ -175,12 +175,14 @@ pipeline {
         stage('Bump wire-builds') {
             steps {
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
+                    env.sshPrivateKeyPath = sshPrivateKeyPath
+
                     sh """#!/usr/bin/env bash
                     set -eo pipefail
 
                     # Change HOME so git config remains local
                     export HOME=\$WORKSPACE
-                    git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
+                    git config --global core.sshCommand "ssh -i \$sshPrivateKeyPath"
                     git config --global user.email "avsbobwire@users.noreply.github.com"
                     git config --global user.name "avsbobwire"
                     
