@@ -165,18 +165,40 @@ pipeline {
         stage('Bump wire-builds') {
             steps {
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
-                    sh """
+                    sh """#!/usr/bin/env bash
+
+                    set -eo pipefail
 
                     git config --list --show-origin --show-scope
 
-                    export HOME=$WORKSPACE
+                    export HOME=\$WORKSPACE
                     echo "with changed home"
                     git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
                     git config --list --show-origin --show-scope
                     
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
-                    git log
+
+                    target_branches=(dev)
+
+                    for target_branch in \${target_branches[@]}; do
+                        for retry in \$(seq 3); do
+                           (
+                           if (( $retry > 1 )); then
+                            echo "Retrying..."
+                           fi
+
+                           git checkout "\$target_branch"
+                           git reset --hard @{upstream}
+
+                           build_json=\$(cat ./build.json | ./bin/bump-chart sftd "$chart_version" | ./bin/bump-prerelease)
+                           echo "\$build_json" > ./build.json
+                           git commit -m "Bump sftd to $chart_version"
+                           git show
+
+                           ) && break
+                        done
+                    done
                     """
                 }
 
