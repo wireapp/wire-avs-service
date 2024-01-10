@@ -133,6 +133,11 @@ pipeline {
 
                     sh '''#!/usr/bin/env bash
 
+                    git config --list --show-origin --show-scope
+                    export HOME=$WORKSPACE
+                    echo "with changed home"
+                    git config --list --show-origin --show-scope
+
                     rm -rf ./.venv
                     python3 -m venv .venv
                     source ./.venv/bin/activate
