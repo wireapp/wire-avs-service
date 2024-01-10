@@ -182,7 +182,7 @@ pipeline {
                     export HOME=\$WORKSPACE
                     echo "with changed home"
                     git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
-                    git config --list --show-origin --show-scope
+                    # git config --list --show-origin --show-scope
                     
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
@@ -192,6 +192,8 @@ pipeline {
                     for target_branch in \${target_branches[@]}; do
                         for retry in \$(seq 3); do
                            (
+                           set -e
+
                            if (( \$retry > 1 )); then
                             echo "Retrying..."
                            fi
@@ -200,10 +202,13 @@ pipeline {
                            git checkout "\$target_branch"
                            git reset --hard @{upstream}
 
+                           set +x
                            build_json=\$(cat ./build.json | ./bin/bump-chart sftd "$chart_version" | ./bin/bump-prerelease)
+                           set -x
+
                            echo "\$build_json" > ./build.json
                            git commit -m "Bump sftd to $chart_version"
-                           git show
+                           false
 
                            ) && break
                         done
