@@ -133,32 +133,31 @@ pipeline {
 
                     sh '''#!/usr/bin/env bash
 
+                    rm -rf ./.venv
+                    python3 -m venv .venv
+                    source ./.venv/bin/activate
+                    python3 -m pip install yq
+                    source ./.venv/bin/activate
 
-                    # rm -rf ./.venv
-                    # python3 -m venv .venv
-                    # source ./.venv/bin/activate
-                    # python3 -m pip install yq
-                    # source ./.venv/bin/activate
+                    app_version="6.6.6"
+                    chart_version=$(./bin/chart-next-version.sh release)
+                    chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
+                    echo "$chart_patched"
+                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
 
-                    # app_version="6.6.6"
-                    # chart_version=$(./bin/chart-next-version.sh release)
-                    # chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
-                    # echo "$chart_patched"
-                    # echo "$chart_patched" > ./charts/sftd/Chart.yaml
-
-                    # export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
-                    # export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
-                    # export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
-                    # helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
-                    # export AWS_DEFAULT_REGION="eu-west-1"
-                    # helm repo add charts-avs s3://public.wire.com/charts-avs
-                    # # just in case the workdir was not cleaned
-                    # rm -f sftd-*.tgz
-                    # helm package ./charts/sftd
-                    # helm s3 push sftd-*.tgz charts-avs
+                    export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
+                    export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
+                    export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
+                    helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
+                    export AWS_DEFAULT_REGION="eu-west-1"
+                    helm repo add charts-avs s3://public.wire.com/charts-avs
+                    # just in case the workdir was not cleaned
+                    rm -f sftd-*.tgz
+                    helm package ./charts/sftd
+                    helm s3 push sftd-*.tgz charts-avs
 
                     mkdir $WORKSPACE/tmp
-                    echo -n "1.2.3" > $WORKSPACE/tmp/chart_version
+                    echo -n "$chart_version" > $WORKSPACE/tmp/chart_version
                     '''
                 }
 
@@ -212,7 +211,7 @@ pipeline {
 
                            git add -u
                            git commit -m "Bump sftd to $chart_version"
-                           false
+                           git push
 
                            ) && break
                         done
