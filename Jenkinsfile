@@ -210,6 +210,7 @@ pipeline {
 
                            git add -u
                            git commit -m "Bump sftd to $chart_version"
+                           false
 
                            ) && break
                         done
