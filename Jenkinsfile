@@ -174,7 +174,7 @@ pipeline {
                     git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
                     git config --list --show-origin --show-scope
                     
-                    git clone --depth 1 git@github.com:wireapp/wire-builds.git wire-builds
+                    git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
                     git log
                     """
