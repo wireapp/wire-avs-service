@@ -132,18 +132,13 @@ pipeline {
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
 
                     sh '''#!/usr/bin/env bash
+                    set -eo pipefail
 
                     rm -rf ./.venv
                     python3 -m venv .venv
                     source ./.venv/bin/activate
                     python3 -m pip install yq
                     source ./.venv/bin/activate
-
-                    app_version="6.6.6"
-                    chart_version=$(./bin/chart-next-version.sh release)
-                    chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
-                    echo "$chart_patched"
-                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
 
                     export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
                     export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
@@ -152,6 +147,13 @@ pipeline {
                     export AWS_DEFAULT_REGION="eu-west-1"
                     helm repo add charts-avs s3://public.wire.com/charts-avs
                     helm repo update
+
+                    app_version="6.6.6"
+                    chart_version=$(./bin/chart-next-version.sh release)
+                    chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
+                    echo "$chart_patched"
+                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
+
                     # just in case the workdir was not cleaned
                     rm -f sftd-*.tgz
                     helm package ./charts/sftd
@@ -174,7 +176,6 @@ pipeline {
             steps {
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
                     sh """#!/usr/bin/env bash
-
                     set -eo pipefail
 
                     git config --list --show-origin --show-scope
