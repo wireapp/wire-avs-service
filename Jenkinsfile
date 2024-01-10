@@ -162,7 +162,9 @@ pipeline {
                     '''
                 }
 
-                chart_version = readFile file: "${WORKSPACE}/tmp/chart_version"
+                script {
+                   chart_version = readFile file: "${WORKSPACE}/tmp/chart_version"
+                }
 
             }
 
@@ -194,6 +196,7 @@ pipeline {
                             echo "Retrying..."
                            fi
 
+                           git fetch origin "\$target_branch"
                            git checkout "\$target_branch"
                            git reset --hard @{upstream}
 
