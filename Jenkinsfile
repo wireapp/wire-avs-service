@@ -175,7 +175,9 @@ pipeline {
         stage('Bump wire-builds') {
             steps {
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
-                    env.sshPrivateKeyPath = sshPrivateKeyPath
+                    script {
+                        env.sshPrivateKeyPath = sshPrivateKeyPath
+                    }
 
                     sh """#!/usr/bin/env bash
                     set -eo pipefail
