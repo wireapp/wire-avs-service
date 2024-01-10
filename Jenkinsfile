@@ -207,9 +207,6 @@ pipeline {
 
                            set +x
                            build_json=\$(cat ./build.json | ./bin/bump-chart sftd "$chart_version" | ./bin/bump-prerelease)
-                           set -x
-
-                           set -+
                            echo "\$build_json" > ./build.json
                            set -x
 
