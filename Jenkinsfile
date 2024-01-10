@@ -151,6 +151,7 @@ pipeline {
                     helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
                     export AWS_DEFAULT_REGION="eu-west-1"
                     helm repo add charts-avs s3://public.wire.com/charts-avs
+                    helm repo update
                     # just in case the workdir was not cleaned
                     rm -f sftd-*.tgz
                     helm package ./charts/sftd
@@ -211,7 +212,6 @@ pipeline {
 
                            git add -u
                            git commit -m "Bump sftd to $chart_version"
-                           git push
 
                            ) && break
                         done
