@@ -182,6 +182,8 @@ pipeline {
                     export HOME=\$WORKSPACE
                     echo "with changed home"
                     git config --global core.sshCommand "ssh -i ${ sshPrivateKeyPath }"
+                    git config --global user.email "avsbobwire@users.noreply.github.com"
+                    git config --global user.name "avsbobwire"
                     # git config --list --show-origin --show-scope
                     
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
@@ -207,6 +209,8 @@ pipeline {
                            set -x
 
                            echo "\$build_json" > ./build.json
+
+                           git add -u
                            git commit -m "Bump sftd to $chart_version"
                            false
 
