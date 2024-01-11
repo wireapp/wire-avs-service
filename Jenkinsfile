@@ -222,6 +222,8 @@ pipeline {
                             exit 1
                         fi
                     done
+
+                    rm -f $HOME/.gitconfig
                     """
                 }
 
