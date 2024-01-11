@@ -218,6 +218,7 @@ pipeline {
 
                            git add -u
                            git commit -m "Bump sftd to $chart_version"
+                           git push origin "\$target_branch"
 
                            ) && break
                         done
