@@ -134,6 +134,9 @@ pipeline {
                     sh '''#!/usr/bin/env bash
                     set -eo pipefail
 
+                    # TODO
+                    app_version="6.6.6"
+
                     rm -rf ./.venv
                     python3 -m venv .venv
                     source ./.venv/bin/activate
@@ -148,7 +151,6 @@ pipeline {
                     helm repo add charts-avs s3://public.wire.com/charts-avs
                     helm repo update
 
-                    app_version="6.6.6"
                     chart_version=$(./bin/chart-next-version.sh release)
                     chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
                     echo "$chart_patched"
@@ -156,6 +158,7 @@ pipeline {
 
                     # just in case the workdir was not cleaned
                     rm -f sftd-*.tgz
+
                     helm package ./charts/sftd
                     helm s3 push sftd-*.tgz charts-avs
 
@@ -182,13 +185,14 @@ pipeline {
                     sh """#!/usr/bin/env bash
                     set -eo pipefail
 
-                    # Change HOME so git config remains local
+                    # Change HOME so that git config remains local
                     export HOME=\$WORKSPACE
                     git config --global core.sshCommand "ssh -i \$sshPrivateKeyPath"
                     git config --global user.email "avsbobwire@users.noreply.github.com"
                     git config --global user.name "avsbobwire"
                     
                     # NOTE: Add logic that determines the target branches in wire-builds here
+                    # target_branches needs to be a bash array of branches inw wire-builds
                     target_branches=(dev)
 
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
@@ -200,7 +204,7 @@ pipeline {
                            set -e
 
                            if (( \$retry > 1 )); then
-                            echo "Retrying..."
+                             echo "Retrying..."
                            fi
 
                            git fetch origin "\$target_branch"
@@ -223,7 +227,8 @@ pipeline {
                         fi
                     done
 
-                    rm -f $HOME/.gitconfig
+                    # clean up
+                    rm -f \$HOME/.gitconfig
                     """
                 }
 
