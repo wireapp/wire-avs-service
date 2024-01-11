@@ -176,7 +176,7 @@ pipeline {
             steps {
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
                     script {
-                        env.sshPrivateKeyPath = sshPrivateKeyPath
+                        env.sshPrivateKeyPath = "${sshPrivateKeyPath}"
                     }
 
                     sh """#!/usr/bin/env bash
