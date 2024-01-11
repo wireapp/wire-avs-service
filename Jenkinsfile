@@ -106,7 +106,6 @@ pipeline {
                 )
             }
         }
-
         stage( 'Uploading new artifact' ) {
             when {
                 expression { return "$branchName".startsWith("release") }
@@ -219,6 +218,128 @@ pipeline {
                 }
             }
         }
+
+
+        stage('Build and publish Helm chart') {
+            when {
+                expression { return "$branchName".startsWith("release") }
+            }
+
+            steps {
+
+                withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
+
+                    script {
+                        env.app_version = "${ version }"
+                    }
+
+                    sh '''#!/usr/bin/env bash
+                    set -eo pipefail
+
+                    rm -rf ./.venv
+                    python3 -m venv .venv
+                    source ./.venv/bin/activate
+                    python3 -m pip install yq
+                    source ./.venv/bin/activate
+
+                    export HELM_CACHE_HOME=$WORKSPACE/.cache/helm
+                    export HELM_CONFIG_HOME=$WORKSPACE/.config/helm
+                    export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
+                    helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
+                    export AWS_DEFAULT_REGION="eu-west-1"
+                    helm repo add charts-avs s3://public.wire.com/charts-avs
+                    helm repo update
+
+                    chart_version=$(./bin/chart-next-version.sh release)
+                    chart_patched="$(yq -Mr ".version = \\"$chart_version\\" | .appVersion = \\"$app_version\\"" ./charts/sftd/Chart.yaml)"
+                    echo "$chart_patched"
+                    echo "$chart_patched" > ./charts/sftd/Chart.yaml
+
+                    # just in case the workdir was not cleaned
+                    rm -f sftd-*.tgz
+
+                    helm package ./charts/sftd
+                    helm s3 push sftd-*.tgz charts-avs
+
+                    mkdir $WORKSPACE/tmp
+                    echo -n "$chart_version" > $WORKSPACE/tmp/chart_version
+                    '''
+                }
+
+                script {
+                   chart_version = readFile file: "${WORKSPACE}/tmp/chart_version"
+                }
+
+            }
+        }
+
+        stage('Bump sftd in wire-builds') {
+            when {
+                expression { return "$branchName".startsWith("release") }
+            }
+
+            steps {
+                withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
+                    script {
+                        env.sshPrivateKeyPath = "${sshPrivateKeyPath}"
+                    }
+
+                    sh """#!/usr/bin/env bash
+                    set -eo pipefail
+
+                    # Change HOME so that git config remains local
+                    export HOME=\$WORKSPACE
+                    git config --global core.sshCommand "ssh -i \$sshPrivateKeyPath"
+                    git config --global user.email "avsbobwire@users.noreply.github.com"
+                    git config --global user.name "avsbobwire"
+                    
+                    # NOTE: Add logic that determines the target branches in wire-builds here
+                    # target_branches needs to be a bash array of branches inw wire-builds
+                    target_branches=(dev)
+
+                    git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
+                    cd wire-builds
+
+                    for target_branch in \${target_branches[@]}; do
+                        for retry in \$(seq 3); do
+                           (
+                           set -e
+
+                           if (( \$retry > 1 )); then
+                             echo "Retrying..."
+                           fi
+
+                           git fetch origin "\$target_branch"
+                           git checkout "\$target_branch"
+                           git reset --hard @{upstream}
+
+                           set +x
+                           build_json=\$(cat ./build.json | ./bin/bump-chart sftd "$chart_version" | ./bin/bump-prerelease)
+                           echo "\$build_json" > ./build.json
+                           set -x
+
+                           git add -u
+                           msg="Bump sftd to $chart_version"
+                           echo "In branch \$target_branch: \$msg"
+                           git commit -m "\$msg"
+                           git push origin "\$target_branch"
+
+                           ) && break
+                        done
+                        if (( \$? != 0 )); then
+                            echo "Retrying didn't help. Failing step."
+                            exit 1
+                        fi
+                    done
+
+                    # clean up
+                    rm -f \$HOME/.gitconfig
+                    """
+                }
+
+            }
+        }
+
     }
 
     post {
@@ -236,6 +357,10 @@ pipeline {
                     wireSend secret: "$jenkinsbot_secret", message: "❌ ${JOB_NAME} #${ BUILD_ID } failed\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
                 }
             }
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
