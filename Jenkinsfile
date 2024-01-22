@@ -316,13 +316,12 @@ pipeline {
 
                            set +x
                            build_json=\$(cat ./build.json | \
-
-                           ./bin/set-chart-fields sftd \
-                           "version=$chart_version" \
-                           "repo=${HELM_REPO}" \
-                           "$chart_version" \
-
-                           | ./bin/bump-prerelease)
+                               ./bin/set-chart-fields sftd \
+                               "version=${chart_version}" \
+                               "repo=${HELM_REPO}" \
+                               "meta.appVersion=${version}" \
+                               "meta.commit=${commitId}" \
+                               | ./bin/bump-prerelease)
                            echo "\$build_json" > ./build.json
                            set -x
 
