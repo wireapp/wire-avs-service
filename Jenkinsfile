@@ -235,6 +235,7 @@ pipeline {
 
                     script {
                         env.app_version = "${ version }"
+                        env.HELM_REPO = "${ HELM_REPO }"
                     }
 
                     sh '''#!/usr/bin/env bash
@@ -251,7 +252,7 @@ pipeline {
                     export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
                     helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
                     export AWS_DEFAULT_REGION="eu-west-1"
-                    helm repo add charts-avs "${HELM_REPO}"
+                    helm repo add charts-avs "$HELM_REPO"
                     helm repo update
 
                     chart_version=$(./bin/chart-next-version.sh release)
