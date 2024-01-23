@@ -223,12 +223,9 @@ pipeline {
 
 
         stage('Build and publish Helm chart') {
-            // TODO: Uncomment before merging PR
-            /*
             when {
                 expression { return "$branchName".startsWith("release") }
             }
-            */
 
             steps {
 
@@ -280,12 +277,9 @@ pipeline {
         }
 
         stage('Bump sftd in wire-builds') {
-            // TODO: Uncomment before merging PR
-            /*
             when {
                 expression { return "$branchName".startsWith("release") }
             }
-            */
 
             steps {
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
