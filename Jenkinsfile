@@ -5,6 +5,7 @@ CREDENTIALS_ID_GITHUB_TOKEN = 'github-repo-access'
 AWS_ROOT_URL = 'https://s3-eu-west-1.amazonaws.com'
 ASSETS_BUCKET_PREFIX = 'public.wire.com/artifacts'
 HELM_REPO = "s3://public.wire.com/charts-avs"
+HELM_REPO_HTTPS = "https://s3-eu-west-1.amazonaws.com/public.wire.com/charts-avs"
 
 def buildNumber = currentBuild.id
 def branchName = null
@@ -325,7 +326,7 @@ pipeline {
                            build_json=\$(cat ./build.json | \
                                ./bin/set-chart-fields sftd \
                                "version=${chart_version}" \
-                               "repo=${HELM_REPO}" \
+                               "repo=${HELM_REPO_HTTPS}" \
                                "meta.appVersion=${version}" \
                                "meta.commit=${commitId}" \
                                | ./bin/bump-prerelease)
