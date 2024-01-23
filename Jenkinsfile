@@ -5,6 +5,7 @@ CREDENTIALS_ID_GITHUB_TOKEN = 'github-repo-access'
 AWS_ROOT_URL = 'https://s3-eu-west-1.amazonaws.com'
 ASSETS_BUCKET_PREFIX = 'public.wire.com/artifacts'
 HELM_REPO = "s3://public.wire.com/charts-avs"
+HELM_REPO_HTTPS = "https://s3-eu-west-1.amazonaws.com/public.wire.com/charts-avs"
 
 def buildNumber = currentBuild.id
 def branchName = null
@@ -232,6 +233,7 @@ pipeline {
 
                     script {
                         env.app_version = "${ version }"
+                        env.HELM_REPO = "${ HELM_REPO }"
                     }
 
                     sh '''#!/usr/bin/env bash
@@ -248,7 +250,7 @@ pipeline {
                     export HELM_DATA_HOME=$WORKSPACE/.local/share/helm
                     helm plugin install https://github.com/hypnoglow/helm-s3.git --version 0.15.1
                     export AWS_DEFAULT_REGION="eu-west-1"
-                    helm repo add charts-avs "${HELM_REPO}"
+                    helm repo add charts-avs "$HELM_REPO"
                     helm repo update
 
                     chart_version=$(./bin/chart-next-version.sh release)
@@ -316,13 +318,12 @@ pipeline {
 
                            set +x
                            build_json=\$(cat ./build.json | \
-
-                           ./bin/set-chart-fields sftd \
-                           "version=$chart_version" \
-                           "repo=${HELM_REPO}" \
-                           "$chart_version" \
-
-                           | ./bin/bump-prerelease)
+                               ./bin/set-chart-fields sftd \
+                               "version=${chart_version}" \
+                               "repo=${HELM_REPO_HTTPS}" \
+                               "meta.appVersion=${version}" \
+                               "meta.commit=${commitId}" \
+                               | ./bin/bump-prerelease)
                            echo "\$build_json" > ./build.json
                            set -x
 
