@@ -298,7 +298,7 @@ pipeline {
                     
                     # NOTE: Add logic that determines the target branches in wire-builds here
                     # target_branches needs to be a bash array of branches inw wire-builds
-                    target_branches=(dev)
+                    target_branches=(dev, q1-2024)
 
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
