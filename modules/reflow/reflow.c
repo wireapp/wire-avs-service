@@ -691,7 +691,7 @@ static int dce_send_data_handler(struct mbuf *mb, void *arg)
 		return EINTR;
 	}
 
-#if 1
+#if 0
 	info("reflow(%p): sending DCE packet: %zu tls_conn=%p\n",
 	     rf, len, rf->tls_conn);
 #endif
@@ -4513,9 +4513,11 @@ static void trice_failed_handler(int err, uint16_t scode,
 {
 	struct reflow *rf = arg;
 
+#if 0
 	info("reflow(%p): candpair not working [%H]\n",
 	     rf, trice_candpair_debug, pair);
 
+#endif
 
 	if (!list_isempty(trice_validl(rf->trice)))
 		return;
