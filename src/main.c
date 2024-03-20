@@ -434,7 +434,8 @@ int main(int argc, char *argv[])
 	}
 
 	
-	re_main(signal_handler);
+	//re_main(signal_handler);
+	re_main(NULL);
 
  out:
 	info("avsd quit -- cleaning up..\n");
