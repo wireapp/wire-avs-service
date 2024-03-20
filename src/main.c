@@ -122,6 +122,8 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-r <port>       Port for metrics requests (default: %d)\n",
 			 DEFAULT_METRICS_PORT);
 	(void)re_fprintf(stderr, "\t-u <URL>        URL to use in responses\n");
+	(void)re_fprintf(stderr, "\t-O <iflist>     Comma seperated list of interface addresses for media\n"
+			         "\t\t\t Example: 10.1.2.3,11.12.13.14\n");
 	(void)re_fprintf(stderr, "\t-b <blacklist>  Comma seperated client version blacklist\n"
 			         "\t\t\t Example: <6.2.9,6.2.11\n");
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
