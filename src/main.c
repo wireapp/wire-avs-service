@@ -16,10 +16,12 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _DEFAULT_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <signal.h>
 #include <getopt.h>
 #include <time.h>
@@ -45,12 +47,15 @@ struct avs_service {
 
 	struct sa req_addr;
 	struct sa media_addr;
+	struct sa mediaif_addr;
 	struct sa metrics_addr;
 	struct sa sft_req_addr;
 
 	char url[256];
 	char federation_url[256];
 	char blacklist[256];
+
+	struct list ifl;
 
 	struct {
 		char url[256];
@@ -68,9 +73,12 @@ struct avs_service {
 	uint64_t fir_timeout;	
 	bool use_turn;
 	bool use_auth;
+	bool is_draining;
 	struct pl secret;
 
 	struct dnsc *dnsc;
+
+	struct list shuthl;
 };
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
@@ -78,6 +86,14 @@ static struct avs_service avsd = {
        .use_auth = false,
        .secret = PL_INIT,
        .dnsc = NULL,
+};
+
+
+struct shutdown_entry {
+	avs_service_shutdown_h *shuth;
+	void *arg;
+
+	struct le le;
 };
 
 #define DEFAULT_REQ_ADDR "127.0.0.1"
@@ -123,11 +139,33 @@ static void signal_handler(int sig)
 	static bool term = false;
 	(void)sig;
 
-	if (sig == SIGUSR1) {
+	switch(sig) {
+	case SIGUSR1:
 		mem_debug();
 		return;
+
+	case SIGTERM: {
+		bool can_shutdown = true;
+		struct le *le;
+		
+		avsd.is_draining = true;
+
+		for(le = avsd.shuthl.head; le && can_shutdown; le = le->next) {
+			struct shutdown_entry *se = le->data;
+
+			if (se->shuth) {
+				can_shutdown = se->shuth(se->arg);
+			}
+		}
+		if (!can_shutdown)
+			return;
+		
 	}
-	
+		break;
+
+	default:
+		break;
+	}
 	
 	if (term) {
 		warning("Aborted.\n");
@@ -136,11 +174,10 @@ static void signal_handler(int sig)
 
 	term = true;
 
-	warning("Terminating ...\n");	
+	warning("Terminating ...\n");
 
-	module_close();
-	
-	re_cancel();
+	avs_service_terminate();
+
 }
 
 static void error_handler(int err, void *arg)
@@ -249,7 +286,36 @@ static int load_secret(const char *path)
 
 	 return err;
  }
- 
+
+
+static void generate_iflist(struct list *ifl, const char *ifstr)
+{
+	char *ifactual;
+	char *ifsep;
+	char *vstr;
+	int err;
+
+	info("avsd: generate_iflist: %s\n", ifstr);
+	err = str_dup(&ifactual, ifstr);
+	if (err)
+		return;
+
+	ifsep = ifactual;
+	while ((vstr = strsep(&ifsep, ",")) != NULL) {
+		struct avs_service_ifentry *ife;
+
+		ife = mem_zalloc(sizeof(*ife), NULL);
+		while(isspace(*vstr)) {
+			++vstr;
+		}
+		sa_set_str(&ife->sa, vstr, 0);
+		
+		list_append(ifl, &ife->le, ife);
+	}
+
+	mem_deref(ifactual);
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -268,7 +334,7 @@ int main(int argc, char *argv[])
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -314,6 +380,10 @@ int main(int argc, char *argv[])
 				goto out;
 			break;
 
+		case 'O':
+			generate_iflist(&avsd.ifl, optarg);
+			break;
+			
 		case 'p':
 			sa_set_port(&avsd.req_addr, atoi(optarg));
 			break;
@@ -387,6 +457,9 @@ int main(int argc, char *argv[])
 	}
 	
 	err = libre_init();
+	re_printf("AVS-service setting fd_setsize: %d\n", MAX_OPEN_FILES);
+	fd_setsize(0);
+	fd_setsize(MAX_OPEN_FILES);	
 	if (err)
 		goto out;
 
@@ -433,7 +506,6 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	
 	re_main(signal_handler);
 
  out:
@@ -470,6 +542,12 @@ struct sa  *avs_service_media_addr(void)
 	return sa_isset(&avsd.media_addr, SA_ADDR) ? &avsd.media_addr
 		                                   : NULL;
 }
+
+struct list  *avs_service_iflist(void)
+{
+	return (avsd.ifl.head != NULL) ? &avsd.ifl : NULL;
+}
+
 
 struct sa  *avs_service_metrics_addr(void)
 {
@@ -538,4 +616,34 @@ const struct pl *avs_service_secret(void)
 uint64_t avs_service_fir_timeout(void)
 {
 	return avsd.fir_timeout;
+}
+
+bool avs_service_is_draining(void)
+{
+	return avsd.is_draining;
+}
+
+
+void avs_service_register_shutdown_handler(avs_service_shutdown_h *shuth, void *arg)
+{
+	struct shutdown_entry *se;
+
+	se = mem_zalloc(sizeof(*se), NULL);
+	if (!se)
+		return;
+
+	se->shuth = shuth;
+	se->arg = arg;
+
+	list_append(&avsd.shuthl, &se->le, se);	
+}
+
+
+void avs_service_terminate(void)
+{
+	list_flush(&avsd.ifl);
+	
+	module_close();
+	
+	re_cancel();
 }

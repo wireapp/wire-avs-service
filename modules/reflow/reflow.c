@@ -5829,6 +5829,20 @@ int reflow_add_turnserver(struct iflow *iflow,
 }
 
 
+static bool exist_ifl(struct list *ifl, const struct sa *sa)
+{
+	bool found = false;
+	struct le *le;
+
+	for(le = ifl->head; le && !found; le = le->next) {
+		struct avs_service_ifentry *ife = le->data;
+		
+		found = sa_cmp(&ife->sa, sa, SA_ADDR);
+	}
+
+	return found;
+}
+
 static bool interface_handler(const char *ifname, const struct sa *sa,
 			      void *arg)
 {
@@ -5837,15 +5851,23 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 	struct interface *ifc;
 	const uint16_t lpref = calc_local_preference(ifname, sa_af(sa));
 	const uint32_t prio = ice_cand_calc_prio(ICE_CAND_TYPE_HOST, lpref, 1);
+	struct list *ifl;
 	int err = 0;
 
 	/* Skip loopback and link-local addresses */
 	if (sa_is_loopback(sa) || sa_is_linklocal(sa))
 		return false;
 
+	ifl = avs_service_iflist();
+	if (ifl) {
+		if (!exist_ifl(ifl, sa))
+			return false;
+	}
+	
 	RFLOG(LOG_LEVEL_INFO,
-	      "adding local host interface: %s:%j\n",
+	      "adding local candidate interface: %s:%j\n",
 	      rf, ifname, sa);
+
 
 	if (!sa_isset(sa, SA_ADDR)) {
 		RFLOG(LOG_LEVEL_WARN, "address not set\n", rf);
@@ -5857,6 +5879,7 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		err =  EINVAL;
 		goto out;
 	}
+	
 
 	RFLOG(LOG_LEVEL_INFO, 
 	      "%s:%j  (lpref=0x%04x prio=0x%08x)\n",
