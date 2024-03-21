@@ -104,3 +104,5 @@ multiSFT:
   secret:
   turnServerURI:
 
+coredumps:
+  enabled: false

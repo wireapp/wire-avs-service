@@ -27,35 +27,19 @@ installed as part of the `wire-server` umbrella chart.
 
 ### Other (optional) parameters
 
-| Parameter                       | Default | Description                                                                                                                                                                           |
-|---------------------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `terminationGracePeriodSeconds` | `10`    | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating |
-| `replicaCount`                  | `1`     | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                               |
-| `nodeSelector`, `affinity`      | `{}`    | Used to constraint SFT servers to only run on specific nodes                                                                                                                          |
+| Parameter                       | Default | Description                                                                                                                                                                                                       |
+|---------------------------------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `terminationGracePeriodSeconds` | `10`    | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating                             |
+| `replicaCount`                  | `1`     | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                                                               |
+| `nodeSelector`, `affinity`      | `{}`    | Used to constraint SFT servers to only run on specific nodes                                                                                                                                                      |
+| `coredeumps.enabled`            | `false` | Enable recording of coredumps for testing and debugging.                                                                                                                                                          |
+|                                 |         | WARNING: changing this parameter requires reinstallation of the helm chart, upgrade is not possible, because StatefulSets have restrictions on what can be patched.                                               |
+|                                 |         | Required: configure `core_pattern` in the kernel of worker to be `/var/coredumps/core.%t.%h.%e.%p` or similar (same directory)                                                                                    |
+| `coredeumps.storageClassName`   |         | Storage class to use for creating the Persistent Volumes that holds the coredumps                                                                                                                                 |
 
 Please see [values.yaml](./values.yaml) for an overview of other parameters that can be configured.
 
 ## Deploy
-
-
-#### As part of `wire-server` umbrella chart
-
-The `sftd` can be deployed as part of the `wire-server` umbrella chart. You can
-edit the `values.yaml` of your `wire-server` chart to configure sftd.
-
-```yaml
-tags:
-  sftd: true
-
-sftd:
-  host: sftd.wire.example
-  allowOrigin: https://webapp.wire.example
-  tls:
-    # The https://cert-manager.io issuer to use to retrieve a certificate
-    issuerRef:
-      kind: ClusterIssuer
-      name: letsencrypt-prod
-```
 
 #### Standalone
 
@@ -231,8 +215,6 @@ kernel for free ports, which by default are in the `32768-61000` range
 On a default installation these ranges do not overlap and sftd should never have
 conflicts with kubernetes components. You should however check that on your OS
 these ranges aren't configured differently.
-
-
 
 # Future work
 

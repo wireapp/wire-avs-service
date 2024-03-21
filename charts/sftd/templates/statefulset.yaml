@@ -44,6 +44,7 @@ spec:
           secret:
             secretName: {{ include "sftd.fullname" . }}-secret
         {{- end }}
+
       {{- end }}
       initContainers:
         - name: get-external-ip
@@ -138,6 +139,11 @@ spec:
               mountPath: /secrets
             {{- end }}
             {{- end }}
+            {{- if .Values.coredumps.enabled }}
+            - name: coredumps
+              mountPath: /var/coredumps
+            {{- end }}
+
           command:
             - /bin/sh
             - -c
@@ -161,6 +167,10 @@ spec:
               MULTI_SFT_ARGS="-t {{ required "must specify TURN server URI" .Values.multiSFT.turnServerURI }} \
               -s /secrets/zrest_secret.txt"
               {{- end }}
+              {{- end }}
+
+              {{- if .Values.coredumps.enabled }}
+              ulimit -c unlimited
               {{- end }}
 
               exec sftd \
@@ -207,3 +217,15 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+
+  {{- if .Values.coredumps.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: coredumps
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ .Values.coredumps.storageClassName }}
+        resources:
+          requests:
+            storage: 10Gi
+  {{- end }}
