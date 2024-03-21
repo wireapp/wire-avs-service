@@ -106,7 +106,6 @@ struct sft {
 	struct list ecalls;
 
 	struct list cbl; /* client blacklist */
-	struct list ifl; /* interface list */
 
 	struct {
 		char username[256];

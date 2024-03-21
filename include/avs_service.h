@@ -47,6 +47,7 @@ struct sa  *avs_service_media_addr(void);
 /* Member of iflist */
 struct avs_service_ifentry {
 	struct sa sa;
+	char *name;
 
 	struct le le;
 };

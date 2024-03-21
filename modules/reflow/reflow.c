@@ -5829,7 +5829,7 @@ int reflow_add_turnserver(struct iflow *iflow,
 }
 
 
-static bool exist_ifl(struct list *ifl, const struct sa *sa)
+static bool exist_ifl(struct list *ifl, const char *name)
 {
 	bool found = false;
 	struct le *le;
@@ -5837,7 +5837,7 @@ static bool exist_ifl(struct list *ifl, const struct sa *sa)
 	for(le = ifl->head; le && !found; le = le->next) {
 		struct avs_service_ifentry *ife = le->data;
 		
-		found = sa_cmp(&ife->sa, sa, SA_ADDR);
+		found = streq(ife->name, name);
 	}
 
 	return found;
@@ -5860,7 +5860,7 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 
 	ifl = avs_service_iflist();
 	if (ifl) {
-		if (!exist_ifl(ifl, sa))
+		if (!exist_ifl(ifl, ifname))
 			return false;
 	}
 	

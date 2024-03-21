@@ -122,8 +122,8 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-r <port>       Port for metrics requests (default: %d)\n",
 			 DEFAULT_METRICS_PORT);
 	(void)re_fprintf(stderr, "\t-u <URL>        URL to use in responses\n");
-	(void)re_fprintf(stderr, "\t-O <iflist>     Comma seperated list of interface addresses for media\n"
-			         "\t\t\t Example: 10.1.2.3,11.12.13.14\n");
+	(void)re_fprintf(stderr, "\t-O <iflist>     Comma seperated list of interface names for media\n"
+			         "\t\t\t Example: eth0,eth1\n");
 	(void)re_fprintf(stderr, "\t-b <blacklist>  Comma seperated client version blacklist\n"
 			         "\t\t\t Example: <6.2.9,6.2.11\n");
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
@@ -289,6 +289,12 @@ static int load_secret(const char *path)
 	 return err;
  }
 
+static void ife_destructor(void *arg)
+{
+	struct avs_service_ifentry *ife = arg;
+
+	mem_deref(ife->name);
+}
 
 static void generate_iflist(struct list *ifl, const char *ifstr)
 {
@@ -306,11 +312,12 @@ static void generate_iflist(struct list *ifl, const char *ifstr)
 	while ((vstr = strsep(&ifsep, ",")) != NULL) {
 		struct avs_service_ifentry *ife;
 
-		ife = mem_zalloc(sizeof(*ife), NULL);
+		ife = mem_zalloc(sizeof(*ife), ife_destructor);
 		while(isspace(*vstr)) {
 			++vstr;
 		}
-		sa_set_str(&ife->sa, vstr, 0);
+		//sa_set_str(&ife->sa, vstr, 0);
+		str_dup(&ife->name, vstr);
 		
 		list_append(ifl, &ife->le, ife);
 	}
