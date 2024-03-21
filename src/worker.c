@@ -164,6 +164,8 @@ static void *worker_thread(void *arg)
 	     w, pthread_self(), w->id);
 	
 	re_thread_init();
+	fd_setsize(0);
+	fd_setsize(MAX_OPEN_FILES);
 
 	w->ready = true;
 	tmr_start(&w->tmr, TIMEOUT_WORKER, worker_timeout_handler, w);	

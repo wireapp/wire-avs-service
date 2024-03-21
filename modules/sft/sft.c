@@ -118,6 +118,8 @@ struct sft {
 	struct worker *workerv;
 
 	struct lock *lock;
+
+	struct tmr tmr_terminate;
 };
 
 static struct sft *g_sft = NULL;
@@ -3798,6 +3800,22 @@ static int remove_participant(struct call *call, void *arg)
 	return 0;
 }
 
+static void terminate_handler(void *arg)
+{
+	(void)arg;
+
+	avs_service_terminate();
+}
+
+static int service_terminate(void *arg)
+{
+	(void)arg;
+
+	tmr_start(&g_sft->tmr_terminate, 0, terminate_handler, NULL);
+
+	return 0;
+}
+
 
 static void call_destructor(void *arg)
 {
@@ -3848,6 +3866,11 @@ static void call_destructor(void *arg)
 
 	if (group && group->calll.head == NULL) {
 		dict_remove(sft->groups, group->id);
+		if (avs_service_is_draining()
+		    && dict_count(sft->groups) == 0) {
+
+			worker_assign_main(service_terminate, NULL);
+		}
 	}
 	
 	mem_deref(call->group);
@@ -5617,6 +5640,11 @@ static void http_req_handler(struct http_conn *hc,
 	else {
 		const char *sft_url;
 		const char *sft_tuple;
+
+		if (avs_service_is_draining()) {
+			err = ESHUTDOWN;
+			goto bad_req;
+		}
 		
 		if (pl_strcmp(&msg->met, "POST") != 0) {
 			err = EINVAL;
@@ -5772,8 +5800,17 @@ static void http_req_handler(struct http_conn *hc,
 	mem_deref(url);
 	mem_deref(params);
 
-	if (err)
-		http_ereply(hc, 400, "Bad request");
+	if (err) {
+		switch(err) {
+		case ESHUTDOWN:
+			http_ereply(hc, 303, "See other");
+			break;
+
+		default:
+			http_ereply(hc, 400, "Bad request");
+			break;
+		}
+	}
 }
 
 static void sft_destructor(void *arg)
@@ -5927,6 +5964,12 @@ static void generate_client_blacklist(struct list *cbl, const char *blstr)
 	mem_deref(blactual);
 }
 
+static bool shutdown_handler(void *arg)
+{
+	struct sft *sft = arg;
+
+	return sft->ecalls.head == NULL && sft->provisional.ecalls.head == NULL;
+}
 
 static int module_init(void)
 {
@@ -5944,6 +5987,8 @@ static int module_init(void)
 		return ENOMEM;
 
 	sft->seqno = 1;
+
+	avs_service_register_shutdown_handler(shutdown_handler, sft);
 
 	err = lock_alloc(&sft->lock);
 	if (err) {
