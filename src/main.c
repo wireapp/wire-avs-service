@@ -71,6 +71,8 @@ struct avs_service {
 	struct pl secret;
 
 	struct dnsc *dnsc;
+
+	struct tmr tmr_segv;
 };
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
@@ -248,8 +250,17 @@ static int load_secret(const char *path)
 	 }
 
 	 return err;
- }
- 
+}
+
+static void segv_handler(void *arg)
+{
+	uint32_t foo;
+
+	foo = *(uint32_t *)(NULL);
+
+	info("foo=%d\n", foo);
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -265,6 +276,8 @@ int main(int argc, char *argv[])
 	avsd.worker_count = NUM_WORKERS;
 	avsd.fir_timeout = TIMEOUT_FIR;
 	lock_alloc(&avsd.log.lock);
+
+	tmr_start(&avsd.tmr_segv, 30000, segv_handler, NULL);	
 	
 	for (;;) {
 
