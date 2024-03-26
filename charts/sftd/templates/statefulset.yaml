@@ -224,8 +224,8 @@ spec:
         name: coredumps
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ .Values.coredumps.storageClassName }}
+        storageClassName: {{ required "coredumps.storageClassName is required if coredumps.enabled" .Values.coredumps.storageClassName }}
         resources:
           requests:
-            storage: 10Gi
+            storage: {{ .Values.coredumps.storageSize  }}
   {{- end }}
