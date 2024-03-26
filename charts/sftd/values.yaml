@@ -104,3 +104,7 @@ multiSFT:
   secret:
   turnServerURI:
 
+coredumps:
+  enabled: false
+  # storageClassName: my-storage-class
+  storageSize: 10Gi
