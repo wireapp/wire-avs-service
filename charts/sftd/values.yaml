@@ -106,3 +106,4 @@ multiSFT:
 
 coredumps:
   enabled: false
+  # storageClassName: my-storage-class
