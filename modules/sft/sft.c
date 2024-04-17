@@ -425,6 +425,8 @@ static int alloc_call(struct call **callp, struct sft *sft,
 		      bool selective_audio, bool selective_video,
 		      int astreams, int vstreams,
 		      bool locked);
+static void deauth_call(struct call *call);
+
 static int start_icall(struct call *call);
 static int remove_participant(struct call *call, void *arg);
 static int send_dce_msg(struct call *call, void *arg);
@@ -4047,7 +4049,6 @@ static void aup_destructor(void *arg)
 	mem_deref(aup->userid);
 }
 
-static void deauth_parts(struct call *call);
 
 static void ecall_confpart_handler(struct ecall *ecall,
 				   const struct econn_message *msg,
@@ -4063,7 +4064,7 @@ static void ecall_confpart_handler(struct ecall *ecall,
 	SFTLOG(LOG_LEVEL_INFO, "participants: %d\n",
 	       call, list_count(partl));
 
-	deauth_parts(call);
+	deauth_call(call);
 	LIST_FOREACH(partl, le) {
 		struct econn_group_part *part = le->data;
 		struct auth_part *aup;
@@ -4565,7 +4566,6 @@ static void deauth_call(struct call *call)
 		if (!part)
 			continue;
 
-		list_flush(&part->authl);
 		part->auth = false;
 		lpart = call2part(part->call, call->userid, call->clientid);
 		if (lpart) {
@@ -4575,21 +4575,6 @@ static void deauth_call(struct call *call)
 	}
 	call->dc_estab = false;
 }
-
-static void deauth_parts(struct call *call)
-{
-	struct le *le;
-
-	LIST_FOREACH(&call->partl, le) {
-		struct participant *part = le->data;
-
-		if (!part)
-			continue;
-
-		part->auth = false;
-	}
-}
-
 
 static int restart_call(struct call *call, void *arg)
 {
