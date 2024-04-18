@@ -425,7 +425,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 		      bool selective_audio, bool selective_video,
 		      int astreams, int vstreams,
 		      bool locked);
-static void deauth_call(struct call *call);
+static void deauth_call(struct call *call, bool reset_estab);
 
 static int start_icall(struct call *call);
 static int remove_participant(struct call *call, void *arg);
@@ -4064,7 +4064,7 @@ static void ecall_confpart_handler(struct ecall *ecall,
 	SFTLOG(LOG_LEVEL_INFO, "participants: %d\n",
 	       call, list_count(partl));
 
-	deauth_call(call);
+	deauth_call(call, false);
 	LIST_FOREACH(partl, le) {
 		struct econn_group_part *part = le->data;
 		struct auth_part *aup;
@@ -4555,7 +4555,7 @@ static int new_call(struct call *call, void *arg)
 }
 
 
-static void deauth_call(struct call *call)
+static void deauth_call(struct call *call, bool reset_estab)
 {
 	struct le *le;
 
@@ -4570,10 +4570,10 @@ static void deauth_call(struct call *call)
 		lpart = call2part(part->call, call->userid, call->clientid);
 		if (lpart) {
 			list_flush(&lpart->authl);
-			lpart->auth = false;
 		}
 	}
-	call->dc_estab = false;
+	if (reset_estab)
+		call->dc_estab = false;
 }
 
 static int restart_call(struct call *call, void *arg)
@@ -4587,7 +4587,7 @@ static int restart_call(struct call *call, void *arg)
 	call->hconn = mem_deref(call->hconn);
 	call->hconn = mem_ref(hc);
 	
-	deauth_call(call);
+	deauth_call(call, true);
 	tmr_cancel(&call->tmr_conn);
 
 	/* We want to move this call to the end of the list,
@@ -4621,7 +4621,7 @@ static int recreate_call(struct call *call, void *arg)
 	call->hconn = mem_deref(call->hconn);
 	call->hconn = mem_ref(hc);
 
-	deauth_call(call);
+	deauth_call(call, true);
 
 	start_icall(call);
 
