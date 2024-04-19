@@ -26,6 +26,26 @@ pipeline {
     }
 
     stages {
+        stage('Determine if main release') {
+            steps {
+                script {
+                    tags_res = sh(script: "git tag --contains HEAD", returnStdout: true).trim()
+                    echo "tags"
+                    echo tags_res
+
+                    tags = tags_res.split('\n')
+                    env.IS_MAIN_RELEASE = "0"
+
+                    if (tags.any{ it.contains("production") }) {
+                        env.IS_MAIN_RELEASE = "1"
+                    }
+
+                    echo "IS_MAIN_RELEASE: " + env.IS_MAIN_RELEASE
+                }
+            }
+
+        }
+
         stage('Build') {
             agent {
                 dockerfile true
@@ -109,10 +129,6 @@ pipeline {
             }
         }
         stage( 'Uploading new artifact' ) {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             environment {
                 // NOTE: adjust to allow precedence introduces by 'venv'
                 PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
@@ -151,10 +167,6 @@ pipeline {
         }
 
         stage( 'Releasing new version' ) {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             environment {
                 // NOTE: adjust to allow precedence introduces by 'venv'
                 PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
@@ -223,10 +235,6 @@ pipeline {
 
 
         stage('Build and publish Helm chart') {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             steps {
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
@@ -262,7 +270,7 @@ pipeline {
                     rm -f sftd-*.tgz
 
                     helm package ./charts/sftd
-                    helm s3 push sftd-*.tgz charts-avs
+                    helm s3 push --relative sftd-*.tgz charts-avs
 
                     mkdir $WORKSPACE/tmp
                     echo -n "$chart_version" > $WORKSPACE/tmp/chart_version
@@ -277,11 +285,37 @@ pipeline {
         }
 
         stage('Bump sftd in wire-builds') {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             steps {
+                // Determine TARGET_BRANCHES from mapping defined in config file 'sft-wire-builds-target-branches'
+                script {
+                    configFileProvider(
+                        [configFile(fileId: 'sft-wire-builds-target-branches', variable: 'SFT_WIRE_BUILDS_TARGET_BRANCHES')]) {
+                        
+                        // we are evaluating the config here fail with better errors in case of invalid JSON
+                        sh '''#!/usr/bin/env bash
+                        set -eo pipefail
+                        echo "Reading sft-wire-builds-target-branches configuration file:"
+                        jq < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                        echo "IS_MAIN_RELEASE $IS_MAIN_RELEASE"
+                        '''
+
+                        env.TARGET_BRANCHES = sh(script: '''#!/usr/bin/env bash
+                        set -eo pipefail
+
+                        if [ "$IS_MAIN_RELEASE" = "1" ]; then
+                            echo "main"
+                        else
+                            jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                        fi
+                        ''', returnStdout: true)
+
+                        sh '''
+                        #!/usr/bin/env bash
+                        echo "TARGET_BRANCHES: $TARGET_BRANCHES"
+                        '''
+                    }
+                }
+
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
                     script {
                         env.sshPrivateKeyPath = "${sshPrivateKeyPath}"
@@ -296,14 +330,13 @@ pipeline {
                     git config --global user.email "avsbobwire@users.noreply.github.com"
                     git config --global user.name "avsbobwire"
                     
-                    # NOTE: Add logic that determines the target branches in wire-builds here
-                    # target_branches needs to be a bash array of branches inw wire-builds
-                    target_branches=(dev q1-2024)
-
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
 
-                    for target_branch in \${target_branches[@]}; do
+                    for target_branch in \$TARGET_BRANCHES; do
+
+                        echo "target_branch: \$target_branch"
+
                         for retry in \$(seq 3); do
                            (
                            set -e
@@ -373,3 +406,4 @@ pipeline {
         }
     }
 }
+
