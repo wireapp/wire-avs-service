@@ -112,10 +112,6 @@ pipeline {
             }
         }
         stage( 'Uploading new artifact' ) {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             environment {
                 // NOTE: adjust to allow precedence introduces by 'venv'
                 PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
@@ -154,10 +150,6 @@ pipeline {
         }
 
         stage( 'Releasing new version' ) {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             environment {
                 // NOTE: adjust to allow precedence introduces by 'venv'
                 PATH = "${ env.WORKSPACE }/.venv/bin:${ env.PATH }"
@@ -226,10 +218,6 @@ pipeline {
 
 
         stage('Build and publish Helm chart') {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             steps {
 
                 withCredentials([ usernamePassword( credentialsId: "charts-avs-s3-access", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY' ) ]) {
@@ -280,10 +268,6 @@ pipeline {
         }
 
         stage('Bump sftd in wire-builds') {
-            when {
-                expression { return "$branchName".startsWith("release") }
-            }
-
             steps {
                 // Determine target_branches from mapping defined in config file 'sft-wire-builds-target-branches'
                 script {
