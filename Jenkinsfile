@@ -321,7 +321,7 @@ pipeline {
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
 
-                    for target_branch in $target_branches; do
+                    for target_branch in \$target_branches; do
                         for retry in \$(seq 3); do
                            (
                            set -e
