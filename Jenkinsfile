@@ -89,6 +89,7 @@ pipeline {
                         // we are evaluating the config here fail in case of invalid JSON
                         sh '''#!/usr/bin/env bash
                         set -eo pipefail
+                        echo "Reading sft-wire-builds-target-branches configuration file:"
                         jq < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
                         '''
 
