@@ -282,6 +282,17 @@ pipeline {
             }
 
             steps {
+                // Determine target_branches from mapping defined in config file 'sft-wire-builds-target-branches'
+                script {
+                    configFileProvider(
+                        [configFile(fileId: 'sft-wire-builds-target-branches', variable: 'SFT_WIRE_BUILDS_TARGET_BRANCHES')]) {
+                        env.target_branches = sh(script: '''#!/usr/bin/env bash
+                        set -eo pipefail
+                        jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                        ''', returnStdout: true)
+                    }
+                }
+
                 withCredentials([ sshUserPrivateKey( credentialsId: CREDENTIALS_ID_SSH_GITHUB, keyFileVariable: 'sshPrivateKeyPath' ) ]) {
                     script {
                         env.sshPrivateKeyPath = "${sshPrivateKeyPath}"
@@ -296,14 +307,10 @@ pipeline {
                     git config --global user.email "avsbobwire@users.noreply.github.com"
                     git config --global user.name "avsbobwire"
                     
-                    # NOTE: Add logic that determines the target branches in wire-builds here
-                    # target_branches needs to be a bash array of branches inw wire-builds
-                    target_branches=(dev q1-2024)
-
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
 
-                    for target_branch in \${target_branches[@]}; do
+                    for target_branch in $target_branches; do
                         for retry in \$(seq 3); do
                            (
                            set -e
