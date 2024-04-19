@@ -30,7 +30,20 @@ pipeline {
             agent {
                 dockerfile true
             }
+
             steps {
+
+                // test early for failure. TODO: remove this block
+                script {
+                    configFileProvider(
+                        [configFile(fileId: 'sft-wire-builds-target-branches', variable: 'SFT_WIRE_BUILDS_TARGET_BRANCHES')]) {
+                        env.target_branches = sh(script: '''#!/usr/bin/env bash
+                        set -eo pipefail
+                        jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                        ''', returnStdout: true)
+                    }
+                }
+
                 script {
                     def vcs = checkout([
                         $class: 'GitSCM',
