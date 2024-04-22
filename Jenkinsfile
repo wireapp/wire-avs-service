@@ -57,7 +57,7 @@ pipeline {
 
                     tags = sh(script: "git tag --contains ${commitHash}", returnStdout: true).trim().split('\n')
                     env.IS_MAIN_RELEASE = "0"
-                    if (tags.any{ it.startsWith("stefan-") })
+                    if (tags.any{ it.startsWith("stefan-") }) {
                         env.IS_MAIN_RELEASE = "1"
                     }
 
