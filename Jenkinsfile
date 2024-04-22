@@ -44,7 +44,8 @@ pipeline {
                             $class: 'SubmoduleOption',
                             disableSubmodules: false,
                             recursiveSubmodules: true,
-                            parentCredentials: true
+                            parentCredentials: true,
+                            noTags: false
                             ],
                             [
                                 $class: 'WipeWorkspace'
