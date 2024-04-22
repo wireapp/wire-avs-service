@@ -75,6 +75,7 @@ pipeline {
             steps {
                 sh '''
                 echo IS_MAIN_RELEASE $IS_MAIN_RELEASE
+                echo meh
                 '''
             }
         }
