@@ -26,6 +26,23 @@ pipeline {
     }
 
     stages {
+        stage('Get tags') {
+            steps {
+                script {
+                    tags_res = sh(script: "git tag --contains HEAD", returnStdout: true).trim()
+                    echo "tags"
+                    echo tags_res
+
+                    tags = tags_res.split('\n')
+                    env.IS_MAIN_RELEASE = "0"
+                    if (tags.any{ it.startsWith("stefan-") }) {
+                        env.IS_MAIN_RELEASE = "1"
+                    }
+                }
+            }
+
+        }
+
         stage('Build') {
             agent {
                 dockerfile true
@@ -375,3 +392,4 @@ pipeline {
         }
     }
 }
+
