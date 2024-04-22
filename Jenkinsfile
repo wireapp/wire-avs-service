@@ -253,7 +253,7 @@ pipeline {
                     rm -f sftd-*.tgz
 
                     helm package ./charts/sftd
-                    helm s3 push sftd-*.tgz charts-avs
+                    helm s3 push --relative sftd-*.tgz charts-avs
 
                     mkdir $WORKSPACE/tmp
                     echo -n "$chart_version" > $WORKSPACE/tmp/chart_version
