@@ -286,7 +286,7 @@ pipeline {
 
         stage('Bump sftd in wire-builds') {
             steps {
-                // Determine target_branches from mapping defined in config file 'sft-wire-builds-target-branches'
+                // Determine TARGET_BRANCHES from mapping defined in config file 'sft-wire-builds-target-branches'
                 script {
                     configFileProvider(
                         [configFile(fileId: 'sft-wire-builds-target-branches', variable: 'SFT_WIRE_BUILDS_TARGET_BRANCHES')]) {
@@ -298,10 +298,19 @@ pipeline {
                         jq < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
                         '''
 
-                        env.target_branches = sh(script: '''#!/usr/bin/env bash
+                        env.TARGET_BRANCHES = sh(script: '''#!/usr/bin/env bash
                         set -eo pipefail
-                        jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                        if [ "$IS_MAIN_RELEASE" = "1" ]; then
+                            echo "main"
+                        else
+                            jq '.[$var].TARGET_BRANCHES // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                        fi
                         ''', returnStdout: true)
+
+                        env.TARGET_BRANCHES = sh '''
+                        #!/usr/bin/env bash
+                        echo "TARGET_BRANCHES: TARGET_BRANCHES"
+                        '''
                     }
                 }
 
@@ -322,7 +331,7 @@ pipeline {
                     git clone --depth 1 --no-single-branch git@github.com:wireapp/wire-builds.git wire-builds
                     cd wire-builds
 
-                    for target_branch in \$target_branches; do
+                    for target_branch in \$TARGET_BRANCHES; do
                         for retry in \$(seq 3); do
                            (
                            set -e
