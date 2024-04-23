@@ -40,6 +40,8 @@ pipeline {
                     if (tags.any{ it.startsWith("stefan-") }) {
                         env.IS_MAIN_RELEASE = "1"
                     }
+
+                    echo "IS_MAIN_RELEASE: " + env.IS_MAIN_RELEASE
                 }
             }
 
@@ -298,10 +300,13 @@ pipeline {
                         set -eo pipefail
                         echo "Reading sft-wire-builds-target-branches configuration file:"
                         jq < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
-                        '''
 
+                        echo "IS_MAIN_RELEASE $IS_MAIN_RELEASE"
+
+                        '''
                         env.TARGET_BRANCHES = sh(script: '''#!/usr/bin/env bash
                         set -eo pipefail
+
                         if [ "$IS_MAIN_RELEASE" = "1" ]; then
                             echo "main"
                         else
@@ -311,7 +316,7 @@ pipeline {
 
                         env.TARGET_BRANCHES = sh '''
                         #!/usr/bin/env bash
-                        echo "TARGET_BRANCHES: TARGET_BRANCHES"
+                        echo "TARGET_BRANCHES: $TARGET_BRANCHES"
                         '''
                     }
                 }
