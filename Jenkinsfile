@@ -338,35 +338,39 @@ pipeline {
                         echo "target_branch: \$target_branch"
 
                         for retry in \$(seq 3); do
+                           set +e
                            (
-                           set -e
+                               set -e
+                               if (( \$retry > 1 )); then
+                                 echo "Retrying..."
+                               fi
 
-                           if (( \$retry > 1 )); then
-                             echo "Retrying..."
+                               git fetch origin "\$target_branch"
+                               git checkout "\$target_branch"
+                               git reset --hard @{upstream}
+
+                               set +x
+                               build_json=\$(cat ./build.json | \
+                                   ./bin/set-chart-fields sftd \
+                                   "version=${chart_version}" \
+                                   "repo=${HELM_REPO_HTTPS}" \
+                                   "meta.appVersion=${version}" \
+                                   "meta.commit=${commitId}" \
+                                   | ./bin/bump-prerelease)
+                               echo "\$build_json" > ./build.json
+                               set -x
+
+                               git add -u
+                               msg="Bump sftd to $chart_version"
+                               echo "In branch \$target_branch: \$msg"
+                               git commit -m "\$msg"
+                               git push origin "\$target_branch"
+                           )
+                           if [ \$? -eq 0 ] ; then
+                             echo "pushing to wire-builds succeeded"
+                             break
                            fi
-
-                           git fetch origin "\$target_branch"
-                           git checkout "\$target_branch"
-                           git reset --hard @{upstream}
-
-                           set +x
-                           build_json=\$(cat ./build.json | \
-                               ./bin/set-chart-fields sftd \
-                               "version=${chart_version}" \
-                               "repo=${HELM_REPO_HTTPS}" \
-                               "meta.appVersion=${version}" \
-                               "meta.commit=${commitId}" \
-                               | ./bin/bump-prerelease)
-                           echo "\$build_json" > ./build.json
-                           set -x
-
-                           git add -u
-                           msg="Bump sftd to $chart_version"
-                           echo "In branch \$target_branch: \$msg"
-                           git commit -m "\$msg"
-                           git push origin "\$target_branch"
-
-                           ) && break
+                           set -e
                         done
                         if (( \$? != 0 )); then
                             echo "Retrying didn't help. Failing step."
