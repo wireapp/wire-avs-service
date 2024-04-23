@@ -302,11 +302,11 @@ pipeline {
                         env.TARGET_BRANCHES = sh(script: '''#!/usr/bin/env bash
                         set -eo pipefail
 
+                        target_branches=$(jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES")
                         if [ "$IS_MAIN_RELEASE" = "1" ]; then
-                            echo "main"
-                        else
-                            jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                            target_branches="$target_branches main"
                         fi
+                        echo "$target_branches"
                         ''', returnStdout: true)
 
                         sh '''
