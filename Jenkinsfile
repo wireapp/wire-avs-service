@@ -300,8 +300,8 @@ pipeline {
                         set -eo pipefail
                         echo "Reading sft-wire-builds-target-branches configuration file:"
                         jq < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
-
                         echo "IS_MAIN_RELEASE $IS_MAIN_RELEASE"
+                        '''
 
                         env.TARGET_BRANCHES = sh(script: '''#!/usr/bin/env bash
                         set -eo pipefail
@@ -309,7 +309,7 @@ pipeline {
                         if [ "$IS_MAIN_RELEASE" = "1" ]; then
                             echo "main"
                         else
-                            jq '.[$var].TARGET_BRANCHES // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
+                            jq '.[$var].target_branches // [] | join(" ")' -r --arg var $BRANCH_NAME < "$SFT_WIRE_BUILDS_TARGET_BRANCHES"
                         fi
                         ''', returnStdout: true)
 
