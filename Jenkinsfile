@@ -303,7 +303,6 @@ pipeline {
 
                         echo "IS_MAIN_RELEASE $IS_MAIN_RELEASE"
 
-                        '''
                         env.TARGET_BRANCHES = sh(script: '''#!/usr/bin/env bash
                         set -eo pipefail
 
@@ -314,7 +313,7 @@ pipeline {
                         fi
                         ''', returnStdout: true)
 
-                        env.TARGET_BRANCHES = sh '''
+                        sh '''
                         #!/usr/bin/env bash
                         echo "TARGET_BRANCHES: $TARGET_BRANCHES"
                         '''
@@ -339,6 +338,9 @@ pipeline {
                     cd wire-builds
 
                     for target_branch in \$TARGET_BRANCHES; do
+
+                        echo "target_branch: \$target_branch"
+
                         for retry in \$(seq 3); do
                            (
                            set -e
