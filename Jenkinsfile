@@ -35,6 +35,7 @@ pipeline {
 
                     tags = tags_res.split('\n')
                     env.IS_MAIN_RELEASE = "0"
+                    # TODO: change this for production
                     if (tags.any{ it.startsWith("stefan-") }) {
                         env.IS_MAIN_RELEASE = "1"
                     }
