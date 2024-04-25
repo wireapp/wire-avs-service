@@ -1982,9 +1982,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 			}
 			
 			if (!rs) {
-#if 0
 				info("no stream found for ssrc: %u\n", ssrc);
-#endif
 				deref_locked(rcall);
 				continue;
 			}
@@ -2456,7 +2454,7 @@ static int send_sft_msg(struct call *call, struct econn_message *msg,
 	if (0 == status && call->issft && call->isprov) {
 		send_provisional(call, msg);
 	}
-	else if (call->hconn) {
+	else {
 		if (status) {
 			http_ereply(call->hconn, status, "Internal error");
 		}
@@ -3460,7 +3458,7 @@ static void call_close_handler(struct call *call, bool locked)
 			if (pm->call == call) {
 				if (call->hconn) {
 					warning("call_close_handler: no response from federation TURN server");
-					http_ereply(call->hconn, 501, "No response from federation TURN server");
+					http_ereply(call->hconn, "501", "No response from federation TURN server");
 					call->hconn = mem_deref(call->hconn);
 				}
 				mem_deref(pm);
@@ -3625,9 +3623,7 @@ static int ecall_ping_handler(struct ecall *ecall,
 {
 	struct call *call = arg;
 
-#if 0
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
-#endif
 	
 	tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
 
