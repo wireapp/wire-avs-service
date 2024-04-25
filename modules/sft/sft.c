@@ -388,6 +388,7 @@ struct participant {
 	uint32_t ssrca;
 	uint32_t ssrcv;
 	bool auth;
+	bool was_auth;
 	struct list authl;
 
 	bool remote;
@@ -4095,8 +4096,12 @@ static void ecall_confpart_handler(struct ecall *ecall,
 
 		list_append(&lpart->authl, &aup->le, aup);
 
-		send_propsync(rpart->call, call->props,
-			      call->userid, call->clientid, true);
+		info("rpart->call(%p): was_auth: %d auth: %d\n",
+		     rpart->call, rpart->was_auth, rpart->auth);
+		if (rpart->call != call && (!rpart->was_auth && rpart->auth)) {
+			send_propsync(rpart->call, call->props,
+				      call->userid, call->clientid, true);
+		}
 	}
 }
 
@@ -4566,6 +4571,13 @@ static void deauth_call(struct call *call, bool reset_estab)
 		if (!part)
 			continue;
 
+		if (reset_estab) {
+			part->was_auth = false;
+		}
+		else {
+			part->was_auth = part->auth;
+		}
+			
 		part->auth = false;
 		lpart = call2part(part->call, call->userid, call->clientid);
 		if (lpart) {
