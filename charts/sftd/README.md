@@ -27,15 +27,16 @@ installed as part of the `wire-server` umbrella chart.
 
 ### Other (optional) parameters
 
-| Parameter                       | Default | Description                                                                                                                                                                                                       |
-|---------------------------------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `terminationGracePeriodSeconds` | `10`    | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating                             |
-| `replicaCount`                  | `1`     | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                                                               |
-| `nodeSelector`, `affinity`      | `{}`    | Used to constraint SFT servers to only run on specific nodes                                                                                                                                                      |
-| `coredeumps.enabled`            | `false` | Enable recording of coredumps for testing and debugging.                                                                                                                                                          |
-|                                 |         | WARNING: changing this parameter requires reinstallation of the helm chart. Upgrading is not possible, because `StatefulSet`s have restrictions on what can be patched.                                           |
-|                                 |         | Required: configure `core_pattern` in the kernel of worker to be `/var/coredumps/core.%t.%h.%e.%p` or similar (same directory)                                                                                    |
-| `coredeumps.storageClassName`   |         | Storage class to use for creating the Persistent Volumes that holds the coredumps                                                                                                                                 |
+| Parameter                       | Default | Description                                                                                                                                                                           |
+|---------------------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `terminationGracePeriodSeconds` | `10`    | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating |
+| `replicaCount`                  | `1`     | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                                   |
+| `nodeSelector`, `affinity`      | `{}`    | Used to constraint SFT servers to only run on specific nodes                                                                                                                          |
+| `coredeumps.enabled`            | `false` | Enable recording of coredumps for testing and debugging.                                                                                                                              |
+|                                 |         | WARNING: changing this parameter requires reinstallation of the helm chart. Upgrading is not possible, because `StatefulSet`s have restrictions on what can be patched.               |
+|                                 |         | Required: configure `core_pattern` in the kernel of worker to be `/var/coredumps/core.%t.%h.%e.%p` or similar (same directory)                                                        |
+| `coredeumps.storageClassName`   |         | Storage class to use for creating the Persistent Volumes that holds the coredumps                                                                                                     |
+| `additionalCmdArgs`             | `""`    | Additional command line arguments. Mostly useful for development (until options got their dedicated parameters.) |                                                                                                                                                                                       |
 
 Please see [values.yaml](./values.yaml) for an overview of other parameters that can be configured.
 
