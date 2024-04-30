@@ -5,6 +5,27 @@ installed as part of the `wire-server` umbrella chart.
 
 ## Parameters
 
+```
+usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] [-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] [-q] [-w <count>] -T -t <URL> -s <path> -w <count>
+	-a              Force authorization
+	-I <addr>       Address for HTTP requests (default: 127.0.0.1)
+	-p <port>       Port for HTTP requests (default: 8585)
+	-A <addr>       Address for media (default: same as request address)
+	-M <addr>       Address for metrics requests (default: 127.0.0.1)
+	-r <port>       Port for metrics requests (default: 49090)
+	-u <URL>        URL to use in responses
+	-O <iflist>     Comma seperated list of interface names for media
+			 Example: eth0,eth1
+	-b <blacklist>  Comma seperated client version blacklist
+			 Example: <6.2.9,6.2.11
+	-l <prefix>     Log to file with prefix
+	-q              Quiet (less-verbose logging)
+	-T              Use TURN servers when gathering
+	-t <url>        Multi SFT TURN URL
+	-s <path>       Path to shared secrets file
+	-w <count>      Worker count (default: 16)
+```
+
 ### Required
 | Parameter       | Description                                                                                 |
 |-----------------|---------------------------------------------------------------------------------------------|
