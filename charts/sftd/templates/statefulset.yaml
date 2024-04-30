@@ -179,7 +179,8 @@ spec:
                       ${ACCESS_ARGS} \
                       ${MULTI_SFT_ARGS} \
                       {{ if .Values.turnDiscoveryEnabled }}-T{{ end }} \
-                      -u "https://{{ required "must specify host" .Values.host }}/sfts/${POD_NAME}"
+                      -u "https://{{ required "must specify host" .Values.host }}/sfts/${POD_NAME}" \
+                      {{ .Values.additionalCmdArgs }}
           ports:
             - name: sft
               containerPort: 8585
