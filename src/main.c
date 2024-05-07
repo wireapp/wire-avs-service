@@ -110,7 +110,7 @@ static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path>\n");
+			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path> -x <addr:port>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
@@ -134,6 +134,7 @@ static void usage(void)
 			 "Multi SFT TURN path to file with secret\n");
 	
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
+	(void)re_fprintf(stderr, "\t-x <addr:port>    Address tuple for listening to federation SFT requests\n");
 }
 
 static void signal_handler(int sig)
@@ -429,6 +430,10 @@ int main(int argc, char *argv[])
 
 		case 'w':
 			avsd.worker_count = atoi(optarg);
+			break;
+
+		case 'x':
+			sa_decode(&avsd.sft_req_addr, optarg, str_len(optarg));
 			break;
 
 		default:

@@ -190,6 +190,9 @@ struct worker *worker_get(const char *id)
 	struct worker *w;
 	uint32_t key;
 	int wid;
+
+	if (!workb)
+		return NULL;
 	
 	key = hash_joaat_str_ci(id);
 	wid = (int)(key % (uint32_t)workb->c);
@@ -231,6 +234,11 @@ static int push_task(struct worker *w, enum worker_task_id tid,
 
 int worker_assign_main(worker_task_h *taskh, void *arg)
 {
+	if (SINGLETHREADED) {
+		taskh(arg);
+		return 0;
+	}
+	
 	return push_task(workb->main, WORKER_TASK_RUN, taskh, arg);
 }
 
@@ -241,6 +249,11 @@ int worker_assign_task(struct worker *w,
 {
 	int err = 0;
 
+	if (SINGLETHREADED) {
+		taskh(arg);
+		return 0;
+	}
+	
 	if (!w)
 		return EINVAL;
 
@@ -298,6 +311,9 @@ int worker_init(void)
 	int err = 0;
 	int i;
 
+	if (SINGLETHREADED)
+		return 0;
+	
 	nworkers = avs_service_worker_count();
 	
 	if (!nworkers)
@@ -350,6 +366,9 @@ void worker_close(void)
 	size_t i;
 	int err;
 
+	if (!workb)
+		return;
+	
 	for (i = 0; i < workb->c; ++i) {
 		struct worker *w = workb->v[i];
 		pthread_t tid;

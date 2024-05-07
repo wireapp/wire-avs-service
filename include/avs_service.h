@@ -1,5 +1,13 @@
 #define MAX_OPEN_FILES 1048576
 
+#define SINGLETHREADED 1
+
+#if SINGLETHREADED
+#define lock_write_get(a)
+#define lock_rel(a)
+#endif
+
+
 
 /*
  * HTTP Server

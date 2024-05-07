@@ -40,6 +40,11 @@
 
 #include "zauth.h"
 
+#if SINGLETHREADED
+#define assign_task(c, t, a, l) t(c, a)
+#endif
+
+
 #define SFT_TOKEN "sft-"
 
 /* Use libre internal rtcp function */
@@ -465,6 +470,11 @@ static void tc_err_handler(int err, void *arg);
 
 static void reflow_rtp_recv(struct mbuf *mb, void *arg);
 
+static struct call *federate_request(struct group *group,
+				     struct mbuf *mb,
+				     const char *convid,
+				     struct http_conn *hc);
+
 
 static void ref_locked(void *ref)
 {
@@ -506,6 +516,7 @@ static int start_federation_task(void *arg)
 	return err;
 }
 
+#if !SINGLETHREADED
 static void task_destructor(void *arg)
 {
 	struct task_arg *task = arg;
@@ -540,11 +551,12 @@ static int task_handler(void *arg)
 	return err;
 }
 
-static int assign_task(struct call *call, sft_task_h *taskh, void *arg, bool lock)
+static int assign_task_real(struct call *call, sft_task_h *taskh, void *arg, bool lock)
 {
 	struct task_arg *task;
 	bool locked = false;
 	int err = 0;
+
 
 	if (lock) {
 		lock_write_get(g_sft->lock);
@@ -584,6 +596,7 @@ static int assign_task(struct call *call, sft_task_h *taskh, void *arg, bool loc
 
 	return err;
 }
+#endif
 
 static int append_group(struct group *group, struct call *call);
 
@@ -2078,6 +2091,7 @@ static void sft_http_resp_handler(int err, const struct http_msg *msg,
 				  void *arg)
 {
 	struct sft_req_ctx *ctx = arg;
+	struct call *call = ctx ? ctx->call : NULL;
 	const uint8_t *buf = NULL;
 	int sz = 0;
 
@@ -2114,15 +2128,17 @@ static void sft_http_resp_handler(int err, const struct http_msg *msg,
 			}
 		}
 	}
+
+	federate_request(call->group, ctx->mb_body, call->group->id, NULL);
 #if 0
-	err = econn_message_decode(&cmsg, 0, 0, buf, sz);
+	err = econn_message_decode(&cmsg, 0, 0, (const char *)buf, sz);
 	if (err) {
 		warning("sft_http_resp_handler: failed to parse message: %m\n",
 			err);
 		goto error;
 	}
 
-	ecall_msg_recv((struct ecall *)call->provisional.icall,
+	ecall_msg_recv((struct ecall *)fcall->icall,
 		       0, 0,
 		       cmsg->src_userid,
 		       cmsg->src_clientid,
@@ -2201,7 +2217,7 @@ static int send_provisional_http(struct call *call,
 	ctx->call = mem_ref(call);
 	base_url = call->origin_url ? call->origin_url
 		                    : avs_service_federation_url();
-	snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->callid);
+	snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);//call->callid);
 
 	info("send_provisional_http: sending HTTP request to "
 	     "%s on client: %p\n", url, call->http_cli);
@@ -2256,15 +2272,15 @@ static int send_provisional(struct call *call,
 
 	group = call->group;
 	if (call->isprov) {
-		if (sa_isset(&call->sft_tuple, SA_ADDR)) {
-			tc_send(call->federate.tc,
-				&call->sft_tuple, call->sft_cid,
-				(uint8_t *)data, str_len(data));
-		}
-		else {
+		if (avs_service_federation_url()) {
 			send_provisional_http(call,
 					      (const uint8_t *)data,
 					      str_len(data));
+		}
+		else if (sa_isset(&call->sft_tuple, SA_ADDR)) {
+			tc_send(call->federate.tc,
+				&call->sft_tuple, call->sft_cid,
+				(uint8_t *)data, str_len(data));
 		}
 	}
 	else {
@@ -2458,14 +2474,12 @@ static int send_sft_msg(struct call *call, struct econn_message *msg,
 	char *data = NULL;
 	int err = 0;
 
-	if (0 == status && call->issft && call->isprov) {
-		send_provisional(call, msg);
-	}
-	else if (call->hconn) {
+	if (call->hconn) {
 		if (status) {
 			http_ereply(call->hconn, status, "Internal error");
 		}
 		else {
+			str_ncpy(msg->src_userid, call->callid, sizeof(msg->src_userid));
 			err = econn_message_encode(&data, msg);
 			if (err)
 				goto out;
@@ -2478,6 +2492,9 @@ static int send_sft_msg(struct call *call, struct econn_message *msg,
 		}
 
 		call->hconn = mem_deref(call->hconn);
+	}
+	else if (0 == status && call->issft && call->isprov) {
+		send_provisional(call, msg);
 	}
 
  out:
@@ -3086,7 +3103,7 @@ static void start_provisional(struct group *group,
 			 NULL,
 			 "sft", "_",
 			 provid, provid,
-			 false, false,
+			 true, false,
 			 NUM_RTP_STREAMS, NUM_RTP_STREAMS,
 			 true);
 
@@ -3096,7 +3113,12 @@ static void start_provisional(struct group *group,
 		goto out;
 	}
 
-	dict_add(g_sft->provisional.calls, provid, call);
+	if (cid) {
+		dict_add(g_sft->provisional.calls, provid, call);
+	}
+	else {
+		dict_add(g_sft->provisional.calls, group->id, call);
+	}
 	/* Call is now owned by dictionary */
 	mem_deref(call);
 	
@@ -3840,6 +3862,7 @@ static void call_destructor(void *arg)
 	list_flush(&call->audio.tcc.pktl);
 	list_flush(&call->video.tcc.pktl);
 
+	mem_deref(call->hconn);
 	mem_deref(call->turnv);
 	mem_deref(call->callid);
 	mem_deref(call->clientid);
@@ -4801,14 +4824,15 @@ static void split_tuple(struct call *call, const char *tuple)
 
 static struct call *federate_request(struct group *group,
 				     struct mbuf *mb,
-				     const char *convid)
+				     const char *convid,
+				     struct http_conn *hc)
 {
 	struct econn_message *cmsg = NULL;
 	struct call *call = NULL;
 	char *srcid;
 	char *dstid;
-	int err = 0;
-
+	int err = 0;	
+	
 	if (!group)
 		return NULL;
 
@@ -4853,6 +4877,8 @@ static struct call *federate_request(struct group *group,
 				lock_rel(g_sft->lock);				
 				goto out;
 			}
+			call->hconn = mem_deref(call->hconn);
+			call->hconn = mem_ref(hc);
 			call->callid = mem_deref(call->callid);
 			call->callid = make_callid("sft", convid, srcid);
 
@@ -4890,6 +4916,8 @@ static struct call *federate_request(struct group *group,
 			err = ENOSYS;
 			goto out;
 		}
+		call->hconn = mem_deref(call->hconn);
+		call->hconn = mem_ref(hc);
 		ecall_confmsg_handler(NULL, cmsg, call);
 		break;
 
@@ -4900,6 +4928,8 @@ static struct call *federate_request(struct group *group,
 		info("federate_request: SETUP-%s convid=%s call=%p\n",
 		     cmsg->resp ? "resp" : "req", convid, call);
 		if (call) {
+			call->hconn = mem_deref(call->hconn);
+			call->hconn = mem_ref(hc);
 			if (cmsg->resp) {
 				dict_add(g_sft->calls, call->callid, call);
 				dict_remove(g_sft->provisional.calls, convid);
@@ -4907,6 +4937,13 @@ static struct call *federate_request(struct group *group,
 					send_conf_conn(call, false, convid,
 						       call->callid,
 						       call->callid);
+				}
+				else {
+					ecall_msg_recv((struct ecall *)call->icall,
+						       0, 0,
+						       cmsg->src_userid,
+						       cmsg->src_clientid,
+						       cmsg);
 				}
 			}
 			else {
@@ -4923,7 +4960,7 @@ static struct call *federate_request(struct group *group,
 					 NULL,
 					 "prov", "_",
 					 convid, cmsg->sessid_sender,
-					 false, false,
+					 true, false,
 					 NUM_RTP_STREAMS, NUM_RTP_STREAMS,
 					 true);
 			if (err) {
@@ -4931,7 +4968,7 @@ static struct call *federate_request(struct group *group,
 					"alloc_call: %m\n", err);
 				goto out;
 			}
-
+			call->hconn = mem_ref(hc);
 			call->issft = true;
 			call->isprov = true;
 			call->federate.tc = group->federate.tc;
@@ -5034,8 +5071,11 @@ static struct call *federate_request(struct group *group,
 
 		lock_write_get(g_sft->lock);
 		call = dict_lookup(g_sft->calls, dstid);
-		if (call)
+		if (call) {
+			call->hconn = mem_deref(call->hconn);
+			call->hconn = mem_ref(hc);
 			call_close_handler(call, false);
+		}
 		lock_rel(g_sft->lock);
 		break;
 
@@ -5050,8 +5090,11 @@ static struct call *federate_request(struct group *group,
 		lock_write_get(g_sft->lock);
 		call = dict_lookup(g_sft->calls, dstid);
 		lock_rel(g_sft->lock);
-		if (call)
+		if (call) {
+			call->hconn = mem_deref(call->hconn);
+			call->hconn = mem_ref(hc);
 			ecall_propsync_handler(NULL, cmsg, call);
+		}
 		break;
 		
 	default:
@@ -5071,7 +5114,9 @@ static void sft_req_handler(struct http_conn *hc,
 			    const struct http_msg *msg,
 			    void *arg)
 {
+	struct sft *sft = arg;
 	char *url = NULL;
+	struct group *group = NULL;
 	struct call *call = NULL;
 	int err = 0;
 	char *paths[2];
@@ -5100,11 +5145,13 @@ static void sft_req_handler(struct http_conn *hc,
 		body = (char *)mbuf_buf(msg->mb);
 
 	if (!body) {
+		warning("sft_req_handler: no body\n");
 		err = ENOSYS;
 		goto bad_req;
 	}
 
-	call = federate_request(NULL, msg->mb, convid);
+	group = find_group(sft, convid);
+	call = federate_request(group, msg->mb, convid, hc);
 	if (!call) {
 		err = EPROTO;
 		goto out;
@@ -5123,8 +5170,10 @@ static void sft_req_handler(struct http_conn *hc,
 		mem_deref(call);
 		http_ereply(hc, 400, "Bad request");
 	}
+#if 0
 	else
 		http_creply(hc, 200, "OK", "text/plain", "All good\n");
+#endif
 }
 
 	
@@ -5354,7 +5403,7 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 		}
 		else {
 			info("tc_recv: signalling on group: %p\n", group);
-			federate_request(group, mb, NULL);
+			federate_request(group, mb, NULL, NULL);
 		}
 		
 		return true;

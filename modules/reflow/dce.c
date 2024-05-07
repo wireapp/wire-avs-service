@@ -2076,7 +2076,7 @@ static int usrsctp_send_handler(void *addr, void *buf, size_t len,
 
 int dce_init(void)
 {
-	int err;
+	int err = 0;
 
 	debug("dce_init: inited=%d\n", dce_inited);
 	
