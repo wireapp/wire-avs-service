@@ -31,6 +31,7 @@
 #include <re.h>
 #include <avs_log.h>
 #include <avs_base.h>
+#include <avs_semaphore.h>
 #include <avs_version.h>
 #include <pthread.h>
 
@@ -67,6 +68,10 @@ struct avs_service {
 		FILE *fp;
 		bool file;
 		struct lock *lock;
+		struct list linel;
+		struct avs_sem *sem;
+		bool running;
+		pthread_t th;
 	} log;
 
 	int worker_count;
@@ -77,9 +82,20 @@ struct avs_service {
 	struct pl secret;
 
 	struct dnsc *dnsc;
+<<<<<<< release-4.1
 
 	struct list shuthl;
+=======
+	
+>>>>>>> local
 };
+
+struct log_line {
+	struct mbuf *mb;
+
+	struct le le;
+};
+
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
        .use_turn = false,
@@ -209,16 +225,25 @@ static const char *level_prefix(enum log_level level)
 	}
 }
 
+static void logl_destructor(void *arg)
+{
+	struct log_line *logl = arg;
+
+	mem_deref(logl->mb);
+}
+
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
-	struct mbuf *mb;
-	FILE *fp = NULL;
+	struct log_line *logl;
 
-	mb = mbuf_alloc(1024);
-	if (!mb)
+	logl = mem_alloc(sizeof(*logl), logl_destructor);
+	if (!logl)
 		return;
-	
+	logl->mb = mbuf_alloc(1024);
+	if (!logl->mb)
+		return;
+			 
 	if (gettimeofday(&tv, NULL) == 0) {
 		struct tm  tstruct;
 		uint32_t tms;
@@ -229,30 +254,58 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 		tstruct = *localtime(&tv.tv_sec);
 		tms = tv.tv_usec / 1000;
 		strftime(timebuf, sizeof(timebuf), "%m-%d %X", &tstruct);
-		mbuf_printf(mb, "%s.%03u T(%p) %s%s",
+		mbuf_printf(logl->mb, "%s.%03u T(%p) %s%s",
 			   timebuf, tms,
 			   tid,
 			   level_prefix(level), msg);
 	}
 	else {
-		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
+		mbuf_printf(logl->mb, "%s%s", level_prefix(level), msg);
 	}
 
 
 	lock_write_get(avsd.log.lock);
+	list_append(&avsd.log.linel, &logl->le, logl);
+	lock_rel(avsd.log.lock);	
+	avs_sem_post(avsd.log.sem);
+}
+
+static void *log_thread(void *arg)
+{
+	struct le *le;
+	FILE *fp;
 	
 	if (avsd.log.file)
 		fp = avsd.log.fp;
 	else
 		fp = stdout;
 
-	if (fp) {
-		fwrite(mb->buf, 1, mb->end, fp);
-		fflush(fp);
-	}
-	lock_rel(avsd.log.lock);
+	if (!fp)
+		return NULL;
+	
+	while (avsd.log.running) {
+		struct log_line *logl;
+		
+		avs_sem_wait(avsd.log.sem);
+		
+		lock_write_get(avsd.log.lock);
+		le = avsd.log.linel.head;
+		if (le)
+			list_unlink(le);
+		lock_rel(avsd.log.lock);
+		if (!le) {
+			continue;
+		}
 
-	mem_deref(mb);
+		logl = le->data;
+		
+		fwrite(logl->mb->buf, 1, logl->mb->end, fp);
+		fflush(fp);
+
+		mem_deref(logl);
+	}
+
+	return NULL;
 }
 
 static struct log logh = {
@@ -339,6 +392,7 @@ int main(int argc, char *argv[])
 	avsd.worker_count = NUM_WORKERS;
 	avsd.fir_timeout = TIMEOUT_FIR;
 	lock_alloc(&avsd.log.lock);
+	list_init(&avsd.log.linel);
 	
 	for (;;) {
 
@@ -493,6 +547,11 @@ int main(int argc, char *argv[])
 		avsd.log.fp = fopen(log_file_name, "a");
 	}
 
+	/* Create logging thread */
+	avs_sem_alloc(&avsd.log.sem, 0);
+	avsd.log.running = true;
+	pthread_create(&avsd.log.th, NULL, log_thread, NULL);
+	
 	log_register_handler(&logh);
 
 	err = module_init();
@@ -513,7 +572,11 @@ int main(int argc, char *argv[])
 		warning("dns: dnsc_alloc failed: %m\n", err);
 		goto out;
 	}
+<<<<<<< release-4.1
 
+=======
+	
+>>>>>>> local
 	re_main(signal_handler);
 
  out:
@@ -524,6 +587,9 @@ int main(int argc, char *argv[])
 
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
+
+	avsd.log.running = false;
+	pthread_join(avsd.log.th, NULL);
 	avsd.log.lock = mem_deref(avsd.log.lock);
 	
 	/* check for memory leaks */
