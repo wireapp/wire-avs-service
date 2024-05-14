@@ -31,9 +31,9 @@
 #include <re.h>
 #include <avs_log.h>
 #include <avs_base.h>
-#include <avs_semaphore.h>
 #include <avs_version.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #include <avs_service.h>
 #include "score.h"
@@ -69,7 +69,7 @@ struct avs_service {
 		bool file;
 		struct lock *lock;
 		struct list linel;
-		struct avs_sem *sem;
+		sem_t sem;
 		bool running;
 		pthread_t th;
 	} log;
@@ -82,12 +82,7 @@ struct avs_service {
 	struct pl secret;
 
 	struct dnsc *dnsc;
-<<<<<<< release-4.1
-
 	struct list shuthl;
-=======
-	
->>>>>>> local
 };
 
 struct log_line {
@@ -236,19 +231,19 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
 	struct log_line *logl;
+	const pthread_t tid = pthread_self();
 
-	logl = mem_alloc(sizeof(*logl), logl_destructor);
+	logl = mem_zalloc(sizeof(*logl), logl_destructor);
 	if (!logl)
 		return;
 	logl->mb = mbuf_alloc(1024);
 	if (!logl->mb)
 		return;
-			 
+
 	if (gettimeofday(&tv, NULL) == 0) {
 		struct tm  tstruct;
 		uint32_t tms;
 		char timebuf[64];
-		const pthread_t tid = pthread_self();
 
 		memset(timebuf, 0, 64);
 		tstruct = *localtime(&tv.tv_sec);
@@ -263,11 +258,10 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 		mbuf_printf(logl->mb, "%s%s", level_prefix(level), msg);
 	}
 
-
 	lock_write_get(avsd.log.lock);
 	list_append(&avsd.log.linel, &logl->le, logl);
-	lock_rel(avsd.log.lock);	
-	avs_sem_post(avsd.log.sem);
+	lock_rel(avsd.log.lock);
+	sem_post(&avsd.log.sem);
 }
 
 static void *log_thread(void *arg)
@@ -282,28 +276,31 @@ static void *log_thread(void *arg)
 
 	if (!fp)
 		return NULL;
-	
-	while (avsd.log.running) {
-		struct log_line *logl;
-		
-		avs_sem_wait(avsd.log.sem);
-		
+
+	do {
+		struct log_line *logl = NULL;
+
+		if (avsd.log.running)
+			sem_wait(&avsd.log.sem);
+
 		lock_write_get(avsd.log.lock);
 		le = avsd.log.linel.head;
-		if (le)
+		if (le) {
+			logl = le->data;
 			list_unlink(le);
+		}
+		le = avsd.log.linel.head;
 		lock_rel(avsd.log.lock);
-		if (!le) {
+		if (!logl) {
 			continue;
 		}
 
-		logl = le->data;
-		
 		fwrite(logl->mb->buf, 1, logl->mb->end, fp);
 		fflush(fp);
 
 		mem_deref(logl);
 	}
+	while(le || avsd.log.running);
 
 	return NULL;
 }
@@ -392,6 +389,7 @@ int main(int argc, char *argv[])
 	avsd.worker_count = NUM_WORKERS;
 	avsd.fir_timeout = TIMEOUT_FIR;
 	lock_alloc(&avsd.log.lock);
+	sem_init(&avsd.log.sem, 0, 0);
 	list_init(&avsd.log.linel);
 	
 	for (;;) {
@@ -548,10 +546,9 @@ int main(int argc, char *argv[])
 	}
 
 	/* Create logging thread */
-	avs_sem_alloc(&avsd.log.sem, 0);
 	avsd.log.running = true;
 	pthread_create(&avsd.log.th, NULL, log_thread, NULL);
-	
+
 	log_register_handler(&logh);
 
 	err = module_init();
@@ -572,11 +569,7 @@ int main(int argc, char *argv[])
 		warning("dns: dnsc_alloc failed: %m\n", err);
 		goto out;
 	}
-<<<<<<< release-4.1
 
-=======
-	
->>>>>>> local
 	re_main(signal_handler);
 
  out:
@@ -588,7 +581,9 @@ int main(int argc, char *argv[])
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
 
+	log_unregister_handler(&logh);
 	avsd.log.running = false;
+	sem_post(&avsd.log.sem);
 	pthread_join(avsd.log.th, NULL);
 	avsd.log.lock = mem_deref(avsd.log.lock);
 	
