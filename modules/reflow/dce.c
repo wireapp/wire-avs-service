@@ -98,6 +98,7 @@
 #define DATA_CHANNEL_MAX_LABEL_STR_LEN 128
 #define DATA_CHANNEL_MAX_PROTOCOL_STR_LEN 128
 
+#define DATA_CHANNEL_SCTP_MTU 900
 
 #define PAYLOAD_MAGIC 0x60504030
 
@@ -879,6 +880,8 @@ static int dce_handler(void *data)
 #if 0
 	info("dce_handler: pld=%p type=%d dce=%p ch=%p data=%p buf=%p\n",
 	     pld, pld->type, pld->dce, pld->ch, data, buf);
+#else
+	(void)buf;
 #endif
 
 	lock_write_get(g_dce.lock);
@@ -2178,6 +2181,22 @@ int dce_alloc(struct dce **dcep,
 		warning("dce: alloc: failed to create socket\n");
 		err = ENOTSOCK;
 		goto out;
+	}
+
+	{
+		struct sctp_paddrparams paddrparams;
+
+		memset(&paddrparams, 0, sizeof(paddrparams));
+
+		paddrparams.spp_address.ss_family = AF_CONN;
+#ifdef HAVE_SCONN_LEN
+		paddrparams.spp_address.ss_len = sizeof(struct sockaddr_conn);
+#endif
+		paddrparams.spp_flags = SPP_PMTUD_DISABLE;
+		paddrparams.spp_pathmtu = DATA_CHANNEL_SCTP_MTU;
+		if (usrsctp_setsockopt(dce->sock, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &paddrparams, sizeof(paddrparams)) < 0) {
+			warning("usrsctp_setsockopt--paddrparams");
+		}
 	}
 	
 	sctp_err = usrsctp_set_non_blocking(dce->sock, 1);

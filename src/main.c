@@ -16,10 +16,12 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _DEFAULT_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <signal.h>
 #include <getopt.h>
 #include <time.h>
@@ -31,11 +33,14 @@
 #include <avs_base.h>
 #include <avs_version.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #include <avs_service.h>
 #include "score.h"
 
 #define NUM_WORKERS 16
+#define TIMEOUT_FIR 1000
+
 
 /* Global Context */
 struct avs_service {
@@ -43,12 +48,15 @@ struct avs_service {
 
 	struct sa req_addr;
 	struct sa media_addr;
+	struct sa mediaif_addr;
 	struct sa metrics_addr;
 	struct sa sft_req_addr;
 
 	char url[256];
 	char federation_url[256];
 	char blacklist[256];
+
+	struct list ifl;
 
 	struct {
 		char url[256];
@@ -60,22 +68,43 @@ struct avs_service {
 		FILE *fp;
 		bool file;
 		struct lock *lock;
+		struct list linel;
+		sem_t sem;
+		bool running;
+		pthread_t th;
 	} log;
 
 	int worker_count;
+	uint64_t fir_timeout;	
 	bool use_turn;
 	bool use_auth;
+	bool is_draining;
 	struct pl secret;
 
 	struct dnsc *dnsc;
-	
+	struct list shuthl;
 };
+
+struct log_line {
+	struct mbuf *mb;
+
+	struct le le;
+};
+
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
        .use_turn = false,
        .use_auth = false,
        .secret = PL_INIT,
        .dnsc = NULL,
+};
+
+
+struct shutdown_entry {
+	avs_service_shutdown_h *shuth;
+	void *arg;
+
+	struct le le;
 };
 
 #define DEFAULT_REQ_ADDR "127.0.0.1"
@@ -91,8 +120,9 @@ static struct avs_service avsd = {
 static void usage(void)
 {
 	(void)re_fprintf(stderr,
-			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path>\n");
+			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] "
+			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] "
+			 "[-q] [-w <count>] -T -t <URL> -s <path> -w <count>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
@@ -104,15 +134,15 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-r <port>       Port for metrics requests (default: %d)\n",
 			 DEFAULT_METRICS_PORT);
 	(void)re_fprintf(stderr, "\t-u <URL>        URL to use in responses\n");
+	(void)re_fprintf(stderr, "\t-O <iflist>     Comma seperated list of interface names for media\n"
+			         "\t\t\t Example: eth0,eth1\n");
 	(void)re_fprintf(stderr, "\t-b <blacklist>  Comma seperated client version blacklist\n"
 			         "\t\t\t Example: <6.2.9,6.2.11\n");
 	(void)re_fprintf(stderr, "\t-l <prefix>     Log to file with prefix\n");
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
 	(void)re_fprintf(stderr, "\t-T              Use TURN servers when gathering\n");
 	(void)re_fprintf(stderr, "\t-t <url>        Multi SFT TURN URL\n");
-	(void)re_fprintf(stderr, "\t-s <path>       "
-			 "Multi SFT TURN path to file with secret\n");
-	
+	(void)re_fprintf(stderr, "\t-s <path>       Path to shared secrets file\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 }
 
@@ -121,11 +151,33 @@ static void signal_handler(int sig)
 	static bool term = false;
 	(void)sig;
 
-	if (sig == SIGUSR1) {
+	switch(sig) {
+	case SIGUSR1:
 		mem_debug();
 		return;
+
+	case SIGTERM: {
+		bool can_shutdown = true;
+		struct le *le;
+		
+		avsd.is_draining = true;
+
+		for(le = avsd.shuthl.head; le && can_shutdown; le = le->next) {
+			struct shutdown_entry *se = le->data;
+
+			if (se->shuth) {
+				can_shutdown = se->shuth(se->arg);
+			}
+		}
+		if (!can_shutdown)
+			return;
+		
 	}
-	
+		break;
+
+	default:
+		break;
+	}
 	
 	if (term) {
 		warning("Aborted.\n");
@@ -134,11 +186,10 @@ static void signal_handler(int sig)
 
 	term = true;
 
-	warning("Terminating ...\n");	
+	warning("Terminating ...\n");
 
-	module_close();
-	
-	re_cancel();
+	avs_service_terminate();
+
 }
 
 static void error_handler(int err, void *arg)
@@ -169,50 +220,89 @@ static const char *level_prefix(enum log_level level)
 	}
 }
 
+static void logl_destructor(void *arg)
+{
+	struct log_line *logl = arg;
+
+	mem_deref(logl->mb);
+}
+
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
-	struct mbuf *mb;
-	FILE *fp = NULL;
+	struct log_line *logl;
+	const pthread_t tid = pthread_self();
 
-	mb = mbuf_alloc(1024);
-	if (!mb)
+	logl = mem_zalloc(sizeof(*logl), logl_destructor);
+	if (!logl)
 		return;
-	
+	logl->mb = mbuf_alloc(1024);
+	if (!logl->mb)
+		return;
+
 	if (gettimeofday(&tv, NULL) == 0) {
 		struct tm  tstruct;
 		uint32_t tms;
 		char timebuf[64];
-		const pthread_t tid = pthread_self();
 
 		memset(timebuf, 0, 64);
 		tstruct = *localtime(&tv.tv_sec);
 		tms = tv.tv_usec / 1000;
 		strftime(timebuf, sizeof(timebuf), "%m-%d %X", &tstruct);
-		mbuf_printf(mb, "%s.%03u T(%p) %s%s",
+		mbuf_printf(logl->mb, "%s.%03u T(%p) %s%s",
 			   timebuf, tms,
 			   tid,
 			   level_prefix(level), msg);
 	}
 	else {
-		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
+		mbuf_printf(logl->mb, "%s%s", level_prefix(level), msg);
 	}
 
-
 	lock_write_get(avsd.log.lock);
+	list_append(&avsd.log.linel, &logl->le, logl);
+	lock_rel(avsd.log.lock);
+	sem_post(&avsd.log.sem);
+}
+
+static void *log_thread(void *arg)
+{
+	struct le *le;
+	FILE *fp;
 	
 	if (avsd.log.file)
 		fp = avsd.log.fp;
 	else
 		fp = stdout;
 
-	if (fp) {
-		fwrite(mb->buf, 1, mb->end, fp);
-		fflush(fp);
-	}
-	lock_rel(avsd.log.lock);
+	if (!fp)
+		return NULL;
 
-	mem_deref(mb);
+	do {
+		struct log_line *logl = NULL;
+
+		if (avsd.log.running)
+			sem_wait(&avsd.log.sem);
+
+		lock_write_get(avsd.log.lock);
+		le = avsd.log.linel.head;
+		if (le) {
+			logl = le->data;
+			list_unlink(le);
+		}
+		le = avsd.log.linel.head;
+		lock_rel(avsd.log.lock);
+		if (!logl) {
+			continue;
+		}
+
+		fwrite(logl->mb->buf, 1, logl->mb->end, fp);
+		fflush(fp);
+
+		mem_deref(logl);
+	}
+	while(le || avsd.log.running);
+
+	return NULL;
 }
 
 static struct log logh = {
@@ -248,7 +338,43 @@ static int load_secret(const char *path)
 
 	 return err;
  }
- 
+
+static void ife_destructor(void *arg)
+{
+	struct avs_service_ifentry *ife = arg;
+
+	mem_deref(ife->name);
+}
+
+static void generate_iflist(struct list *ifl, const char *ifstr)
+{
+	char *ifactual;
+	char *ifsep;
+	char *vstr;
+	int err;
+
+	info("avsd: generate_iflist: %s\n", ifstr);
+	err = str_dup(&ifactual, ifstr);
+	if (err)
+		return;
+
+	ifsep = ifactual;
+	while ((vstr = strsep(&ifsep, ",")) != NULL) {
+		struct avs_service_ifentry *ife;
+
+		ife = mem_zalloc(sizeof(*ife), ife_destructor);
+		while(isspace(*vstr)) {
+			++vstr;
+		}
+		//sa_set_str(&ife->sa, vstr, 0);
+		str_dup(&ife->name, vstr);
+		
+		list_append(ifl, &ife->le, ife);
+	}
+
+	mem_deref(ifactual);
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -262,11 +388,14 @@ int main(int argc, char *argv[])
 	memset(&avsd, 0, sizeof(avsd));
 
 	avsd.worker_count = NUM_WORKERS;
+	avsd.fir_timeout = TIMEOUT_FIR;
 	lock_alloc(&avsd.log.lock);
+	sem_init(&avsd.log.sem, 0, 0);
+	list_init(&avsd.log.linel);
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:b:c:f:I:l:M:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -296,6 +425,10 @@ int main(int argc, char *argv[])
 				goto out;
 			break;
 
+		case 'k':
+			avsd.fir_timeout = (uint64_t)atoi(optarg);
+			break;
+
 		case 'l':
 			avsd.log.file = true;
 			str_ncpy(avsd.log.prefix, optarg, sizeof(avsd.log.prefix));
@@ -308,6 +441,10 @@ int main(int argc, char *argv[])
 				goto out;
 			break;
 
+		case 'O':
+			generate_iflist(&avsd.ifl, optarg);
+			break;
+			
 		case 'p':
 			sa_set_port(&avsd.req_addr, atoi(optarg));
 			break;
@@ -381,6 +518,9 @@ int main(int argc, char *argv[])
 	}
 	
 	err = libre_init();
+	re_printf("AVS-service setting fd_setsize: %d\n", MAX_OPEN_FILES);
+	fd_setsize(0);
+	fd_setsize(MAX_OPEN_FILES);	
 	if (err)
 		goto out;
 
@@ -406,6 +546,10 @@ int main(int argc, char *argv[])
 		avsd.log.fp = fopen(log_file_name, "a");
 	}
 
+	/* Create logging thread */
+	avsd.log.running = true;
+	pthread_create(&avsd.log.th, NULL, log_thread, NULL);
+
 	log_register_handler(&logh);
 
 	err = module_init();
@@ -427,7 +571,6 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	
 	re_main(signal_handler);
 
  out:
@@ -438,6 +581,11 @@ int main(int argc, char *argv[])
 
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
+
+	log_unregister_handler(&logh);
+	avsd.log.running = false;
+	sem_post(&avsd.log.sem);
+	pthread_join(avsd.log.th, NULL);
 	avsd.log.lock = mem_deref(avsd.log.lock);
 	
 	/* check for memory leaks */
@@ -464,6 +612,12 @@ struct sa  *avs_service_media_addr(void)
 	return sa_isset(&avsd.media_addr, SA_ADDR) ? &avsd.media_addr
 		                                   : NULL;
 }
+
+struct list  *avs_service_iflist(void)
+{
+	return (avsd.ifl.head != NULL) ? &avsd.ifl : NULL;
+}
+
 
 struct sa  *avs_service_metrics_addr(void)
 {
@@ -527,4 +681,39 @@ const char *avs_service_secret_path(void)
 const struct pl *avs_service_secret(void)	
 {
 	return pl_isset(&avsd.secret) ? &avsd.secret : NULL;
+}
+
+uint64_t avs_service_fir_timeout(void)
+{
+	return avsd.fir_timeout;
+}
+
+bool avs_service_is_draining(void)
+{
+	return avsd.is_draining;
+}
+
+
+void avs_service_register_shutdown_handler(avs_service_shutdown_h *shuth, void *arg)
+{
+	struct shutdown_entry *se;
+
+	se = mem_zalloc(sizeof(*se), NULL);
+	if (!se)
+		return;
+
+	se->shuth = shuth;
+	se->arg = arg;
+
+	list_append(&avsd.shuthl, &se->le, se);	
+}
+
+
+void avs_service_terminate(void)
+{
+	list_flush(&avsd.ifl);
+	
+	module_close();
+	
+	re_cancel();
 }

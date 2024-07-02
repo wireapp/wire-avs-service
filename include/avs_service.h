@@ -1,3 +1,6 @@
+#define MAX_OPEN_FILES 1048576
+
+
 /*
  * HTTP Server
  */
@@ -40,6 +43,16 @@ int module_load(const char *name);
 
 struct sa  *avs_service_req_addr(void);
 struct sa  *avs_service_media_addr(void);
+
+/* Member of iflist */
+struct avs_service_ifentry {
+	struct sa sa;
+	char *name;
+
+	struct le le;
+};
+struct list  *avs_service_iflist(void);
+
 struct sa  *avs_service_metrics_addr(void);
 struct sa  *avs_service_sft_req_addr(void);
 const char *avs_service_url(void);
@@ -57,6 +70,13 @@ const char *avs_service_secret_path(void);
 
 const struct pl *avs_service_secret(void);
 
+bool avs_service_is_draining(void);
+void avs_service_terminate(void);
+
+typedef bool (avs_service_shutdown_h) (void *arg);
+void avs_service_register_shutdown_handler(avs_service_shutdown_h *shuth, void *arg);
+
+
 /*
  * Config
  */
@@ -67,6 +87,7 @@ int  config_init(void);
 void config_close(void);
 struct conf *avs_service_conf(void);
 int avs_service_worker_count(void);
+uint64_t avs_service_fir_timeout(void);
 
 /*
  * Workers

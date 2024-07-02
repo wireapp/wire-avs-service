@@ -4,8 +4,8 @@
 
 PROJECT	  := sftd
 
-SFT_VER_MAJOR := 0
-SFT_VER_MINOR := 0
+SFT_VER_MAJOR := 4
+SFT_VER_MINOR := 1
 ifeq ($(BUILD_NUMBER),)
 SFT_VER_BUILD := local
 else
@@ -56,7 +56,7 @@ CPPFLAGS += \
 	-DHAVE_PROTOBUF \
 	-DSFT_PROJECT='"$(PROJECT)"' \
 	-DSFT_VERSION='"$(SFT_VERSION)"' \
-	-DUSE_TRANSCC=0 \
+	-DUSE_REMB=1 \
 	-Iinclude \
 	-I$(BUILD)/include \
 	-I$(AVS_DIR)/include \
@@ -183,7 +183,7 @@ all: contrib $(MOD_BINS) $(BIN)
 
 $(BIN): $(CONTRIB_USRSCTP_TARGET) $(CONTRIB_AVS_TARGET) $(OBJS)
 	@echo "  LD      $@"
-	$(CC) $^ -L$(BUILD)/lib -L$(AVS_PATH)/lib $(LIBS) -o $@
+	$(CC) $^ $(LFLAGS) -L$(BUILD)/lib -L$(AVS_PATH)/lib $(LIBS) -o $@
 #-static -pie
 
 $(BUILD)/%.o: %.c $(BUILD_SRC) Makefile $(APP_MK)

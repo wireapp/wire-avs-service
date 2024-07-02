@@ -80,7 +80,7 @@ enum {
 enum {
 	AUDIO_BANDWIDTH = 32,   /* kilobits/second */
 	AUDIO_PTIME     = 40,   /* ms */
-	VIDEO_BANDWIDTH = 300,  /* kilobits/second */	
+	VIDEO_BANDWIDTH = 600,  /* kilobits/second */
 };
 
 enum {
@@ -308,8 +308,6 @@ struct reflow {
 
 	struct mediaflow *mf;
 	struct worker *worker;
-
-	bool use_transcc;
 
 	/* RTP streams */
 	struct {
@@ -695,7 +693,7 @@ static int dce_send_data_handler(struct mbuf *mb, void *arg)
 		return EINTR;
 	}
 
-#if 1
+#if 0
 	info("reflow(%p): sending DCE packet: %zu tls_conn=%p\n",
 	     rf, len, rf->tls_conn);
 #endif
@@ -2436,7 +2434,6 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	rf->use_transcc = USE_TRANSCC;
 	rf->dtls   = mem_ref(g_reflow.dtls);
 	rf->setup_local    = SETUP_ACTPASS;
 	rf->setup_remote   = SETUP_ACTPASS;
@@ -2500,10 +2497,10 @@ int reflow_alloc(struct iflow		**flowp,
 		"extmap", "1 urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on");
 	sdp_media_set_lattr(rf->audio.sdpm, false,
 			    "extmap", "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-	if (rf->use_transcc) {
-		sdp_media_set_lattr(rf->audio.sdpm, false,
-				    "extmap", "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-	}
+#if USE_TRANSCC
+	sdp_media_set_lattr(rf->audio.sdpm, false,
+			    "extmap", "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif
 	
 	rand_str(rf->cname, sizeof(rf->cname));
 	rand_str(rf->msid, sizeof(rf->msid));
@@ -2511,8 +2508,6 @@ int reflow_alloc(struct iflow		**flowp,
 	err |= uuid_v4(&rf->video.label);
 	if (err)
 		goto out;
-
-
 	
 
 	rf->lssrcv[MEDIA_AUDIO] = regen_lssrc(rf->lssrcv[MEDIA_AUDIO]);
@@ -2555,11 +2550,11 @@ int reflow_alloc(struct iflow		**flowp,
 		af->ac = ac;
 		list_append(&rf->audio.formatl, &af->le, af);
 
-		if (rf->use_transcc) {
-			sdp_media_set_lattr(rf->audio.sdpm, false,
-					    "rtcp-fb", "%s transport-cc",
-					    ac->pt);
-		}
+#if USE_TRANSCC
+		sdp_media_set_lattr(rf->audio.sdpm, false,
+				    "rtcp-fb", "%s transport-cc",
+				    ac->pt);
+#endif
 	}
 
 	reflow_add_video(rf, &g_reflow.vidcodecl);
@@ -2831,11 +2826,11 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	  "2 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-01");
 	*/
 
-	if (rf->use_transcc) {
-		sdp_media_set_lattr(rf->video.sdpm, false,
-				    "extmap",
-				    "4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-	}
+#if USE_TRANSCC
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif
 	
 	sdp_media_set_lattr(rf->video.sdpm, false, "rtcp-mux", NULL);
 
@@ -2910,11 +2905,17 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 				goto out;
 			}
 
-			if (rf->use_transcc) {
-				sdp_media_set_lattr(rf->video.sdpm, false,
-						    "rtcp-fb", "%s transport-cc",
-						    vc->pt);
-			}
+#if USE_TRANSCC
+			sdp_media_set_lattr(rf->video.sdpm, false,
+					    "rtcp-fb", "%s transport-cc",
+					    vc->pt);
+#endif
+#if USE_REMB
+			sdp_media_set_lattr(rf->video.sdpm, false,
+					    "rtcp-fb", "%s goog-remb",
+					    vc->pt);
+#endif
+
 			
 			ssrcv[i] = rand_u32();
 			re_snprintf(ssrc_group, sizeof(ssrc_group),
@@ -3469,6 +3470,7 @@ static void bundle_ssrc(struct reflow *rf,
 	sdp_media_set_lattr(newm, false, "ice-pwd", "%s", rf->ice_pwd);
 	
 	sdp_media_set_lattr(newm, true, "fingerprint", "%s", fingerprint);
+	sdp_media_set_lattr(newm, true, "setup", reflow_setup_name(rf->setup_local));
 	
 	if (is_video) {
 		sdp_media_set_lattr(newm, false, "extmap",
@@ -4513,9 +4515,11 @@ static void trice_failed_handler(int err, uint16_t scode,
 {
 	struct reflow *rf = arg;
 
+#if 0
 	info("reflow(%p): candpair not working [%H]\n",
 	     rf, trice_candpair_debug, pair);
 
+#endif
 
 	if (!list_isempty(trice_validl(rf->trice)))
 		return;
@@ -5827,6 +5831,20 @@ int reflow_add_turnserver(struct iflow *iflow,
 }
 
 
+static bool exist_ifl(struct list *ifl, const char *name)
+{
+	bool found = false;
+	struct le *le;
+
+	for(le = ifl->head; le && !found; le = le->next) {
+		struct avs_service_ifentry *ife = le->data;
+		
+		found = streq(ife->name, name);
+	}
+
+	return found;
+}
+
 static bool interface_handler(const char *ifname, const struct sa *sa,
 			      void *arg)
 {
@@ -5835,15 +5853,23 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 	struct interface *ifc;
 	const uint16_t lpref = calc_local_preference(ifname, sa_af(sa));
 	const uint32_t prio = ice_cand_calc_prio(ICE_CAND_TYPE_HOST, lpref, 1);
+	struct list *ifl;
 	int err = 0;
 
 	/* Skip loopback and link-local addresses */
 	if (sa_is_loopback(sa) || sa_is_linklocal(sa))
 		return false;
 
+	ifl = avs_service_iflist();
+	if (ifl) {
+		if (!exist_ifl(ifl, ifname))
+			return false;
+	}
+	
 	RFLOG(LOG_LEVEL_INFO,
-	      "adding local host interface: %s:%j\n",
+	      "adding local candidate interface: %s:%j\n",
 	      rf, ifname, sa);
+
 
 	if (!sa_isset(sa, SA_ADDR)) {
 		RFLOG(LOG_LEVEL_WARN, "address not set\n", rf);
@@ -5855,6 +5881,7 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		err =  EINVAL;
 		goto out;
 	}
+	
 
 	RFLOG(LOG_LEVEL_INFO, 
 	      "%s:%j  (lpref=0x%04x prio=0x%08x)\n",

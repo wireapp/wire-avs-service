@@ -38,7 +38,10 @@ struct work_balancer {
 };
 
 static struct work_balancer *workb = NULL;
-	
+
+static int push_task(struct worker *w, enum worker_task_id tid,
+		     worker_task_h *taskh, void *arg);
+
 
 static void workb_destructor(void *arg)
 {
@@ -50,40 +53,60 @@ static void workb_destructor(void *arg)
 		wb->v[i] = mem_deref(wb->v[i]);
 	}
 #endif
-	mem_deref(wb->v);	
-	mem_deref(wb->main);
+	mem_deref(wb->v);
+
+	/* Close down main thread */
+	info("workb_destructor: closing main\n");
+	workb->main->running = false;
+	//push_task(workb->main, WORKER_TASK_DEREF, NULL, NULL);
+	mem_deref(workb->main);
 }
+
 
 static void worker_destructor(void *arg)
 {
 	struct worker *w = arg;
 
+	info("worker_destructor: id=%d\n", w->id);
 	if (w->id > 0)
 		workb->v[w->id - 1] = (struct worker *)NULL;
-	
+
+	w->running = false;
 	tmr_cancel(&w->tmr);
+	lock_write_get(w->lock);
 	list_flush(&w->taskl);
+	lock_rel(w->lock);
 	mem_deref(w->lock);
-	
-	//mem_deref(w->mq);
 }
 
-static void perform_task(struct worker *w, struct worker_task *task)
+static bool perform_task(struct worker *w, struct worker_task *task)
 {
+	bool running = true; 
+	
 	switch(task->id) {
 	case WORKER_TASK_RUN:
+		running = true;
 		if (task && task->h)
 			task->h(task->arg);
 		break;
 		
 	case WORKER_TASK_QUIT:
 		info("worker_thread: cancelling wid=%d\n", w->id);
+		running = false;
 		re_cancel();
+		break;
+
+	case WORKER_TASK_DEREF:
+		info("worker_thread: destroying main\n");
+		running = false;
+		mem_deref(w);
 		break;
 
 	default:
 		break;
 	}
+
+	return running;
 }
 
 #if 0
@@ -103,6 +126,7 @@ static void worker_timeout_handler(void *arg)
 {
 	struct worker *w = arg;
 	struct le *le = NULL;
+	bool running = true;
 
 	//info("worker_timeout: w(%p): %d\n", w, w->id);
 	
@@ -112,18 +136,24 @@ static void worker_timeout_handler(void *arg)
 		lock_write_get(w->lock);
 		le = w->taskl.head;
 		if (le) {
-			list_unlink(le);
 			task = le->data;
+			/* Ref the task so we are sure nothing will
+			 * destruct it when the lock is released
+			 */
+			task = mem_ref(task);
+			list_unlink(le);
 		}
 		lock_rel(w->lock);
 		if (task) {
-			perform_task(w, task);
-			task = mem_deref(task);
+			running = perform_task(w, task);
+			mem_deref(task);
 		}
+		mem_deref(task);
 	}
-	while(le);
+	while(le && running);
 
-	tmr_start(&w->tmr, TIMEOUT_WORKER, worker_timeout_handler, w);	
+	if (running)
+		tmr_start(&w->tmr, TIMEOUT_WORKER, worker_timeout_handler, w);	
 }
 
 static void *worker_thread(void *arg)
@@ -134,9 +164,10 @@ static void *worker_thread(void *arg)
 	     w, pthread_self(), w->id);
 	
 	re_thread_init();
+	fd_setsize(0);
+	fd_setsize(MAX_OPEN_FILES);
 
 	w->ready = true;
-	//mqueue_alloc(&w->mq, task_handler, w);
 	tmr_start(&w->tmr, TIMEOUT_WORKER, worker_timeout_handler, w);	
 	re_main(NULL);
 	
@@ -327,7 +358,6 @@ void worker_close(void)
 			continue;
 
 		tid = w->tid;
-		w->running = false;
 		//err = mqueue_push(w->mq, WORKER_TASK_QUIT, NULL);
 		info("worker_close wid=%d\n", w->id);
 		err = push_task(w, WORKER_TASK_QUIT, NULL, NULL);
