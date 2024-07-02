@@ -234,7 +234,7 @@ static int load_secret(const char *path)
 		 warning("sft: failed to openj secret file: %s\n", path);
 		 return EBADF;
 	 }
-	 if (fscanf(fp, "%256s", secret) > 0) {
+	 if (fscanf(fp, "%255s", secret) > 0) {
 		 char *psec;
 		 info("sft: secret %s read\n", secret);
 
@@ -244,6 +244,7 @@ static int load_secret(const char *path)
 			 avsd.secret.l = str_len(secret);
 		 }
 	 }
+	 fclose(fp);
 
 	 return err;
  }
