@@ -63,6 +63,8 @@
 
 #define NUM_RTP_STREAMS 2
 
+void *(* volatile memset_s)(void *s, int c, size_t n) = memset;
+
 enum {
 	RTP_TIMEOUT_MS = 20000,
 	RTP_FIRST_PKT_TIMEOUT_MS = 10000,
@@ -1221,8 +1223,8 @@ static void dtls_estab_handler(void *arg)
 	check_data_channel(rf);
 
 	/* Wipe the keys from memory */
-	memset(cli_key, 0, sizeof(cli_key));
-	memset(srv_key, 0, sizeof(srv_key));
+	memset_s(cli_key, 0, sizeof(cli_key));
+	memset_s(srv_key, 0, sizeof(srv_key));
 
 	return;
 
@@ -1230,8 +1232,8 @@ static void dtls_estab_handler(void *arg)
 	warning("reflow(%p): DTLS-SRTP error (%m)\n", rf, err);
 
 	/* Wipe the keys from memory */
-	memset(cli_key, 0, sizeof(cli_key));
-	memset(srv_key, 0, sizeof(srv_key));
+	memset_s(cli_key, 0, sizeof(cli_key));
+	memset_s(srv_key, 0, sizeof(srv_key));
 
 	IFLOW_CALL_CB(rf->iflow, closeh,
 		err, rf->iflow.arg);
