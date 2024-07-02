@@ -1583,6 +1583,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	size_t len;
 	uint8_t aulevel;
 	bool have_parts = true;
+	int err = 0;
 
 	(void)wseq;
 
@@ -1598,7 +1599,10 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	
 	pos = mb->pos;
 	len = mbuf_get_left(mb);
-	rtp_hdr_decode(&rtp, mb);
+	err = rtp_hdr_decode(&rtp, mb);
+	if (err)
+		goto out;
+
 	ssrc = rtp.ssrc;
 
 	rtpxlen = rtp.x.len * sizeof(uint32_t);
@@ -1738,18 +1742,24 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 
 	/* Copy fixed part of header */
 	mb->pos = pos;
-	mbuf_read_mem(mb, rdata, 12);
+	err = mbuf_read_mem(mb, rdata, 12);
+	if (err)
+		goto out;
 
 	/* Set CC to 1 */
 	rdata[0] = rdata[0] | 0x1;
-	mbuf_read_mem(mb, rdata + 16, len - 12);
+	err = mbuf_read_mem(mb, rdata + 16, len - 12);
+	if (err)
+		goto out;
 
 	rmb.buf = rdata;
 	rmb.pos = 0;
 	rmb.size = rlen;
 	rmb.end = rmb.size;
 
-	rtp_hdr_decode(&rtp, &rmb);
+	err = rtp_hdr_decode(&rtp, &rmb);
+	if (err)
+		goto out;
 	rrtp = rtp;
 
 	/* Reset data to start of packet */
@@ -1911,7 +1921,10 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 			rtp.cc = 1;
 		 	rtp.csrc[0] = ssrc;
 			rmb.pos = 0;
-			rtp_hdr_encode(&rmb, &rtp);
+			err = rtp_hdr_encode(&rmb, &rtp);
+			if (err)
+				continue;
+
 			rmb.pos = 0;
 
 #if DEBUG_PACKET
@@ -1936,6 +1949,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 		deref_locked(rcall);
 	}
 
+ out:
 	mem_deref(rdata);
 }
 
@@ -5192,21 +5206,23 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 			struct le *le = group->calll.head;
 
 			pos = mb->pos;
-			rtp_hdr_decode(&rtp, mb);
-			mb->pos = pos;
+			err = rtp_hdr_decode(&rtp, mb);
+			if (!err) {
+				mb->pos = pos;
 
-			while(!found && le) {
-				call = le->data;
-				le = le->next;
+				while(!found && le) {
+					call = le->data;
+					le = le->next;
 				
-				found = call->issft &&
-					exist_ssrc(call, group->sft.ishost,
-						   rtp.ssrc,
-						   RTP_STREAM_TYPE_ANY);
-			}
-			if (found) {
-				reflow_rtp_recv(mb, call);
-				return true;
+					found = call->issft &&
+						exist_ssrc(call, group->sft.ishost,
+							   rtp.ssrc,
+							   RTP_STREAM_TYPE_ANY);
+				}
+				if (found) {
+					reflow_rtp_recv(mb, call);
+					return true;
+				}
 			}
 		}
 		else {
