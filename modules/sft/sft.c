@@ -447,9 +447,6 @@ static int alloc_icall(struct call *call,
 		       const char *cid,
 		       bool provisional);
 static void setup_timeout_handler(void *arg);
-static char *make_callid(const char *convid,
-			 const char *userid,
-			 const char *clientid);
 static void ecall_confmsg_handler(struct ecall *ecall,
 				  const struct econn_message *msg,
 				  void *arg);
@@ -599,34 +596,6 @@ static int assign_task_real(struct call *call, sft_task_h *taskh, void *arg, boo
 #endif
 
 static int append_group(struct group *group, struct call *call);
-
-static int split_paths(char *path, char **parts, int max_parts)
-{
-	int i = 0;
-
-	if (!path || !(*path))
-		return -1;
-
-	do {
-		/* Move forward to after slashes */
-		while (*path == '/')
-			++path;
-
-		if (*path == '\0')
-			break;
-
-		parts[i++] = path;
-
-		path = strchr(path, '/');
-		if (!path)
-			break;
-
-		*(path++) = '\0';
-	}
-	while (i < max_parts);
-
-	return i;
-}
 
 
 static void calc_rr(struct rtcp_rr *rr, struct ssrc_stats *s)
@@ -4284,9 +4253,9 @@ static void ecall_confmsg_handler(struct ecall *ecall,
 					     "call to group: %s(%p)\n",
 					     call, groupid, group);
 				
-					callid = make_callid(groupid,
-							     msg->src_userid,
-							     call->callid);
+					callid = helper_make_callid(groupid,
+								    msg->src_userid,
+								    call->callid);
 
 					dict_add(g_sft->calls, callid, call);
 					dict_remove(g_sft->provisional.calls,
@@ -4318,26 +4287,6 @@ static void ecall_confmsg_handler(struct ecall *ecall,
 }
 
 
-static char *make_callid(const char *convid,
-			 const char *userid,
-			 const char *clientid)
-{
-	size_t n;
-	char *callid;
-
-	n = str_len(convid);
-	n += str_len(userid);
-	n += str_len(clientid);
-	n += 5;
-
-	callid = mem_zalloc(n, NULL);
-	if (!callid)
-		return NULL;
-
-	re_snprintf(callid, n, "%s.%s.%s", convid, userid, clientid);
-
-	return callid;
-}
 
 
 static int alloc_icall(struct call *call,
@@ -4880,7 +4829,7 @@ static struct call *federate_request(struct group *group,
 			call->hconn = mem_deref(call->hconn);
 			call->hconn = mem_ref(hc);
 			call->callid = mem_deref(call->callid);
-			call->callid = make_callid("sft", convid, srcid);
+			call->callid = helper_make_callid("sft", convid, srcid);
 
 			dict_add(g_sft->calls, call->callid, call);
 			dict_remove(g_sft->provisional.calls, convid);
@@ -5133,7 +5082,7 @@ static void sft_req_handler(struct http_conn *hc,
 		goto out;
 	}
 
-	n = split_paths(url, paths, ARRAY_SIZE(paths));
+	n = helper_split_paths(url, paths, ARRAY_SIZE(paths));
 	if (n != 2) {
 		warning("sft: path missmatch expecting 2 got %d\n", n);
 		err = EINVAL;
@@ -5534,7 +5483,7 @@ static void http_req_handler(struct http_conn *hc,
 	sa = http_conn_peer(hc);
 	info("sft: incoming HTTP from: %J URL=%s\n", sa, url);
 	
-	n = split_paths(url, paths, ARRAY_SIZE(paths));
+	n = helper_split_paths(url, paths, ARRAY_SIZE(paths));
 	if (n != 2) {
 		warning("sft: path missmatch expecting 2 got %d\n", n);
 		err = EINVAL;
@@ -5568,7 +5517,7 @@ static void http_req_handler(struct http_conn *hc,
 
 	userid = cmsg->src_userid;
 	clientid = cmsg->src_clientid;
-	callid = make_callid(convid, userid, clientid);
+	callid = helper_make_callid(convid, userid, clientid);
 	call = find_call(sft, callid);
 	group = find_group(sft, convid);
 

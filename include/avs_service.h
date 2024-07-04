@@ -51,6 +51,7 @@ int module_load(const char *name);
 
 struct sa  *avs_service_req_addr(void);
 struct sa  *avs_service_media_addr(void);
+struct sa  *avs_service_get_req_addr(int ix);
 
 /* Member of iflist */
 struct avs_service_ifentry {
@@ -80,6 +81,7 @@ const struct pl *avs_service_secret(void);
 
 bool avs_service_is_draining(void);
 void avs_service_terminate(void);
+
 
 typedef bool (avs_service_shutdown_h) (void *arg);
 void avs_service_register_shutdown_handler(avs_service_shutdown_h *shuth, void *arg);
@@ -222,3 +224,14 @@ int zrest_get_password(char *pass, size_t *passlen, const char *user,
 void zrest_generate_sft_username(char *user, size_t sz);
 enum zrest_state zrest_authenticate(const char *user, const char *credential);
 
+
+/* Load balancer */
+int lb_init(int nprocs);
+void lb_close(void);
+
+
+/* Helper functions */
+int helper_split_paths(char *path, char **parts, int max_parts);
+char *helper_make_callid(const char *convid,
+			 const char *userid,
+			 const char *clientid);

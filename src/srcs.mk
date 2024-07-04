@@ -3,7 +3,9 @@
 #
 
 SRCS    += config.c
+SRCS 	+= helper.c
 SRCS	+= httpd.c
+SRCS	+= lb.c
 SRCS	+= main.c
 SRCS    += mediapump.c
 SRCS	+= module.c

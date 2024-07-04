@@ -25,6 +25,7 @@
 #include <signal.h>
 #include <getopt.h>
 #include <time.h>
+#include <sys/sysinfo.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <wordexp.h>
@@ -66,7 +67,7 @@ struct avs_service {
 		char prefix[256];	
 		FILE *fp;
 		bool file;
-		struct lock *lock;
+		bool running;
 	} log;
 
 	int worker_count;
@@ -78,14 +79,30 @@ struct avs_service {
 
 	struct dnsc *dnsc;
 
+	struct {
+		bool enabled;
+		int nprocs;
+		bool main;
+		struct sa *req_addr;
+		struct sa *metrics_addr;
+	} lb;
+
 	struct list shuthl;
 };
+
 static struct avs_service avsd = {
        .worker_count = NUM_WORKERS,
        .use_turn = false,
        .use_auth = false,
        .secret = PL_INIT,
        .dnsc = NULL,
+
+       /* lb */
+       .lb.enabled = false,
+       .lb.nprocs = 0,
+       .lb.main = false,
+       .lb.req_addr = NULL,
+       .lb.metrics_addr = NULL,
 };
 
 
@@ -96,6 +113,8 @@ struct shutdown_entry {
 	struct le le;
 };
 
+#define LOCALHOST_IPV4 "127.0.0.1"
+
 #define DEFAULT_REQ_ADDR "127.0.0.1"
 #define DEFAULT_REQ_PORT 8585
 
@@ -104,6 +123,8 @@ struct shutdown_entry {
 
 #define DEFAULT_SFT_REQ_ADDR "127.0.0.1"
 #define DEFAULT_SFT_REQ_PORT 9999
+
+#define DEFAULT_MEDIA_ADDR "127.0.0.1"
 
 
 static void usage(void)
@@ -226,33 +247,24 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 		uint32_t tms;
 		char timebuf[64];
 		const pthread_t tid = pthread_self();
+		const int pid = getpid();
 
 		memset(timebuf, 0, 64);
 		tstruct = *localtime(&tv.tv_sec);
 		tms = tv.tv_usec / 1000;
 		strftime(timebuf, sizeof(timebuf), "%m-%d %X", &tstruct);
-		mbuf_printf(mb, "%s.%03u T(%p) %s%s",
-			   timebuf, tms,
-			   tid,
-			   level_prefix(level), msg);
+		mbuf_printf(mb, "%s.%03u P(%d(%s)) T(%p) %s%s",
+			    timebuf, tms,
+			    pid, avsd.lb.main ? "main" : "child",
+			    tid,
+			    level_prefix(level), msg);
 	}
 	else {
 		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
 	}
 
-
-	lock_write_get(avsd.log.lock);
-	
-	if (avsd.log.file)
-		fp = avsd.log.fp;
-	else
-		fp = stdout;
-
-	if (fp) {
-		fwrite(mb->buf, 1, mb->end, fp);
-		fflush(fp);
-	}
-	lock_rel(avsd.log.lock);
+	fwrite(mb->buf, 1, mb->end, avsd.log.fp);
+	fflush(avsd.log.fp);
 
 	mem_deref(mb);
 }
@@ -340,11 +352,12 @@ int main(int argc, char *argv[])
 
 	avsd.worker_count = NUM_WORKERS;
 	avsd.fir_timeout = TIMEOUT_FIR;
-	lock_alloc(&avsd.log.lock);
+	avsd.log.fp = stdout;
+	avsd.lb.nprocs = get_nprocs();
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:b:c:df:I:k:l:M:n:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -360,6 +373,10 @@ int main(int argc, char *argv[])
 		case 'b':
 			str_ncpy(avsd.blacklist, optarg,
 				 sizeof(avsd.blacklist));
+			break;
+
+		case 'd':
+			avsd.lb.enabled = true;
 			break;
 
 		case 'f':
@@ -388,6 +405,10 @@ int main(int argc, char *argv[])
 					 DEFAULT_METRICS_PORT);
 			if (err)
 				goto out;
+			break;
+
+		case 'n':
+			avsd.lb.nprocs = atoi(optarg);
 			break;
 
 		case 'O':
@@ -454,6 +475,13 @@ int main(int argc, char *argv[])
 			   sa_port(&avsd.req_addr));
 	}
 
+	/* Media address */
+	if (sa_af(&avsd.media_addr) == 0)
+		sa_init(&avsd.media_addr, AF_INET);
+	if (!sa_isset(&avsd.media_addr, SA_ADDR)) {
+		sa_set_str(&avsd.media_addr, DEFAULT_MEDIA_ADDR, 0);
+	}
+
 	/* Metrics address */
 	if (sa_af(&avsd.metrics_addr) == 0)
 		sa_init(&avsd.metrics_addr, AF_INET);
@@ -468,10 +496,56 @@ int main(int argc, char *argv[])
 	if (!str_isset(avsd.url)) {
 		re_snprintf(avsd.url, sizeof(avsd.url),
 			 "http://%J", &avsd.req_addr);
+	}	
+
+	if (avsd.lb.enabled) {
+		int nprocs = 0;
+		pid_t pid;
+
+		avsd.worker_count = 0;
+		avsd.lb.req_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.req_addr), NULL);
+		if (!avsd.lb.req_addr)
+			return ENOMEM;
+		avsd.lb.metrics_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.metrics_addr),
+						  NULL);
+		if (!avsd.lb.metrics_addr)
+			return ENOMEM;
+		
+		do {
+			int req_port;
+			int metrics_port;
+			struct sa rsa;
+			struct sa msa;
+			
+			pid = fork();	
+			printf("pid: %d main=%d nprocs: %d port=%d\n",
+			       pid, avsd.lb.main, nprocs, sa_port(&avsd.req_addr));
+			req_port = sa_port(&avsd.req_addr) + nprocs + 1;
+			metrics_port = sa_port(&avsd.metrics_addr) + nprocs + 1;
+
+			sa_set_str(&rsa, LOCALHOST_IPV4, req_port);
+			sa_set_str(&msa, LOCALHOST_IPV4, metrics_port);
+			
+			if (pid == 0) {
+				avsd.lb.main = false;
+				avsd.worker_count = 0;
+				sa_cpy(&avsd.req_addr, &rsa);
+				sa_cpy(&avsd.metrics_addr, &msa);
+			}
+			else if (pid > 0) {
+				avsd.lb.main = true;
+				sa_cpy(&avsd.lb.req_addr[nprocs], &rsa);
+				sa_cpy(&avsd.lb.metrics_addr[nprocs], &msa);
+			}
+			++nprocs;
+		}
+		while(nprocs < avsd.lb.nprocs && pid > 0);
 	}
+
+	printf("pid=%d(%s) workers=%d\n", getpid(), avsd.lb.main ? "main" : "child", avsd.worker_count);
 	
 	err = libre_init();
-	re_printf("AVS-service setting fd_setsize: %d\n", MAX_OPEN_FILES);
+	re_printf("pid=%d AVS-service setting fd_setsize: %d\n", getpid(), MAX_OPEN_FILES);
 	fd_setsize(0);
 	fd_setsize(MAX_OPEN_FILES);	
 	if (err)
@@ -501,12 +575,17 @@ int main(int argc, char *argv[])
 
 	log_register_handler(&logh);
 
-	err = module_init();
-	if (err) {
-		warning("%s: module_init failed: %m\n", argv[0], err);
-		goto out;
+	if (avsd.lb.main) {
+		lb_init(avsd.lb.nprocs);
 	}
-	
+	else {
+		err = module_init();
+		if (err) {
+			warning("%s: module_init failed: %m\n", argv[0], err);
+			goto out;
+		}
+	}
+
 	avsd.start_time = time(NULL);
 
 	re_printf("welcome to AVS-service -- using '%s'\n", avs_version_str());
@@ -530,7 +609,8 @@ int main(int argc, char *argv[])
 
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
-	avsd.log.lock = mem_deref(avsd.log.lock);
+	log_unregister_handler(&logh);
+	avsd.log.running = false;
 	
 	/* check for memory leaks */
 	tmr_debug();
@@ -549,6 +629,14 @@ int main(int argc, char *argv[])
 struct sa  *avs_service_req_addr(void)
 {
 	return &avsd.req_addr;
+}
+
+struct sa *avs_service_get_req_addr(int ix)
+{
+	if (ix < 0 || ix >= avsd.lb.nprocs)
+		return NULL;
+
+	return &avsd.lb.req_addr[ix];
 }
 
 struct sa  *avs_service_media_addr(void)
@@ -660,4 +748,10 @@ void avs_service_terminate(void)
 	module_close();
 	
 	re_cancel();
+
+	mem_deref(avsd.lb.req_addr);
+	mem_deref(avsd.lb.metrics_addr);
+	if (avsd.lb.main) {
+		lb_close();
+	}
 }
