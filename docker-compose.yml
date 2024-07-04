@@ -1,0 +1,25 @@
+networks:
+  wire_sft:
+
+name: wire-avs-service
+
+services:
+  sft-base:
+    build:
+      context: .
+    command:  /bin/make -C /build/sftd RELEASE=1 EXTRA_CFLAGS=""
+  sft:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      - sft-base
+    ports:
+      - '8585:8585/tcp'
+      - '49090:49090/tcp'
+      - '40000-40100:40000-40100/tcp'
+      - '40000-40100:40000-40100/udp'
+    volumes:
+      - .:/build/sftd
+    networks:
+      - wire_sft
