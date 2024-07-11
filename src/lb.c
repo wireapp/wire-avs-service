@@ -53,17 +53,19 @@ struct lb {
 struct group {
 	struct http_cli *httpc;
 	struct sa anchorsa;
+	struct sa anchor_sftsa;
 	uint32_t anchorid;
 
 	struct dict *calls;
 
 	struct tmr tmr_inactive;
+
+	char *id;
 };
 
 struct call {
-	uint32_t id;
-	char *callid;
-	int sftid;
+	char *id;
+	uint32_t sftid;
 	struct sa sftsa;
 	struct sa anchorsa;
 };
@@ -90,7 +92,8 @@ static void group_destructor(void *arg)
 	struct group *group = arg;
 
 	tmr_cancel(&group->tmr_inactive);
-	
+
+	mem_deref(group->id);
 	mem_deref(group->httpc);
 	mem_deref(group->calls);
 }
@@ -102,7 +105,7 @@ static void timeout_group_inactive(void *arg)
 
 	info("lb: group(%p): inactive timeout\n");
 
-	mem_deref(group);
+	dict_remove(g_lb.groups, group->id);	
 }
 
 static uint32_t make_sftid(const char *hid)
@@ -131,13 +134,15 @@ static int alloc_group(struct group **groupp, struct lb *lb, const char *groupid
 	err = dict_alloc(&group->calls);
 	if (err)
 		goto out;
+
+	str_dup(&group->id, groupid);
 	
 	group->anchorid = make_sftid(groupid);
 	sa_cpy(&group->anchorsa, avs_service_get_req_addr(group->anchorid));
+	sa_cpy(&group->anchor_sftsa, avs_service_get_sft_addr(group->anchorid));
 
-	info("lb: alloc_group: group=%p anchorid=%d(%J)\n", group, group->anchorid, &group->anchorsa);
+	info("lb: alloc_group: group=%p anchorid=%d(%J)(%J)\n", group, group->anchorid, &group->anchorsa, &group->anchor_sftsa);
 	
-	tmr_start(&group->tmr_inactive, TIMEOUT_INACTIVE, timeout_group_inactive, group);	
 
  out:
 	if (err)
@@ -152,7 +157,7 @@ static void call_destructor(void *arg)
 {
 	struct call *call = arg;
 
-	mem_deref(call->callid);
+	mem_deref(call->id);
 }
 
 static int alloc_call(struct call **callp, struct group *group, const char *callid)
@@ -167,7 +172,7 @@ static int alloc_call(struct call **callp, struct group *group, const char *call
 	if (!call)
 		return ENOMEM;
 
-	str_dup(&call->callid, callid);
+	str_dup(&call->id, callid);
 
 	if (err)
 		goto out;
@@ -313,12 +318,6 @@ static void http_req_handler(struct http_conn *hc,
 		goto bad_req;
 	}
 
-	printf("URL has %d paths\n", n);
-	for (i = 0; i < n; ++i) {
-		printf("path[%d]=%s\n", i, paths[i]);
-	}
-	
-
 	convid = paths[1];
 
 	if (streq(convid, "status")) {
@@ -358,8 +357,16 @@ static void http_req_handler(struct http_conn *hc,
 		err = alloc_group(&group, lb, convid);
 		if (err)
 			goto out;
+
+		dict_add(lb->groups, group->id, group);
+		/* Group is now owned by groups dictionary */
+		mem_deref(group);
+
 		group_created = true;
 	}
+	
+	tmr_start(&group->tmr_inactive, TIMEOUT_INACTIVE,
+		  timeout_group_inactive, group);
 
 	callid = helper_make_callid(convid, userid, clientid);
 	
@@ -369,7 +376,7 @@ static void http_req_handler(struct http_conn *hc,
 		if (err)
 			goto out;
 
-		dict_add(group->calls, callid, call);
+		dict_add(group->calls, call->id, call);
 		/* Call is now owned by the group's call dictionary */
 		mem_deref(call);
 
@@ -381,10 +388,36 @@ static void http_req_handler(struct http_conn *hc,
 		}
 		else {
 			call->sftid = make_sftid(callid);
+#if 0
+			/* XXX TEST */
+			if (call->sftid == group->anchorid) {
+				call->sftid = (call->sftid + 1) % g_lb.nprocs;
+			}
+#endif
+				
 			sa_cpy(&call->sftsa, avs_service_get_req_addr(call->sftid));
 		}
 	
 		
+	}
+
+	info("lb: anchorid=%d(%J) sftid=%d(%J)\n",
+	     group->anchorid, &group->anchor_sftsa,
+	     call->sftid, &call->sftsa);
+	
+	if (cmsg->msg_type == ECONN_CONF_CONN
+	    && call->sftid != group->anchorid) {		
+		char sft_url[256];
+
+		re_snprintf(sft_url, sizeof(sft_url),
+			    "http://%J", &group->anchor_sftsa);
+
+		info("lb: setting sft_url=%s\n", sft_url);
+		
+		str_dup(&cmsg->u.confconn.sft_url, sft_url);
+
+		econn_message_encode(&body, cmsg);
+		bodysz = str_len(body);
 	}
 	
 	rctx = mem_zalloc(sizeof(*rctx), rctx_destructor);
@@ -398,6 +431,7 @@ static void http_req_handler(struct http_conn *hc,
 	re_snprintf(sfturl, sizeof(sfturl), "http://%J%s", &call->sftsa, orig_url);
 
 	info("sending request: %s\n", sfturl);
+
 	
 	err = http_request(&rctx->http_req, group->httpc,
 			   "POST", sfturl, sft_resp_handler, sft_data_handler, rctx, 
@@ -413,7 +447,6 @@ static void http_req_handler(struct http_conn *hc,
 		goto out;
 	}
 
-	tmr_start(&group->tmr_inactive, TIMEOUT_INACTIVE, timeout_group_inactive, group);
 
  out:
  bad_req:
@@ -424,12 +457,10 @@ static void http_req_handler(struct http_conn *hc,
 	if (err) {
 		if (group_created) {
 			dict_remove(lb->groups, convid);
-			mem_deref(group);
 		}
 		if (call_created) {
 			if (group && callid)
 				dict_remove(group->calls, callid);
-			mem_deref(call);
 		}
 		
 		/* If there was a sending error, maybe send a 5xx response? */
@@ -467,6 +498,8 @@ static bool group_flush_handler(char *key, void *val, void *arg)
 	struct group *group = val;
 	
 	mem_deref(group->calls);
+
+	return false;
 }
 
 void lb_close(void)

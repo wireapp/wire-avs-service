@@ -55,6 +55,7 @@ struct avs_service {
 	char url[256];
 	char federation_url[256];
 	char blacklist[256];
+	bool direct_federation;
 
 	struct list ifl;
 
@@ -85,6 +86,7 @@ struct avs_service {
 		bool main;
 		struct sa *req_addr;
 		struct sa *metrics_addr;
+		struct sa *sft_addr;
 	} lb;
 
 	struct list shuthl;
@@ -96,6 +98,7 @@ static struct avs_service avsd = {
        .use_auth = false,
        .secret = PL_INIT,
        .dnsc = NULL,
+       .direct_federation = false,
 
        /* lb */
        .lb.enabled = false,
@@ -103,6 +106,7 @@ static struct avs_service avsd = {
        .lb.main = false,
        .lb.req_addr = NULL,
        .lb.metrics_addr = NULL,
+       .lb.sft_addr = NULL,
 };
 
 
@@ -236,7 +240,6 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
 	struct mbuf *mb;
-	FILE *fp = NULL;
 
 	mb = mbuf_alloc(1024);
 	if (!mb)
@@ -344,6 +347,7 @@ int main(int argc, char *argv[])
 	enum log_level log_level = LOG_LEVEL_DEBUG;
 	char log_file_name[255];
 	struct sa goog;
+	struct sa sftsa;
 	int err;
 	
 	(void)sys_coredump_set(true);
@@ -496,67 +500,8 @@ int main(int argc, char *argv[])
 	if (!str_isset(avsd.url)) {
 		re_snprintf(avsd.url, sizeof(avsd.url),
 			 "http://%J", &avsd.req_addr);
-	}	
-
-	if (avsd.lb.enabled) {
-		int nprocs = 0;
-		pid_t pid;
-
-		avsd.worker_count = 0;
-		avsd.lb.req_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.req_addr), NULL);
-		if (!avsd.lb.req_addr)
-			return ENOMEM;
-		avsd.lb.metrics_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.metrics_addr),
-						  NULL);
-		if (!avsd.lb.metrics_addr)
-			return ENOMEM;
-		
-		do {
-			int req_port;
-			int metrics_port;
-			struct sa rsa;
-			struct sa msa;
-			
-			pid = fork();	
-			printf("pid: %d main=%d nprocs: %d port=%d\n",
-			       pid, avsd.lb.main, nprocs, sa_port(&avsd.req_addr));
-			req_port = sa_port(&avsd.req_addr) + nprocs + 1;
-			metrics_port = sa_port(&avsd.metrics_addr) + nprocs + 1;
-
-			sa_set_str(&rsa, LOCALHOST_IPV4, req_port);
-			sa_set_str(&msa, LOCALHOST_IPV4, metrics_port);
-			
-			if (pid == 0) {
-				avsd.lb.main = false;
-				avsd.worker_count = 0;
-				sa_cpy(&avsd.req_addr, &rsa);
-				sa_cpy(&avsd.metrics_addr, &msa);
-			}
-			else if (pid > 0) {
-				avsd.lb.main = true;
-				sa_cpy(&avsd.lb.req_addr[nprocs], &rsa);
-				sa_cpy(&avsd.lb.metrics_addr[nprocs], &msa);
-			}
-			++nprocs;
-		}
-		while(nprocs < avsd.lb.nprocs && pid > 0);
 	}
 
-	printf("pid=%d(%s) workers=%d\n", getpid(), avsd.lb.main ? "main" : "child", avsd.worker_count);
-	
-	err = libre_init();
-	re_printf("pid=%d AVS-service setting fd_setsize: %d\n", getpid(), MAX_OPEN_FILES);
-	fd_setsize(0);
-	fd_setsize(MAX_OPEN_FILES);	
-	if (err)
-		goto out;
-
-	err = avs_init(0);
-	if (err)
-		goto out;
-
-	log_set_min_level(log_level);
-	log_enable_stderr(false);
 	if (avsd.log.file) {
 		char  buf[256];
 		time_t     now = time(0);
@@ -572,7 +517,77 @@ int main(int argc, char *argv[])
 
 		avsd.log.fp = fopen(log_file_name, "a");
 	}
+	
 
+	if (avsd.lb.enabled) {
+		int nprocs = 0;
+		pid_t pid;
+
+		avsd.worker_count = 0;
+		avsd.lb.req_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.req_addr), NULL);
+		if (!avsd.lb.req_addr)
+			return ENOMEM;
+		avsd.lb.metrics_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.metrics_addr),
+						  NULL);
+		if (!avsd.lb.metrics_addr)
+			return ENOMEM;
+
+		avsd.lb.sft_addr = mem_zalloc(avsd.lb.nprocs * sizeof(*avsd.lb.sft_addr), NULL);
+		if (!avsd.lb.sft_addr)
+			return ENOMEM;
+		
+		sa_cpy(&sftsa, &avsd.sft_req_addr);
+		
+		do {
+			int req_port;
+			int metrics_port;
+			int sft_port;
+			struct sa rsa;
+			struct sa msa;
+			struct sa ssa;
+			
+			pid = fork();
+
+			req_port = sa_port(&avsd.req_addr) + nprocs;
+			metrics_port = sa_port(&avsd.metrics_addr) + nprocs + 1;
+			sft_port = sa_port(&sftsa) + nprocs;
+
+			sa_set_str(&rsa, LOCALHOST_IPV4, req_port);
+			sa_set_str(&msa, LOCALHOST_IPV4, metrics_port);
+			sa_set_str(&ssa, LOCALHOST_IPV4, sft_port);
+			
+			if (pid == 0) {
+				avsd.lb.main = false;
+				avsd.worker_count = 0;
+				avsd.direct_federation = true;
+				sa_cpy(&avsd.req_addr, &rsa);
+				sa_cpy(&avsd.metrics_addr, &msa);
+				sa_cpy(&avsd.sft_req_addr, &ssa);
+			}
+			else if (pid > 0) {
+				avsd.lb.main = true;
+				sa_cpy(&avsd.lb.req_addr[nprocs], &rsa);
+				sa_cpy(&avsd.lb.metrics_addr[nprocs], &msa);
+				sa_cpy(&avsd.lb.sft_addr[nprocs], &ssa);
+				sa_init(&avsd.sft_req_addr, AF_INET);
+			}
+			++nprocs;
+		}
+		while(nprocs < avsd.lb.nprocs && pid > 0);
+	}
+
+	err = libre_init();
+	fd_setsize(0);
+	fd_setsize(MAX_OPEN_FILES);	
+	if (err)
+		goto out;
+
+	err = avs_init(0);
+	if (err)
+		goto out;
+
+	log_set_min_level(log_level);
+	log_enable_stderr(false);
 	log_register_handler(&logh);
 
 	if (avsd.lb.main) {
@@ -588,7 +603,6 @@ int main(int argc, char *argv[])
 
 	avsd.start_time = time(NULL);
 
-	re_printf("welcome to AVS-service -- using '%s'\n", avs_version_str());
 	info("welcome to AVS-service -- using '%s'\n", avs_version_str());
 
 	sa_init(&goog, AF_INET);
@@ -637,6 +651,14 @@ struct sa *avs_service_get_req_addr(int ix)
 		return NULL;
 
 	return &avsd.lb.req_addr[ix];
+}
+
+struct sa *avs_service_get_sft_addr(int ix)
+{
+	if (ix < 0 || ix >= avsd.lb.nprocs)
+		return NULL;
+
+	return &avsd.lb.sft_addr[ix];
 }
 
 struct sa  *avs_service_media_addr(void)
@@ -695,6 +717,11 @@ const char *avs_service_federation_url(void)
 	return avsd.federation_url[0] != '\0' ? avsd.federation_url : NULL;
 }
 
+bool avs_service_direct_federation(void)
+{
+	return avsd.direct_federation;
+}
+
 const char *avs_service_turn_url(void)
 {
 	return avsd.turn.url[0] != '\0' ? avsd.turn.url : NULL;
@@ -744,6 +771,7 @@ void avs_service_register_shutdown_handler(avs_service_shutdown_h *shuth, void *
 void avs_service_terminate(void)
 {
 	list_flush(&avsd.ifl);
+	list_flush(&avsd.shuthl);
 	
 	module_close();
 	
@@ -751,6 +779,7 @@ void avs_service_terminate(void)
 
 	mem_deref(avsd.lb.req_addr);
 	mem_deref(avsd.lb.metrics_addr);
+	mem_deref(avsd.lb.sft_addr);
 	if (avsd.lb.main) {
 		lb_close();
 	}

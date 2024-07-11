@@ -52,6 +52,7 @@ int module_load(const char *name);
 struct sa  *avs_service_req_addr(void);
 struct sa  *avs_service_media_addr(void);
 struct sa  *avs_service_get_req_addr(int ix);
+struct sa  *avs_service_get_sft_addr(int ix);
 
 /* Member of iflist */
 struct avs_service_ifentry {
@@ -73,6 +74,7 @@ bool avs_service_use_auth(void);
 
 struct dnsc *avs_service_dnsc(void);
 const char *avs_service_federation_url(void);
+bool avs_service_direct_federation(void);
 
 const char *avs_service_turn_url(void);
 const char *avs_service_secret_path(void);

@@ -899,7 +899,7 @@ static int send_packet(struct reflow *rf, size_t headroom,
 						  ICE_CAND_TYPE_HOST,
 						  AF_INET6);
 			if (lcand) {
-				info("reflow(%p): send_packet: \n",
+				info("reflow(%p): send_packet:"
 				     " using local IPv6 socket\n", rf);
 				sock = lcand->us;
 			}
@@ -907,7 +907,7 @@ static int send_packet(struct reflow *rf, size_t headroom,
 
 #if 0
 		debug("reflow(%p): send helper: udp_send: "
-		      "sock=%p raddr=%p mb=%p\n", rf, sock, raddr, mb);
+		      "sock=%p raddr=%J mb=%p\n", rf, sock, raddr, mb);
 #endif
 		err = udp_send(sock, raddr, mb);
 		if (err) {
@@ -5878,6 +5878,10 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		RFLOG(LOG_LEVEL_WARN, "port should not be set\n", rf);
 		err =  EINVAL;
 		goto out;
+	}
+
+	if (AF_INET6 == sa_af(sa)) {
+		return false;
 	}
 	
 
