@@ -146,8 +146,11 @@ typedef void (mediaflow_remove_ssrc_h)(struct mediaflow *mf, uint32_t ssrc);
 typedef void (mediaflow_recv_data_h)(struct mbuf *mb, void *arg);
 typedef void (mediaflow_recv_dc_h)(struct mbuf *mb, void *arg);
 typedef int  (mediaflow_assign_streams_h)(struct mediaflow *mf,
-					  uint32_t **assrcv, int assrcc,
-					  uint32_t **vssrcv, int vssrcc);
+					  uint32_t **assrcv,
+					  int assrcc,
+					  uint32_t **vssrcv,
+					  uint32_t **rtx_ssrcv,
+					  int vssrcc);
 typedef void (mediapump_set_handlers_h)(mediaflow_alloc_h *alloch,
 					mediaflow_close_h *closeh,
 					mediaflow_recv_data_h *rtph,
@@ -177,8 +180,11 @@ int mediapump_set_handlers(struct mediapump *mp,
 			   mediaflow_recv_dc_h *dch);
 void mediaflow_assign_worker(struct mediaflow *mf, struct worker *w);
 int mediaflow_assign_streams(struct mediaflow *mf,
-			     uint32_t **assrcv, int assrcc,
-			     uint32_t **vssrcv, int vssrcc);
+			     uint32_t **assrcv,
+			     int assrcc,
+			     uint32_t **vssrcv,
+			     uint32_t **rtx_ssrcv,
+			     int vssrcc);
 int mediaflow_send_rtp(struct mediaflow *mf,
 		       const uint8_t *data, size_t len);
 int mediaflow_send_rtcp(struct mediaflow *mf,

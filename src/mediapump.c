@@ -98,18 +98,22 @@ void mediaflow_assign_worker(struct mediaflow *mf, struct worker *w)
 }
 
 int mediaflow_assign_streams(struct mediaflow *mf,
-			      uint32_t **assrcv, int assrcc,
-			      uint32_t **vssrcv, int vssrcc)
+			     uint32_t **assrcv,
+			     int assrcc,
+			     uint32_t **vssrcv,
+			     uint32_t **rtx_ssrcv,
+			     int vssrcc)
 {
 	struct mediapump *mp;
 	int err = ENOSYS;
-	
+
 	if (!mf)
 		return EINVAL;
 
 	mp = mf->mp;
 	if (mp && mp->assign_streamsh) {
-		err = mp->assign_streamsh(mf, assrcv, assrcc, vssrcv, vssrcc);
+		err = mp->assign_streamsh(mf, assrcv, assrcc,
+					  vssrcv, rtx_ssrcv, vssrcc);
 	}
 
 	return err;

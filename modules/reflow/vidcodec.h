@@ -29,5 +29,6 @@ struct vidcodec {
 	const char *variant;
 	const char *fmtp;
 	const char **extensions;
+	bool uses_rtcp;
 };
 

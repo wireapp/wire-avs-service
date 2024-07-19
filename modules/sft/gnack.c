@@ -150,6 +150,12 @@ void gnack_handler(struct call *call, struct gnack_rtx_stream *rs,
 					rtcp->r.fb.fci.gnackv[i].blp);
 			if (n > 0)
 				gsendh(call, rs, &rtxl);
+			else {
+				warning("gnack_handler: no packet found for ssrc=%u seq=%d[%04x)\n",
+					rtcp->r.fb.ssrc_media,
+					rtcp->r.fb.fci.gnackv[i].pid,
+					rtcp->r.fb.fci.gnackv[i].blp);
+			}
 		}
 
 		list_flush(&rtxl);

@@ -40,6 +40,8 @@
 
 #include "zauth.h"
 
+#include "gnack.h"
+
 #define SFT_TOKEN "sft-"
 
 /* Use libre internal rtcp function */
@@ -197,6 +199,7 @@ struct pending_msg {
 #define TIMEOUT_TRANSCC 150
 #define TIMEOUT_PROVISIONAL 10000
 
+
 /* Moved to avs_service as cmdline param or default
  * #define TIMEOUT_FIR 3000
  */
@@ -278,6 +281,8 @@ struct rtp_stream {
 	uint32_t current_ssrc;
 	uint16_t last_seq;
 	uint32_t last_ts;
+
+	struct gnack_rtx_stream rtx;
 };
 
 struct video_stream {
@@ -337,6 +342,7 @@ struct call {
 
 		bool is_selective;
 		uint32_t *ssrcv;
+		uint32_t *rtx_ssrcv;
 		int ssrcc;
 	} video;
 
@@ -695,8 +701,21 @@ static struct call *find_call(struct sft *sft, const char *callid)
 	return call;
 }
 
+static void rtp_stream_destroy(struct rtp_stream *rs, int ssrcc)
+{
+	int i;
+
+	for (i = 0; i < ssrcc; ++i) {
+		list_flush(&(rs[i].rtx.l));
+	}
+
+	mem_deref(rs);
+}
+
 static void rtp_stream_create(struct call *call,
-			      uint32_t *ssrcv, int ssrcc,
+			      uint32_t *ssrcv,
+			      uint32_t *rtx_ssrcv,
+			      int ssrcc,
 			      enum rtp_stream_type rst)
 {
 	struct rtp_stream *rs;
@@ -707,20 +726,29 @@ static void rtp_stream_create(struct call *call,
 		ssrcc = 0;
 
 	for (i = 0; i < ssrcc; ++i) {
+
 		rs[i].level = AUDIO_LEVEL_ABS_SILENCE;
 		rs[i].type = rst;
 		rs[i].ssrc = ssrcv[i];
+
+		list_init(&rs[i].rtx.l);
+		rs[i].rtx.seq = rand_u16();
+		if (rtx_ssrcv) {
+			rs[i].rtx.ssrc = rtx_ssrcv[i];
+		}
 	}
-       
+
 	switch(rst) {
 	case RTP_STREAM_TYPE_AUDIO:
-		call->audio.rtps.v = mem_deref(call->audio.rtps.v);
+		rtp_stream_destroy(call->audio.rtps.v,
+				   call->audio.rtps.c);
 		call->audio.rtps.v = rs;
 		call->audio.rtps.c = ssrcc;
 		break;
 
 	case RTP_STREAM_TYPE_VIDEO:
-		call->video.rtps.v = mem_deref(call->video.rtps.v);
+		rtp_stream_destroy(call->video.rtps.v,
+				   call->video.rtps.c);
 		call->video.rtps.v = rs;
 		call->video.rtps.c = ssrcc;
 		break;
@@ -743,19 +771,26 @@ static void reflow_alloc_handler(struct mediaflow *mf, void *arg)
 	     mf, call->audio.ssrcc, call->video.ssrcc);
 
 	err = mediaflow_assign_streams(mf,
-				       &call->audio.ssrcv, call->audio.ssrcc,
-				       &call->video.ssrcv, call->video.ssrcc);
+				       &call->audio.ssrcv,
+				       call->audio.ssrcc,
+				       &call->video.ssrcv,
+				       &call->video.rtx_ssrcv,
+				       call->video.ssrcc);
 	if (err)
 		warning("reflow_alloc_handler: failed to assign streams: %m\n", err);
 
 	if (call->audio.ssrcc) {
 		rtp_stream_create(call,
-				  call->audio.ssrcv, call->audio.ssrcc,
+				  call->audio.ssrcv,
+				  NULL,
+				  call->audio.ssrcc,
 				  RTP_STREAM_TYPE_AUDIO);
 	}
 	if (call->video.ssrcc) {
 		rtp_stream_create(call,
-				  call->video.ssrcv, call->video.ssrcc,
+				  call->video.ssrcv,
+				  call->video.rtx_ssrcv,
+				  call->video.ssrcc,
 				  RTP_STREAM_TYPE_VIDEO);
 	}
 
@@ -1342,6 +1377,20 @@ static const char *ssrc2userid(struct list *partl, bool issft, uint32_t ssrc)
 	return found ? userid : NULL;
 }
 
+static struct rtp_stream *video_rtx_find(struct call *call, uint32_t ssrc)
+{
+	struct rtp_stream *rs = NULL;
+	bool found = false;
+	int i;
+
+	for(i = 0; i < call->video.rtps.c && !found; ++i) {
+		rs = &call->video.rtps.v[i];
+		found = ssrc == rs->ssrc;
+	}
+
+	return found ? rs : NULL;
+}
+
 static struct rtp_stream *video_stream_find(struct call *fcall,
 					    struct call *call,
 					    uint32_t ssrc)
@@ -1359,7 +1408,7 @@ static struct rtp_stream *video_stream_find(struct call *fcall,
 
 		found = ssrc == vs->ssrc;
 	}
-	if (!found) {
+	if (!found && fcall) {
 		if (!fcall->issft)
 			userid = ssrc2userid(&fcall->partl, false, ssrc);
 		else {
@@ -1647,6 +1696,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	struct rtp_header rtp;
 	struct rtp_header rrtp;
 	size_t pos;
+	size_t plpos;
 	int rtpxlen;
 	size_t hdrlen;
 	struct ssrc_stats *s = NULL;
@@ -1688,7 +1738,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	rtpxlen = rtp.x.len * sizeof(uint32_t);
 	hdrlen = mb->pos;
 	if ((size_t)rtpxlen > hdrlen) {
-		warning("invalid extension hader length\n");
+		warning("invalid extension header length\n");
 		goto process_rtp;
 	}
 	mb->pos -= rtpxlen;
@@ -1841,14 +1891,17 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	rdata = mem_alloc(rlen, NULL);
 
 	/* Copy fixed part of header */
+	plpos = mb->pos + sizeof(uint32_t);
 	mb->pos = pos;
-	err = mbuf_read_mem(mb, rdata, 12);
+	err = mbuf_read_mem(mb, rdata, RTP_HEADER_SIZE);
 	if (err)
 		goto out;
 
 	/* Set CC to 1 */
 	rdata[0] = rdata[0] | 0x1;
-	err = mbuf_read_mem(mb, rdata + 16, len - 12);
+	err = mbuf_read_mem(mb,
+			    rdata + RTP_HEADER_SIZE + sizeof(uint32_t),
+			    len - RTP_HEADER_SIZE);
 	if (err)
 		goto out;
 
@@ -2045,6 +2098,11 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 					(uint8_t *)rdata, rlen);
 			}
 			else if (rcall->mf) {
+				if (!rcall->issft && rst == RTP_STREAM_TYPE_VIDEO) {
+					gnack_add_payload(rcall, &rs->rtx, &rtp,
+							  rdata, rlen, plpos - pos);
+				}
+
 				mediaflow_send_rtp(rcall->mf, rdata, rlen);
 			}
 		}
@@ -2055,35 +2113,70 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 	mem_deref(rdata);
 }
 
+static void rtx_send_handler(struct call *call,
+			     struct gnack_rtx_stream *rs,
+			     struct list *rtxl)
+{
+	struct le *le;
+
+	LIST_FOREACH(rtxl, le) {
+		struct gnack_rtx *rtx = le->data;
+		struct mbuf mb;
+		struct rtp_header rtp;
+
+		mb.buf = rtx->plb;
+		mb.pos = 0;
+		mb.end = mb.size = rtx->pllen;
+		rtp_hdr_decode(&rtp, &mb);
+
+#if 1
+		info("rtx_send: pt=%d seq=%d ssrc=%u ts=%u len=%u OSN[%d]=%d\n",
+		     rtp.pt, rtp.seq, rtp.ssrc, rtp.ts, rtx->pllen,
+		     rtx->plpos, ntohs(*(uint16_t *)&rtx->plb[rtx->plpos]));
+#endif
+
+		mediaflow_send_rtp(call->mf, rtx->plb, rtx->pllen);
+	}
+}
+
+
+
 static void reflow_rtcp_recv(struct mbuf *mb, void *arg)
 {
 	struct call *call = arg;
-
-	(void)mb;
-	(void)call;
-
-	/* Don't reset the alive flag on RTCP, rely fully on PING */
-	/* call->alive = true; */
-	
-#if 0
-	struct call *call = arg;
 	struct rtcp_msg *rtcp;
-	struct mbuf mb;
 	int err;
 
-	mb.buf = (uint8_t *)data;
-	mb.pos = 0;
-	mb.end = len;
-	mb.size = mb.end;
-
-	err = rtcp_decode(&rtcp, &mb);
+	err = rtcp_decode(&rtcp, mb);
 	if (err)
 		SFTLOG(LOG_LEVEL_WARN, "cannot decode RTCP packet\n", call);
 	else {
-		SFTLOG(LOG_LEVEL_INFO, "RTCP %H\n", call, rtcp_msg_print, rtcp);
+		//SFTLOG(LOG_LEVEL_INFO, "RTCP %H\n", call, rtcp_msg_print, rtcp);
+
+		switch (rtcp->hdr.pt) {
+		case RTCP_RTPFB:
+			switch (rtcp->hdr.count) {
+			case RTCP_RTPFB_GNACK: {
+				struct rtp_stream *rs;
+				uint32_t ssrc = rtcp->r.fb.ssrc_media;
+
+				rs = video_rtx_find(call, ssrc);
+				if (rs) {
+					gnack_handler(call, &rs->rtx, rtx_send_handler, rtcp);
+				}
+				else {
+					warning("rtcp(%p): gnack on unknown stream: ssrc=%u\n", call, ssrc);
+				}
+			}
+				break;
+
+			default:
+				break;
+			}
+		}
+
 		mem_deref(rtcp);
 	}
-#endif
 }
 
 
@@ -3864,8 +3957,8 @@ static void call_destructor(void *arg)
 	mem_deref(call->icall);
 	mem_deref(call->http_cli);
 
-	mem_deref(call->audio.rtps.v);
-	mem_deref(call->video.rtps.v);
+	rtp_stream_destroy(call->audio.rtps.v, call->audio.rtps.c);
+	rtp_stream_destroy(call->video.rtps.v, call->video.rtps.c);
 
 	list_flush(&call->video.select.streaml);
 

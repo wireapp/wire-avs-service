@@ -64,14 +64,9 @@ struct avs_service {
 	} turn;
 
 	struct {
-		char prefix[256];	
+		char *prefix;
+		char path[256];
 		FILE *fp;
-		bool file;
-		struct lock *lock;
-		struct list linel;
-		sem_t sem;
-		bool running;
-		pthread_t th;
 	} log;
 
 	int worker_count;
@@ -220,24 +215,14 @@ static const char *level_prefix(enum log_level level)
 	}
 }
 
-static void logl_destructor(void *arg)
-{
-	struct log_line *logl = arg;
-
-	mem_deref(logl->mb);
-}
-
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
-	struct log_line *logl;
 	const pthread_t tid = pthread_self();
+	struct mbuf *mb;
 
-	logl = mem_zalloc(sizeof(*logl), logl_destructor);
-	if (!logl)
-		return;
-	logl->mb = mbuf_alloc(1024);
-	if (!logl->mb)
+	mb = mbuf_alloc(1024);
+	if (!mb)
 		return;
 
 	if (gettimeofday(&tv, NULL) == 0) {
@@ -249,60 +234,19 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 		tstruct = *localtime(&tv.tv_sec);
 		tms = tv.tv_usec / 1000;
 		strftime(timebuf, sizeof(timebuf), "%m-%d %X", &tstruct);
-		mbuf_printf(logl->mb, "%s.%03u T(%p) %s%s",
+		mbuf_printf(mb, "%s.%03u T(%p) %s%s",
 			   timebuf, tms,
 			   tid,
 			   level_prefix(level), msg);
 	}
 	else {
-		mbuf_printf(logl->mb, "%s%s", level_prefix(level), msg);
+		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
 	}
 
-	lock_write_get(avsd.log.lock);
-	list_append(&avsd.log.linel, &logl->le, logl);
-	lock_rel(avsd.log.lock);
-	sem_post(&avsd.log.sem);
-}
+	fwrite(mb->buf, 1, mb->end, avsd.log.fp);
+	fflush(avsd.log.fp);
 
-static void *log_thread(void *arg)
-{
-	struct le *le;
-	FILE *fp;
-	
-	if (avsd.log.file)
-		fp = avsd.log.fp;
-	else
-		fp = stdout;
-
-	if (!fp)
-		return NULL;
-
-	do {
-		struct log_line *logl = NULL;
-
-		if (avsd.log.running)
-			sem_wait(&avsd.log.sem);
-
-		lock_write_get(avsd.log.lock);
-		le = avsd.log.linel.head;
-		if (le) {
-			logl = le->data;
-			list_unlink(le);
-		}
-		le = avsd.log.linel.head;
-		lock_rel(avsd.log.lock);
-		if (!logl) {
-			continue;
-		}
-
-		fwrite(logl->mb->buf, 1, logl->mb->end, fp);
-		fflush(fp);
-
-		mem_deref(logl);
-	}
-	while(le || avsd.log.running);
-
-	return NULL;
+	mem_deref(mb);
 }
 
 static struct log logh = {
@@ -379,7 +323,6 @@ static void generate_iflist(struct list *ifl, const char *ifstr)
 int main(int argc, char *argv[])
 {
 	enum log_level log_level = LOG_LEVEL_DEBUG;
-	char log_file_name[255];
 	struct sa goog;
 	int err;
 	
@@ -389,10 +332,9 @@ int main(int argc, char *argv[])
 
 	avsd.worker_count = NUM_WORKERS;
 	avsd.fir_timeout = TIMEOUT_FIR;
-	lock_alloc(&avsd.log.lock);
-	sem_init(&avsd.log.sem, 0, 0);
-	list_init(&avsd.log.linel);
-	
+	avsd.log.prefix = NULL;
+	avsd.log.fp = stdout;
+
 	for (;;) {
 
 		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
@@ -430,8 +372,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'l':
-			avsd.log.file = true;
-			str_ncpy(avsd.log.prefix, optarg, sizeof(avsd.log.prefix));
+			str_dup(&avsd.log.prefix, optarg);
 			break;
 
 		case 'M':
@@ -530,7 +471,8 @@ int main(int argc, char *argv[])
 
 	log_set_min_level(log_level);
 	log_enable_stderr(false);
-	if (avsd.log.file) {
+
+	if (avsd.log.prefix) {
 		char  buf[256];
 		time_t     now = time(0);
 		struct tm  tstruct;
@@ -540,15 +482,11 @@ int main(int argc, char *argv[])
 		buf[13] = '-';
 		buf[16] = '-';
 
-		re_snprintf(log_file_name, sizeof(log_file_name),
+		re_snprintf(avsd.log.path, sizeof(avsd.log.path),
 			    "%s_%s.log", avsd.log.prefix, buf);
 
-		avsd.log.fp = fopen(log_file_name, "a");
+		avsd.log.fp = fopen(avsd.log.path, "a");
 	}
-
-	/* Create logging thread */
-	avsd.log.running = true;
-	pthread_create(&avsd.log.th, NULL, log_thread, NULL);
 
 	log_register_handler(&logh);
 
@@ -583,10 +521,6 @@ int main(int argc, char *argv[])
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
 
 	log_unregister_handler(&logh);
-	avsd.log.running = false;
-	sem_post(&avsd.log.sem);
-	pthread_join(avsd.log.th, NULL);
-	avsd.log.lock = mem_deref(avsd.log.lock);
 	
 	/* check for memory leaks */
 	tmr_debug();
@@ -716,4 +650,9 @@ void avs_service_terminate(void)
 	module_close();
 	
 	re_cancel();
+
+	mem_deref(avsd.log.prefix);
+	if (avsd.log.fp && avsd.log.fp != stdout) {
+		fclose(avsd.log.fp);
+	}
 }
