@@ -2924,10 +2924,12 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 		if (strlen(ssrc_fid))
 			ssrc_fid[strlen(ssrc_fid) - 1] = '\0';
 
-		err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
-					  "FID %s", ssrc_fid);
-		if (err)
-			goto out;
+		if (i > 1) {
+			err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
+						  "FID %s", ssrc_fid);
+			if (err)
+				goto out;
+		}
 
 		if (ssrcc > 0)
 			rf->lssrcv[MEDIA_VIDEO] = ssrcv[0];
