@@ -5,7 +5,6 @@
 #include <pthread.h>
 #include <unistd.h>
 
-
 #define TIMEOUT_WORKER 20
 
 struct worker_task {
