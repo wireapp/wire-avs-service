@@ -3494,10 +3494,6 @@ static void bundle_ssrc(struct reflow *rf,
 				    ssrc, label);
 		sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
 				    ssrc, label, label);
-		sdp_media_set_lattr(newm, false, "ssrc", "%u mslabel:%s",
-				    ssrc, label);
-		sdp_media_set_lattr(newm, false, "ssrc", "%u label:%s",
-				    ssrc, label);
 	}
 	mem_deref(label);
 
