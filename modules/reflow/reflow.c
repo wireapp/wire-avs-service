@@ -2944,6 +2944,12 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 						  "ssrc", "%u msid:%s %s",
 						   ssrcv[k],
 						   rf->msid, rf->video.label);
+			err |= sdp_media_set_lattr(rf->video.sdpm, false,
+						  "ssrc", "%u mslabel:%s",
+						   ssrcv[k], rf->msid);
+			err |= sdp_media_set_lattr(rf->video.sdpm, false,
+						  "ssrc", "%u label:%s",
+						   ssrcv[k], rf->video.label);
 			if (err)
 				goto out;
 		}
@@ -3488,6 +3494,10 @@ static void bundle_ssrc(struct reflow *rf,
 				    ssrc, label);
 		sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
 				    ssrc, label, label);
+		sdp_media_set_lattr(newm, false, "ssrc", "%u mslabel:%s",
+				    ssrc, label);
+		sdp_media_set_lattr(newm, false, "ssrc", "%u label:%s",
+				    ssrc, label);
 	}
 	mem_deref(label);
 
