@@ -2132,7 +2132,7 @@ static void rtx_send_handler(struct call *call,
 #if 1
 		info("rtx_send: pt=%d seq=%d ssrc=%u ts=%u len=%u OSN[%d]=%d\n",
 		     rtp.pt, rtp.seq, rtp.ssrc, rtp.ts, rtx->pllen,
-		     rtx->plpos, ntohs(*(uint16_t *)&rtx->plb[rtx->plpos]));
+		     rtx->plpos, ntohs(*(uint16_t *)((void*)&rtx->plb[rtx->plpos])));
 #endif
 
 		mediaflow_send_rtp(call->mf, rtx->plb, rtx->pllen);
