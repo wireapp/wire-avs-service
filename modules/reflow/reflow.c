@@ -2937,13 +2937,16 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 			strcat(ssrc_fid, ssrc_group);
 			++i;
 		}
-		if (strlen(ssrc_fid))
-			ssrc_fid[strlen(ssrc_fid) - 1] = '\0';
 
-		err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
-					  "FID %s", ssrc_fid);
-		if (err)
-			goto out;
+		if (i > 1) {
+			if (strlen(ssrc_fid))
+				ssrc_fid[strlen(ssrc_fid) - 1] = '\0';
+		
+			err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
+						  "FID %s", ssrc_fid);
+			if (err)
+				goto out;
+		}
 
 		if (ssrcc > 0)
 			rf->lssrcv[MEDIA_VIDEO] = ssrcv[0];
@@ -3500,14 +3503,15 @@ static void bundle_ssrc(struct reflow *rf,
 	uuid_v4(&label);
 	
 	if (!disabled) {
+		sdp_media_set_lattr(newm, false, "ssrc-group",
+				    "FID %u %u", ssrc, rtx_ssrc);
+
 		sdp_media_set_lattr(newm, false, "ssrc", "%u cname:%s",
 				    ssrc, label);
 		sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
 				    ssrc, label, label);
 
 		if (rtx_ssrc) {
-			sdp_media_set_lattr(newm, false, "ssrc-group",
-					    "FID %u %u", ssrc, rtx_ssrc);
 			sdp_media_set_lattr(newm, false, "ssrc", "%u cname:%s",
 					    rtx_ssrc, label);
 			sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
