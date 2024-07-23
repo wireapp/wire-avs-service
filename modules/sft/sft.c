@@ -69,7 +69,6 @@ enum select_mode {
 
 extern int rtcp_rr_encode(struct mbuf *mb, const struct rtcp_rr *rr);
 
-
 #define SFTLOG(level, fmt,  ...) \
 	loglv(level, "sft:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
 
