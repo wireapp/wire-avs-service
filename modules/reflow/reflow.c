@@ -1708,12 +1708,6 @@ static void external_rtp_recv(struct reflow *rf,
 		rf->got_rtp = true;
 	}
 
-#if 0	
-	if (g_reflow.mediaflow.recv_rtph) {
-		g_reflow.mediaflow.recv_rtph(mb, rf->extarg);
-	}
-#endif
-
 	if (is_rtp) {
 		if (g_reflow.mediaflow.recv_rtph) {
 			g_reflow.mediaflow.recv_rtph(mb, rf->extarg);
