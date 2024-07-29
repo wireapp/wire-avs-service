@@ -265,7 +265,7 @@ static int load_secret(const char *path)
 	 fp = fopen(path, "ra");
 	 info("sft: opening: %s fp=%p\n", path, fp);
 	 if (!fp) {
-		 warning("sft: failed to openj secret file: %s\n", path);
+		 warning("sft: failed to open secret file: %s\n", path);
 		 return EBADF;
 	 }
 	 if (fscanf(fp, "%255s", secret) > 0) {
@@ -429,6 +429,12 @@ int main(int argc, char *argv[])
 			usage();
 			goto out;
 		}
+	}
+
+	if (avsd.use_auth && NULL == avsd.secret.p) {
+		error("sft: using auth, but no secret present. Exiting...\n");
+		err = EBADF;
+		goto out;
 	}
 
 	/* Request address */
