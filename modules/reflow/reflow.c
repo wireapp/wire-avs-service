@@ -78,7 +78,7 @@ enum {
 enum {
 	AUDIO_BANDWIDTH = 32,   /* kilobits/second */
 	AUDIO_PTIME     = 40,   /* ms */
-	VIDEO_BANDWIDTH = 600,  /* kilobits/second */
+	VIDEO_BANDWIDTH = 800,  /* kilobits/second */
 };
 
 enum {
@@ -2480,8 +2480,8 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	//sdp_media_set_lbandwidth(rf->audio.sdpm,
-	//			 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
+	sdp_media_set_lbandwidth(rf->audio.sdpm,
+				 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
 	sdp_media_set_lattr(rf->audio.sdpm, true, "ptime", "%u", AUDIO_PTIME);
 
 	/* needed for new versions of WebRTC */
@@ -2798,8 +2798,8 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	if (err)
 		goto out;
 
-	// sdp_media_set_lbandwidth(rf->video.sdpm,
-	//			 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
+	sdp_media_set_lbandwidth(rf->video.sdpm,
+				 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
 
 	/* needed for new versions of WebRTC */
 	err = sdp_media_set_alt_protos(rf->video.sdpm, 2,
@@ -3517,7 +3517,7 @@ static void bundle_ssrc(struct reflow *rf,
 	}
 	
 	sdp_media_set_ldir(newm, disabled ? SDP_INACTIVE : SDP_SENDONLY);
-	// sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
+	sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
 }
 
 
