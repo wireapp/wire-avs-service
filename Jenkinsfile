@@ -76,6 +76,8 @@ pipeline {
                     release_version = branchName.replaceAll("[^\\d\\.]", "");
                     if (release_version.length() > 0 || branchName.contains('release')) {
                         version = release_version + "." + buildNumber
+                    } else if (branchName.contains('feature')) {
+                        version = "999.0.${buildNumber}"
                     } else {
                         version = "0.0.${buildNumber}"
                     }
