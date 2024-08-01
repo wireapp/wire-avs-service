@@ -176,7 +176,7 @@ static bool sort_handler(struct le *le1, struct le *le2, void *arg)
 	struct gnack_entry *ge1 = le1->data;
 	struct gnack_entry *ge2 = le2->data;
 		
-	return seq_less(ge1->seq, ge2->seq);
+	return ge1->seq == ge2->seq || seq_less(ge1->seq, ge2->seq);
 }
 
 int gnack_add_payload(struct call *call, struct gnack_rtx_stream *rs,
