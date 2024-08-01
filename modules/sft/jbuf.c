@@ -10,6 +10,8 @@
 #include <re_mem.h>
 #include <re_rtp.h>
 
+#include <avs_log.h>
+
 #include "jbuf.h"
 
 
@@ -40,7 +42,7 @@ struct frame {
  * The jitter buffer is for incoming RTP packets, which are sorted by
  * sequence number.
  */
-struct jbuf {
+struct jb {
 	struct list pooll;   /**< List of free frames in pool               */
 	struct list framel;  /**< List of buffered frames                   */
 	uint32_t n;          /**< [# frames] Current # of frames in buffer  */
@@ -51,7 +53,7 @@ struct jbuf {
 
 #if JBUF_STAT
 	uint16_t seq_get;      /**< Timestamp of last played frame */
-	struct jbuf_stat stat; /**< Jitter buffer Statistics       */
+	struct jb_stat stat; /**< Jitter buffer Statistics       */
 #endif
 };
 
@@ -66,7 +68,7 @@ static inline bool seq_less(uint16_t x, uint16_t y)
 /**
  * Get a frame from the pool
  */
-static void frame_alloc(struct jbuf *jb, struct frame **f)
+static void frame_alloc(struct jb *jb, struct frame **f)
 {
 	struct le *le;
 
@@ -97,7 +99,7 @@ static void frame_alloc(struct jbuf *jb, struct frame **f)
 /**
  * Release a frame, put it back in the pool
  */
-static void frame_deref(struct jbuf *jb, struct frame *f)
+static void frame_deref(struct jb *jb, struct frame *f)
 {
 	f->mem = mem_deref(f->mem);
 	list_unlink(&f->le);
@@ -108,9 +110,9 @@ static void frame_deref(struct jbuf *jb, struct frame *f)
 
 static void jbuf_destructor(void *data)
 {
-	struct jbuf *jb = data;
+	struct jb *jb = data;
 
-	jbuf_flush(jb);
+	jb_flush(jb);
 
 	/* Free all frames in the pool list */
 	list_flush(&jb->pooll);
@@ -126,9 +128,9 @@ static void jbuf_destructor(void *data)
  *
  * @return 0 if success, otherwise errorcode
  */
-int jbuf_alloc(struct jbuf **jbp, uint32_t min, uint32_t max)
+int jb_alloc(struct jb **jbp, uint32_t min, uint32_t max)
 {
-	struct jbuf *jb;
+	struct jb *jb;
 	uint32_t i;
 	int err = 0;
 
@@ -184,7 +186,7 @@ int jbuf_alloc(struct jbuf **jbp, uint32_t min, uint32_t max)
  *
  * @return 0 if success, otherwise errorcode
  */
-int jbuf_put(struct jbuf *jb, const struct rtp_header *hdr, void *mem)
+int jb_put(struct jb *jb, const struct rtp_header *hdr, void *mem)
 {
 	struct frame *f;
 	struct le *le, *tail;
@@ -276,9 +278,9 @@ int jbuf_put(struct jbuf *jb, const struct rtp_header *hdr, void *mem)
  *
  * @return 0 if success, otherwise errorcode
  */
-int jbuf_get(struct jbuf *jb, struct rtp_header *hdr,
-	     jbuf_lost_h *losth,
-	     void **mem, void *arg)
+int jb_get(struct jb *jb, struct rtp_header *hdr,
+	   jb_lost_h *losth,
+	   void **mem, void *arg)
 {
 	struct frame *f;
 
@@ -288,9 +290,11 @@ int jbuf_get(struct jbuf *jb, struct rtp_header *hdr,
 	STAT_INC(n_get);
 
 	if (jb->n <= jb->min || !jb->framel.head) {
+#if DEBUG
 		info("jbuf(%p): get: not enough buffer frames - wait.. "
-		     (n=%u min=%u)\n",
+		     "(n=%u min=%u)\n",
 		     jb, jb->n, jb->min);
+#endif
 		STAT_INC(n_underflow);
 		return ENOENT;
 	}
@@ -316,7 +320,7 @@ int jbuf_get(struct jbuf *jb, struct rtp_header *hdr,
 			     jb, seq_diff, f->hdr.seq, jb->seq_get);
 
 			if (losth) {
-				losth(f->hdr, seq_diff, arg);
+				losth(f->hdr.ssrc, jb->seq_get, seq_diff, arg);
 			}
 		}
 	}
@@ -339,7 +343,7 @@ int jbuf_get(struct jbuf *jb, struct rtp_header *hdr,
  *
  * @param jb   Jitter buffer
  */
-void jbuf_flush(struct jbuf *jb)
+void jb_flush(struct jb *jb)
 {
 	struct le *le;
 
@@ -373,7 +377,7 @@ void jbuf_flush(struct jbuf *jb)
  *
  * @return 0 if success, otherwise errorcode
  */
-int jbuf_stats(const struct jbuf *jb, struct jbuf_stat *jstat)
+int jb_stats(const struct jb *jb, struct jb_stat *jstat)
 {
 	if (!jb || !jstat)
 		return EINVAL;
@@ -396,7 +400,7 @@ int jbuf_stats(const struct jbuf *jb, struct jbuf_stat *jstat)
  *
  * @return 0 if success, otherwise errorcode
  */
-int jbuf_debug(struct re_printf *pf, const struct jbuf *jb)
+int jb_debug(struct re_printf *pf, const struct jb *jb)
 {
 	int err = 0;
 

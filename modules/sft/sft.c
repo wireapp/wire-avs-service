@@ -22,7 +22,9 @@
 #include <ctype.h>
 #include <sys/time.h>
 #include <sodium.h>
+
 #include <re.h>
+
 #include <avs_log.h>
 #include <avs_string.h>
 #include <avs_zapi.h>
@@ -37,6 +39,8 @@
 #include <avs_service.h>
 #include <avs_service_turn.h>
 #include <avs_audio_level.h>
+
+#include "jbuf.h"
 
 #include "zauth.h"
 
@@ -62,6 +66,12 @@
 #define RTP_LEVELK 0.5f
 
 #define DEBUG_PACKET 0
+
+#define VIDEO_JBUF_MIN  6
+#define VIDEO_JBUF_MAX 24
+
+#define PT_VP8 100
+#define PT_RTX 101
 
 enum select_mode {
 	SELECT_MODE_NONE = 0x0,
@@ -350,6 +360,8 @@ struct call {
 		uint32_t *ssrcv;
 		uint32_t *rtx_ssrcv;
 		int ssrcc;
+
+		struct jb *jb;
 	} video;
 
 	struct sft *sft;
@@ -1128,7 +1140,6 @@ static int transcc_encode_handler(struct mbuf *mb, void *arg)
 }
 #endif
 
-#if 0
 
 static int gnack_encode_handler(struct mbuf *mb, struct nack_entry *ne)
 {
@@ -1157,9 +1168,8 @@ static void send_gnack(struct call *call, struct nack_entry *ne)
 	
 	err = rtcp_encode(mb,
 			  RTCP_RTPFB,
-			  RTCP_RTPFB_GNACK,
 			  1,
-			  1,
+			  call->video.ssrc,
 			  ne->ssrc,
 			  gnack_encode_handler,
 			  ne);
@@ -1722,13 +1732,16 @@ static int tc_send(struct turn_conn *tc,
 	return err;
 }
 
-static void jbuf_lost_handler(struct rtp_header *rtp, int nlost, void *arg)
+static void jbuf_lost_handler(uint32_t ssrc, uint16_t seq, int nlost, void *arg)
 {
 	struct call *call = arg;
 	struct nack_entry ne;
 
-	ne.ssrc = rtp->ssrc;
-	ne.seq = rtp->seq;
+	info("jbuf_lost_handler(%p): ssrc: %u seq=%u lost=%d\n",
+	     call, ssrc, seq, nlost);
+	
+	ne.ssrc = ssrc;
+	ne.seq = seq;
 	ne.nlost = nlost;
 	
 	send_gnack(call, &ne);
@@ -1736,7 +1749,8 @@ static void jbuf_lost_handler(struct rtp_header *rtp, int nlost, void *arg)
 
 static void process_rtp(struct call *call,
 			struct rtp_header *rtp,
-			struct mbuf *mb)
+			struct mbuf *mb,
+			size_t hdrpos)
 {
 	struct group *group;
 	struct le *le = NULL;
@@ -1774,12 +1788,12 @@ static void process_rtp(struct call *call,
 	len = mbuf_get_left(mb);
 	ssrc = rtp->ssrc;
 	rtpxlen = rtp->x.len * sizeof(uint32_t);
-	hdrlen = mb->pos;
+	hdrlen = hdrpos - mb->pos;
 	if ((size_t)rtpxlen > hdrlen) {
-		warning("invalid extension header length\n");
+		warning("process_rtp(%p): invalid extension header length\n", call);
 		goto process_rtp;
 	}
-	mb->pos -= rtpxlen;
+	mb->pos = hdrpos - rtpxlen;
 
 #if DEBUG_PACKET
 	info("RTP: %s-call(%p) len=%d hdrlen=%d m=%d ssrc=%u ts:%u seq: %d ext(%s): type=0x%04X len=%d\n",
@@ -1851,7 +1865,6 @@ static void process_rtp(struct call *call,
 
 		rtpxlen -= xlen + sizeof(uint8_t);
 	}
-
 
  process_rtp:
 	if (call->audio.ssrc && rtp->ssrc == call->audio.ssrc) {
@@ -2140,7 +2153,7 @@ static void process_rtp(struct call *call,
 			}
 			else if (rcall->mf) {
 				if (!rcall->issft && rst == RTP_STREAM_TYPE_VIDEO) {
-					gnack_add_payload(rcall, &rs->rtx, &rtp,
+					gnack_add_payload(rcall, &rs->rtx, rtp,
 							  rdata, rlen, plpos - pos);
 				}
 
@@ -2154,25 +2167,91 @@ static void process_rtp(struct call *call,
 	mem_deref(rdata);
 }
 
+ static void process_rtx(struct call *call, struct rtp_header *rtp, struct mbuf *mb, size_t hdrpos)
+ {
+	 /* We need to re-construct the real RTP packet */
+	 struct mbuf *real_mb;
+	 struct rtp_header real_rtp;
+	 size_t hdrlen;
+	 uint16_t seq = ntohs(*(uint16_t *)((void*)&mb->buf[hdrpos]));
+	 int err = 0;
+
+	 info("process_rtx(%p): ssrc=%u seq=%u\n", call, rtp->ssrc, seq);
+
+	 rtp->pt = PT_VP8;
+	 rtp->ssrc = call->video.ssrc;
+	 rtp->seq = seq;
+	 hdrlen = hdrpos - mb->pos;
+	 
+	 real_mb = mbuf_alloc(mbuf_get_left(mb));
+	 err = rtp_hdr_encode(real_mb, rtp);
+	 if (err) {
+		 warning("process_rtx(%p): failed to encode RTP header: %m\n",
+			 call, err);
+		 goto out;
+	 }
+	 mbuf_write_mem(real_mb,
+			&mb->buf[mb->pos + RTP_HEADER_SIZE],
+			hdrlen - RTP_HEADER_SIZE);
+	 mbuf_write_mem(real_mb,
+			&mb->buf[hdrpos + sizeof(uint16_t)],
+			mb->end - (hdrpos + sizeof(uint16_t)));
+	 
+	 real_mb->pos = 0;
+	 err = rtp_hdr_decode(&real_rtp, real_mb);
+	 if (err) {
+		 warning("process_rtx(%p): could not decode real header: %m\n",
+			 call, err);
+		 goto out;
+	 }
+	 real_mb->pos = 0;
+
+	 process_rtp(call, &real_rtp, real_mb, hdrlen);
+
+ out:
+	 mem_deref(real_mb);
+ }
+
+ 
 static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 {
 	struct call *call = arg;
 	struct rtp_header rtp;
-	bool has_frames = true;
+	size_t pos;
+	size_t hdrpos;
+	bool has_frames = true;	
+	int err = 0;
 
 	if (!mb)
 		return;
 
+	pos = mb->pos;
 	err = rtp_hdr_decode(&rtp, mb);
 	if (err)
-		goto out;
+		return;
 
-	jbuf_put(call->jb, &rtp, mb);
+	hdrpos = mb->pos;
+	mb->pos = pos;
+
+	if (rtp.pt == PT_RTX )  {
+		process_rtx(call, &rtp, mb, hdrpos);
+		return;
+	}
+	else if (rtp.pt != PT_VP8) {
+		process_rtp(call, &rtp, mb, hdrpos);
+		return;
+	}
+	
+	jb_put(call->video.jb, &rtp, mb);
 	while(has_frames) {
-		err = jbuf_get(call->jb, &rtp, &mb, jbuf_lost_handler, call);
+		struct mbuf *new_mb;
+
+		err = jb_get(call->video.jb, &rtp,
+			     jbuf_lost_handler,
+			     (void **)&new_mb, call);
 		has_frames = err == 0;
 		if (!err) 
-			process_rtp(call, &rtp, mb);
+			process_rtp(call, &rtp, new_mb, hdrpos);
 	}
 }
 
@@ -4584,7 +4663,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	if (err)
 		goto out;
 
-	err = jbuf_alloc(&call->video.jbuf, VIDEO_JBUF_MIN, VIDEO_JBUF_MAX);
+	err = jb_alloc(&call->video.jb, VIDEO_JBUF_MIN, VIDEO_JBUF_MAX);
 	if (err)
 		goto out;
 
