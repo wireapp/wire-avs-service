@@ -135,7 +135,7 @@ static void usage(void)
 {
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path> -x <addr:port>\n");
+			 "[-u <URL>] [-b <blacklist> [-d] [-n <nprocs>] [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path> -x <addr:port>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
@@ -159,7 +159,10 @@ static void usage(void)
 			 "Multi SFT TURN path to file with secret\n");
 	
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
-	(void)re_fprintf(stderr, "\t-x <addr:port>    Address tuple for listening to federation SFT requests\n");
+	(void)re_fprintf(stderr, "\t-d              Spawn SFT processes\n");
+	(void)re_fprintf(stderr, "\t-n <nprocs>     Used together with -d and indicates # of processes to spawn "
+			 "(default: # of cores)\n");
+	(void)re_fprintf(stderr, "\t-x <addr:port>  Address tuple for listening to federation SFT requests\n");
 }
 
 static void signal_handler(int sig)
@@ -549,12 +552,17 @@ int main(int argc, char *argv[])
 			pid = fork();
 
 			req_port = sa_port(&avsd.req_addr) + nprocs;
-			metrics_port = sa_port(&avsd.metrics_addr) + nprocs + 1;
+			metrics_port = sa_port(&avsd.metrics_addr) + nprocs;
 			sft_port = sa_port(&sftsa) + nprocs;
 
 			sa_set_str(&rsa, LOCALHOST_IPV4, req_port);
-			sa_set_str(&msa, LOCALHOST_IPV4, metrics_port);
-			sa_set_str(&ssa, LOCALHOST_IPV4, sft_port);
+			/* Metrics */
+			sa_cpy(&msa, &avsd.metrics_addr);
+			sa_set_port(&msa, metrics_port);
+
+			/* SFT-request */
+			sa_cpy(&ssa, &avsd.sft_req_addr);
+			sa_set_port(&ssa, sft_port);
 			
 			if (pid == 0) {
 				avsd.lb.main = false;
