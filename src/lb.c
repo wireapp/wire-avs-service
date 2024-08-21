@@ -43,15 +43,17 @@
 
 struct lb {
 	struct httpd *httpd;
+	struct httpd *httpd_stats;
 
 	struct dict *groups;
 
 	int nprocs;
-	
+
+	uint64_t start_ts;
+	struct http_cli *httpc;	
 } g_lb;
 
 struct group {
-	struct http_cli *httpc;
 	struct sa anchorsa;
 	struct sa anchor_sftsa;
 	uint32_t anchorid;
@@ -94,7 +96,6 @@ static void group_destructor(void *arg)
 	tmr_cancel(&group->tmr_inactive);
 
 	mem_deref(group->id);
-	mem_deref(group->httpc);
 	mem_deref(group->calls);
 }
 
@@ -126,10 +127,6 @@ static int alloc_group(struct group **groupp, struct lb *lb, const char *groupid
 	group = mem_zalloc(sizeof(*group), group_destructor);
 	if (!group)
 		return ENOMEM;
-
-	err = http_client_alloc(&group->httpc, avs_service_dnsc());
-	if (err)
-		goto out;
 
 	err = dict_alloc(&group->calls);
 	if (err)
@@ -299,7 +296,6 @@ static void http_req_handler(struct http_conn *hc,
 	char *body = NULL;
 	size_t bodysz = 0;
 	int n;
-	int i;
 	struct req_ctx *rctx;
 	int err = 0;
 
@@ -433,7 +429,7 @@ static void http_req_handler(struct http_conn *hc,
 	info("sending request: %s\n", sfturl);
 
 	
-	err = http_request(&rctx->http_req, group->httpc,
+	err = http_request(&rctx->http_req, g_lb.httpc,
 			   "POST", sfturl, sft_resp_handler, sft_data_handler, rctx, 
 			   "Accept: application/json\r\n"
 			   "Content-Type: application/json\r\n"
@@ -470,16 +466,267 @@ static void http_req_handler(struct http_conn *hc,
 	}
 }
 
+struct sft_metrics {
+	uint32_t ncalls;
+	uint32_t nparts;
+	uint32_t total_calls;
+	uint32_t total_parts;
+
+	int nresp;
+	int err;
+
+	struct http_conn *hconn;
+};
+
+struct metrics_ctx {
+	struct sft_metrics *smx;
+	struct http_req *req;
+	struct mbuf *body;
+};
+
+
+static void mctx_destructor(void *arg)
+{
+	struct metrics_ctx *mctx = arg;
+
+	mem_deref(mctx->body);
+	mem_deref(mctx->req);
+	mem_deref(mctx->smx);
+}
+
+static void smx_destructor(void *arg)
+{
+	struct sft_metrics *smx = arg;
+
+	mem_deref(smx->hconn);
+}
+
+static int metrics_data_handler(const uint8_t *buf, size_t size,
+				const struct http_msg *msg, void *arg)
+{
+	struct metrics_ctx *mctx = arg;
+	int err = 0;
+
+	if (!mctx->body) {
+		mctx->body = mbuf_alloc(1024);
+		if (!mctx->body) {
+			err = ENOMEM;
+			goto out;
+		}
+	}
+
+	/* append data to the body-buffer */
+	err = mbuf_write_mem(mctx->body, buf, size);
+	if (err)
+		return err;
+
+
+ out:
+	return err;
+}
+
+static void send_stats(struct sft_metrics *smx)
+{
+	struct mbuf *mb = NULL;
+	char *stats = NULL;
+	uint64_t now;
+	int err = 0;;
+
+	if (smx->err) {
+		err = smx->err;
+		goto out;
+	}
+	
+	mb = mbuf_alloc(512);
+	now = tmr_jiffies();
+
+	mbuf_printf(mb, "# HELP sft_uptime "
+		    "Uptime in [seconds] of the SFT service\n");
+	mbuf_printf(mb, "# TYPE sft_uptime counter\n");
+	mbuf_printf(mb, "sft_uptime %llu\n", (now - g_lb.start_ts)/1000);
+	mbuf_printf(mb, "\n");
+
+	mbuf_printf(mb, "# HELP sft_build_info "
+		    "Build information\n");
+	mbuf_printf(mb, "# TYPE sft_build_info gauge\n");
+	mbuf_printf(mb, "sft_build_info{version=\"%s\"} 1\n", SFT_VERSION);
+	mbuf_printf(mb, "\n");
+	
+	mbuf_printf(mb, "# HELP sft_participants "
+		    "Current number of participants\n");
+	mbuf_printf(mb, "# TYPE sft_participants gauge\n");
+	mbuf_printf(mb, "sft_participants %zu\n", smx->nparts);
+	mbuf_printf(mb, "\n");
+
+	mbuf_printf(mb, "# HELP sft_calls Current number of calls\n");
+	mbuf_printf(mb, "# TYPE sft_calls gauge\n");
+	mbuf_printf(mb, "sft_calls %zu\n", smx->ncalls);
+	mbuf_printf(mb, "\n");
+
+	mbuf_printf(mb, "# HELP sft_participants_total "
+		    "Total number of participants\n");
+	mbuf_printf(mb, "# TYPE sft_participants_total counter\n");
+	mbuf_printf(mb, "sft_participants_total %llu\n", smx->total_parts);
+	mbuf_printf(mb, "\n");
+
+	mbuf_printf(mb, "# HELP sft_calls_total Total number of calls\n");
+	mbuf_printf(mb, "# TYPE sft_calls_total counter\n");
+	mbuf_printf(mb, "sft_calls_total %llu\n", smx->total_calls);
+	mbuf_printf(mb, "\n");
+
+	mb->pos = 0;
+	mbuf_strdup(mb, &stats, mb->end);
+	http_creply(smx->hconn, 200, "OK", "text/plain", "%s", stats);
+
+ out:
+	mem_deref(stats);
+	mem_deref(mb);
+
+	if (err)
+		http_ereply(smx->hconn, 400, "Bad request");
+	mem_deref(smx->hconn);
+}
+
+
+static void metrics_resp_handler(int rerr, const struct http_msg *msg,
+				 void *arg)
+{
+	struct metrics_ctx *mctx = arg;
+	struct sft_metrics *smx = mctx->smx;
+	struct json_object *jobj = NULL;
+	struct mbuf *body = NULL;
+	int err = 0;
+       	
+	info("metrics_resp_handler: done err=%d msg=%p(%p)\n", rerr, msg, msg ? msg->mb : NULL);
+	
+	if (rerr)
+		goto out;	
+
+	if (!msg) {
+		goto out;
+	}
+	body = mctx->body ? mctx->body : msg->mb;
+	if (!body) {
+		err = ENOENT;
+		goto out;
+	}
+	
+	mbuf_write_u8(body, 0);
+	body->pos = 0;
+
+	err = jzon_decode(&jobj, (const char *)body->buf, body->end);
+	if (err) {
+		warning("metrics_resp_handler: cannot decode json: %m\n", err);
+	}
+	else {
+		uint32_t nparts;
+		uint32_t ncalls;
+		uint32_t total_parts;
+		uint32_t total_calls;
+		
+		err |= jzon_u32(&nparts, jobj, "sft_participants");
+		err |= jzon_u32(&ncalls, jobj, "sft_calls");
+		err |= jzon_u32(&total_parts, jobj, "sft_participants_total");
+		err |= jzon_u32(&total_calls, jobj, "sft_calls_total");
+		if (err) {
+			warning("metrics_resp_handler: failed to collect data\n");
+		}
+		else {
+			smx->nparts += nparts;
+			smx->ncalls += ncalls;
+			smx->total_parts += total_parts;
+			smx->total_calls += total_calls;
+		}
+	}
+
+ out:
+	mem_deref(mctx);
+
+	smx->nresp++;
+	smx->err |= err;
+	if (smx->nresp >= g_lb.nprocs) {
+		send_stats(smx);
+	}
+}
+
+
+static void http_stats_handler(struct http_conn *hc,
+			       const struct http_msg *msg,
+			       void *arg)
+{
+	struct sft_metrics *smx = NULL;
+	char *url = NULL;
+	int err;
+	int i;
+	
+	err = pl_strdup(&url, &msg->path);
+	info("http_stats_req: URL=%s\n", url);
+	if (err)
+		goto out;
+
+	if (!streq(url, "/metrics")) {
+		err = ENOENT;
+		goto out;
+	}
+
+	smx = mem_zalloc(sizeof(*smx), smx_destructor);
+	if (!smx) {
+		err = ENOMEM;
+		goto out;
+	}
+	smx->hconn = mem_ref(hc);
+	
+	for (i = 0; i < g_lb.nprocs; ++i) {
+		char local_url[256];
+		struct sa *msa = avs_service_get_metrics_addr(i);
+		struct metrics_ctx *mctx;
+		
+		re_snprintf(local_url, sizeof(local_url), "http://127.0.0.1:%d/jmetrics", sa_port(msa));
+		mctx = mem_zalloc(sizeof(*mctx), mctx_destructor);
+		if (!mctx) {
+			err = ENOMEM;
+			goto out;
+		}
+		
+		mctx->smx = mem_ref(smx);
+
+		info("http_stats_req: metrics request to: %s\n", local_url);
+		err = http_request(NULL, g_lb.httpc,
+				   "POST", local_url, metrics_resp_handler, metrics_data_handler, mctx, 
+				   "Accept: application/json\r\n"
+				   "Content-Type: application/json\r\n"
+				   "Content-Length: 0\r\n"
+				   "User-Agent: sft-lb\r\n"
+				   "\r\n");
+		if (err) {
+			warning("lb(%p): metrics_handler failed to send request: %m\n", mctx, err);
+			goto out;
+		}
+	}
+ out:	
+	if (err) {
+		http_ereply(smx->hconn, 400, "Bad request");
+		mem_deref(smx);
+	}
+}
+
 int lb_init(int nprocs)
 {
 	struct sa *laddr = avs_service_req_addr();
 	int err = 0;
 
 	g_lb.nprocs = nprocs;
+	g_lb.start_ts = tmr_jiffies();
 	
 	err = dict_alloc(&g_lb.groups);
 	if (err) {
 		warning("lb: failed to alloc groups\n");
+		goto out;
+	}
+
+	err = http_client_alloc(&g_lb.httpc, avs_service_dnsc());
+	if (err) {
+		warning("lb: failed to alloc http-client\n");
 		goto out;
 	}
 
@@ -488,7 +735,15 @@ int lb_init(int nprocs)
 		error("sft: could not alloc httpd: %m\n", err);
 		goto out;
 	}
+	
+	laddr = avs_service_metrics_addr();
+	err = httpd_alloc(&g_lb.httpd_stats, laddr, http_stats_handler, &g_lb);
+	if (err) {
+		error("sft: could not alloc stats httpd: %m\n", err);
+		goto out;
+	}
 
+	
  out:
 	return err;
 }

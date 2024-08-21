@@ -53,6 +53,7 @@ struct sa  *avs_service_req_addr(void);
 struct sa  *avs_service_media_addr(void);
 struct sa  *avs_service_get_req_addr(int ix);
 struct sa  *avs_service_get_sft_addr(int ix);
+struct sa  *avs_service_get_metrics_addr(int ix);
 
 /* Member of iflist */
 struct avs_service_ifentry {

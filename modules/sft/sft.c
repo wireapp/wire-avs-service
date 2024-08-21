@@ -37,6 +37,7 @@
 #include <avs_service.h>
 #include <avs_service_turn.h>
 #include <avs_audio_level.h>
+#include <avs_jzon.h>
 
 #include "zauth.h"
 
@@ -2192,7 +2193,7 @@ static int send_provisional_http(struct call *call,
 	*/
 	base_url = call->sft_url ? call->sft_url
 		                 : avs_service_federation_url();
-	snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);//call->callid);
+	re_snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);//call->callid);
 
 	info("send_provisional_http: sending HTTP request to "
 	     "%s on client: %p\n", url, call->http_cli);
@@ -4669,10 +4670,9 @@ static void http_stats_handler(struct http_conn *hc,
 {
 	struct sft *sft = arg;
 	char *url = NULL;
-	struct mbuf *mb = NULL;
+	struct json_object *jobj = NULL;
 	char *stats = NULL;
-	uint64_t now;
-	int err = 0;;
+	int err = 0;
 
 	pl_strdup(&url, &msg->path);
 	info("http_stats_req: URL=%s\n", url);
@@ -4695,59 +4695,30 @@ static void http_stats_handler(struct http_conn *hc,
 	}
 #endif
 	
-	if (!streq(url, "/metrics")) {
+	if (!streq(url, "/jmetrics")) {
 		err = ENOENT;
 		goto out;
 	}
 
-	mb = mbuf_alloc(512);
-	now = tmr_jiffies();
+	jobj = jzon_alloc_object();
 
-	lock_write_get(sft->lock);	
+	lock_write_get(sft->lock); 
 
-	mbuf_printf(mb, "# HELP sft_uptime "
-		    "Uptime in [seconds] of the SFT service\n");
-	mbuf_printf(mb, "# TYPE sft_uptime counter\n");
-	mbuf_printf(mb, "sft_uptime %llu\n", (now - g_sft->start_ts)/1000);
-	mbuf_printf(mb, "\n");
-
-	mbuf_printf(mb, "# HELP sft_build_info "
-		    "Build information\n");
-	mbuf_printf(mb, "# TYPE sft_build_info gauge\n");
-	mbuf_printf(mb, "sft_build_info{version=\"%s\"} 1\n", SFT_VERSION);
-	mbuf_printf(mb, "\n");
-	
-	mbuf_printf(mb, "# HELP sft_participants "
-		    "Current number of participants\n");
-	mbuf_printf(mb, "# TYPE sft_participants gauge\n");
-	mbuf_printf(mb, "sft_participants %zu\n", dict_count(sft->calls));
-	mbuf_printf(mb, "\n");
-
-	mbuf_printf(mb, "# HELP sft_calls Current number of calls\n");
-	mbuf_printf(mb, "# TYPE sft_calls gauge\n");
-	mbuf_printf(mb, "sft_calls %zu\n", dict_count(sft->groups));
-	mbuf_printf(mb, "\n");
-
-	mbuf_printf(mb, "# HELP sft_participants_total "
-		    "Total number of participants\n");
-	mbuf_printf(mb, "# TYPE sft_participants_total counter\n");
-	mbuf_printf(mb, "sft_participants_total %llu\n", sft->stats.call_cnt);
-	mbuf_printf(mb, "\n");
-
-	mbuf_printf(mb, "# HELP sft_calls_total Total number of calls\n");
-	mbuf_printf(mb, "# TYPE sft_calls_total counter\n");
-	mbuf_printf(mb, "sft_calls_total %llu\n", sft->stats.group_cnt);
-	mbuf_printf(mb, "\n");
+	jzon_add_int(jobj, "sft_participants", (int32_t)dict_count(sft->calls));
+	jzon_add_int(jobj, "sft_calls", (int32_t)dict_count(sft->groups));
+	jzon_add_int(jobj, "sft_participants_total", (int32_t)sft->stats.call_cnt);
+	jzon_add_int(jobj, "sft_calls_total", (int32_t)sft->stats.group_cnt);
 
 	lock_rel(sft->lock);
 
-	mb->pos = 0;
-	mbuf_strdup(mb, &stats, mb->end);
-	http_creply(hc, 200, "OK", "text/plain", "%s", stats);
+	err = jzon_encode(&stats, jobj);
+	if (!err) {
+		http_creply(hc, 200, "OK", "application/json", "%s", stats);
+	}
 
  out:
 	mem_deref(stats);
-	mem_deref(mb);
+	mem_deref(jobj);
 	mem_deref(url);
 
 	if (err)

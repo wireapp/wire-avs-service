@@ -552,13 +552,13 @@ int main(int argc, char *argv[])
 			pid = fork();
 
 			req_port = sa_port(&avsd.req_addr) + nprocs;
-			metrics_port = sa_port(&avsd.metrics_addr) + nprocs;
+			metrics_port = sa_port(&avsd.metrics_addr) + nprocs + 1;
 			sft_port = sa_port(&sftsa) + nprocs;
 
 			sa_set_str(&rsa, LOCALHOST_IPV4, req_port);
+
 			/* Metrics */
-			sa_cpy(&msa, &avsd.metrics_addr);
-			sa_set_port(&msa, metrics_port);
+			sa_set_str(&msa, LOCALHOST_IPV4, metrics_port);
 
 			/* SFT-request */
 			sa_cpy(&ssa, &avsd.sft_req_addr);
@@ -598,6 +598,14 @@ int main(int argc, char *argv[])
 	log_enable_stderr(false);
 	log_register_handler(&logh);
 
+	sa_init(&goog, AF_INET);
+	sa_set_str(&goog, "8.8.8.8", DNS_PORT);
+	err = dnsc_alloc(&avsd.dnsc, NULL, &goog, 1);
+	if (err) {
+		warning("dns: dnsc_alloc failed: %m\n", err);
+		goto out;
+	}
+	
 	if (avsd.lb.main) {
 		lb_init(avsd.lb.nprocs);
 	}
@@ -612,14 +620,6 @@ int main(int argc, char *argv[])
 	avsd.start_time = time(NULL);
 
 	info("welcome to AVS-service -- using '%s'\n", avs_version_str());
-
-	sa_init(&goog, AF_INET);
-	sa_set_str(&goog, "8.8.8.8", DNS_PORT);
-	err = dnsc_alloc(&avsd.dnsc, NULL, &goog, 1);
-	if (err) {
-		warning("dns: dnsc_alloc failed: %m\n", err);
-		goto out;
-	}
 
 	re_main(signal_handler);
 
@@ -667,6 +667,15 @@ struct sa *avs_service_get_sft_addr(int ix)
 		return NULL;
 
 	return &avsd.lb.sft_addr[ix];
+}
+
+
+struct sa *avs_service_get_metrics_addr(int ix)
+{
+	if (ix < 0 || ix >= avsd.lb.nprocs)
+		return NULL;
+
+	return &avsd.lb.metrics_addr[ix];
 }
 
 struct sa  *avs_service_media_addr(void)
