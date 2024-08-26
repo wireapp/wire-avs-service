@@ -640,12 +640,14 @@ static void metrics_resp_handler(int rerr, const struct http_msg *msg,
 	}
 
  out:
+	mem_deref(jobj);
 	mem_deref(mctx);
 
 	smx->nresp++;
 	smx->err |= err;
 	if (smx->nresp >= g_lb.nprocs) {
 		send_stats(smx);
+		mem_deref(smx);
 	}
 }
 
@@ -703,7 +705,8 @@ static void http_stats_handler(struct http_conn *hc,
 			goto out;
 		}
 	}
- out:	
+ out:
+	mem_deref(url);
 	if (err) {
 		http_ereply(smx->hconn, 400, "Bad request");
 		mem_deref(smx);
@@ -759,9 +762,11 @@ static bool group_flush_handler(char *key, void *val, void *arg)
 
 void lb_close(void)
 {
-	mem_deref(g_lb.httpd);
-
 	dict_apply(g_lb.groups, group_flush_handler, NULL);
 	mem_deref(g_lb.groups);
+
+	mem_deref(g_lb.httpc);
+	mem_deref(g_lb.httpd);
+	mem_deref(g_lb.httpd_stats);
 }
 
