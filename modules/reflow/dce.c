@@ -48,6 +48,7 @@
 ** SUCH DAMAGE.
 */
 
+#define _DEFAULT_SOURCE
 
 #include <assert.h>
 #include <sys/types.h>
