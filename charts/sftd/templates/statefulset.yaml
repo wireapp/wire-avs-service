@@ -169,6 +169,12 @@ spec:
               {{- end }}
               {{- end }}
 
+              AUTH_SFT_ARGS=""
+
+              {{- if and (not .Values.multiSFT.enabled) (.Values.sftTokenSecret) }}
+              AUTH_SFT_ARGS="-s /secrets/sftTokenSecret.txt -a"
+              {{- end }}
+
               {{- if .Values.coredumps.enabled }}
               ulimit -c unlimited
               {{- end }}
@@ -180,7 +186,8 @@ spec:
                       ${MULTI_SFT_ARGS} \
                       {{ if .Values.turnDiscoveryEnabled }}-T{{ end }} \
                       -u "https://{{ required "must specify host" .Values.host }}/sfts/${POD_NAME}" \
-                      {{ .Values.additionalCmdArgs }}
+                      {{ .Values.additionalCmdArgs }} \
+                      ${AUTH_SFT_ARGS}
           ports:
             - name: sft
               containerPort: 8585
