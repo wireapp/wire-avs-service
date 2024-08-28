@@ -577,7 +577,6 @@ int main(int argc, char *argv[])
 				sa_cpy(&avsd.lb.req_addr[nprocs], &rsa);
 				sa_cpy(&avsd.lb.metrics_addr[nprocs], &msa);
 				sa_cpy(&avsd.lb.sft_addr[nprocs], &ssa);
-				sa_init(&avsd.sft_req_addr, AF_INET);
 			}
 			++nprocs;
 		}
