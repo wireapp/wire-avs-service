@@ -226,8 +226,8 @@ static void sft_resp_handler(int err, const struct http_msg *msg,
 	
 	int sz = 0;
 
-	info("lb: sft_resp: done err=%d(%m), %d bytes to send\n",
-	     err, err, rctx->mb_body ? (int)rctx->mb_body->end : 0);
+	info("lb: rctx(%p): sft_resp: done err=%d(%m), %d bytes received\n",
+	     rctx, err, err, rctx->mb_body ? (int)rctx->mb_body->end : 0);
 	if (err)
 		goto error;
 
@@ -246,18 +246,20 @@ static void sft_resp_handler(int err, const struct http_msg *msg,
 
 	re_snprintf(ctype, sizeof(ctype), "%s/%s", cmtype, cstype);
 
-#if 0
+#if 1
 	if (buf) {
-		info("lb: sft_resp: ctype=%s msg=%s\n", ctype, buf);
+		info("lb: sft_resp: rctx(%p) hconn=%p ctype=%s msg=%s\n", rctx, rctx->hconn, ctype, buf);
 	}
 #endif
 	
-	http_creply(rctx->hconn, msg->scode, reason, ctype, "%s", buf);
+	err = http_creply(rctx->hconn, msg->scode, reason, ctype, "%s", buf);
+	if (err) {
+		warning("lb: sft_resp: rctx(%p): failed to send reply: %m\n", rctx, err);
+	}
 
 	mem_deref(reason);
 	mem_deref(cmtype);
 	mem_deref(cstype);
-
 
  error:
 	mem_deref(rctx);
@@ -269,6 +271,7 @@ static void rctx_destructor(void *arg)
 
 	mem_deref(rctx->mb_body);
 	mem_deref(rctx->http_req);
+	mem_deref(rctx->hconn);
 }
 
 
@@ -372,11 +375,16 @@ static void http_req_handler(struct http_conn *hc,
 		if (err)
 			goto out;
 
-		dict_add(group->calls, call->id, call);
-		/* Call is now owned by the group's call dictionary */
-		mem_deref(call);
+		err = dict_add(group->calls, call->id, call);
+		if (err) {
+			warning("lb: call(%p): incoming req call already in group\n");
+			goto out;
+		}
 
 		call_created = true;
+
+		/* Call is now owned by the group's call dictionary */
+		mem_deref(call);
 
 		if (group_created) {
 			call->sftid = group->anchorid;
@@ -397,8 +405,8 @@ static void http_req_handler(struct http_conn *hc,
 		
 	}
 
-	info("lb: anchorid=%d(%J) sftid=%d(%J)\n",
-	     group->anchorid, &group->anchor_sftsa,
+	info("lb: call=%p anchorid=%d(%J) sftid=%d(%J)\n",
+	     call, group->anchorid, &group->anchor_sftsa,
 	     call->sftid, &call->sftsa);
 	
 	if (cmsg->msg_type == ECONN_CONF_CONN
@@ -408,7 +416,7 @@ static void http_req_handler(struct http_conn *hc,
 		re_snprintf(sft_url, sizeof(sft_url),
 			    "http://%J", &group->anchor_sftsa);
 
-		info("lb: setting sft_url=%s\n", sft_url);
+		info("lb: call(%p): setting sft_url=%s\n", call, sft_url);
 		
 		str_dup(&cmsg->u.confconn.sft_url, sft_url);
 
@@ -422,12 +430,11 @@ static void http_req_handler(struct http_conn *hc,
 		goto out;
 	}
 			
-	rctx->hconn = hc;
+	rctx->hconn = mem_ref(hc);
 
 	re_snprintf(sfturl, sizeof(sfturl), "http://%J%s", &call->sftsa, orig_url);
 
-	info("sending request: %s\n", sfturl);
-
+	info("rctx(%p): sending request: %s on hconn: %p\n", rctx, sfturl, rctx->hconn);
 	
 	err = http_request(&rctx->http_req, g_lb.httpc,
 			   "POST", sfturl, sft_resp_handler, sft_data_handler, rctx, 
@@ -457,6 +464,11 @@ static void http_req_handler(struct http_conn *hc,
 		if (call_created) {
 			if (group && callid)
 				dict_remove(group->calls, callid);
+		}
+		else {
+			if (call) {
+				mem_deref(call);
+			}
 		}
 		
 		/* If there was a sending error, maybe send a 5xx response? */
@@ -708,7 +720,7 @@ static void http_stats_handler(struct http_conn *hc,
  out:
 	mem_deref(url);
 	if (err) {
-		http_ereply(smx->hconn, 400, "Bad request");
+		http_ereply(hc, 400, "Bad request");
 		mem_deref(smx);
 	}
 }
