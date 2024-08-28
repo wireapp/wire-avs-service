@@ -143,6 +143,10 @@ spec:
             - name: coredumps
               mountPath: /var/coredumps
             {{- end }}
+            {{- if .Values.sftTokenSecret }}
+            - name: sft-secret
+              mountPath: /secrets
+            {{- end }}
 
           command:
             - /bin/sh
