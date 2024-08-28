@@ -33,18 +33,18 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: {{ include "sftd.fullname" . }}
       volumes:
+        {{- if or .Values.sftTokenSecret .Values.multiSFT.secret }}
+        - name: sft-secret
+          secret:
+            secretName: {{ include "sftd.fullname" . }}-secret
+        {{- end }}
         - name: external-ip
           emptyDir: {}
       {{- if .Values.multiSFT.enabled }}
         {{- if .Values.multiSFT.discoveryRequired }}
         - name: multi-sft-config
           emptyDir: {}
-        {{- else }}
-        - name: sft-secret
-          secret:
-            secretName: {{ include "sftd.fullname" . }}-secret
         {{- end }}
-
       {{- end }}
       initContainers:
         - name: get-external-ip
@@ -128,24 +128,21 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
           volumeMounts:
+            {{- if or .Values.sftTokenSecret .Values.multiSFT.secret }}
+            - name: sft-secret
+              mountPath: /secrets
+            {{- end }}
             - name: external-ip
               mountPath: /external-ip
             {{- if .Values.multiSFT.enabled }}
             {{- if .Values.multiSFT.discoveryRequired }}
             - name: multi-sft-config
               mountPath: /multi-sft-config
-            {{- else }}
-            - name: sft-secret
-              mountPath: /secrets
             {{- end }}
             {{- end }}
             {{- if .Values.coredumps.enabled }}
             - name: coredumps
               mountPath: /var/coredumps
-            {{- end }}
-            {{- if .Values.sftTokenSecret }}
-            - name: sft-secret
-              mountPath: /secrets
             {{- end }}
 
           command:
