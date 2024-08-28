@@ -2978,7 +2978,7 @@ static void conn_handler(void *arg)
 {
 	struct call *call = arg;
 
-	info("conn_handler\n");
+	SFTLOG(LOG_LEVEL_INFO, "conn_handler\n", call);
 	
 	if (call->alive) {
 		call->alive = false;
@@ -3061,6 +3061,8 @@ static void start_provisional(struct group *group,
 	char *provid = NULL;
 	int err;
 
+	info("start_provisional: group=%p url=%s tuple=%J cid=%d\n", group, url, tuple, (int)cid);
+	
 	/* If we already have a federation call for this group, use it */
 	if (group->sft.call) {
 		send_conf_part(group->sft.call, 0, entropy, entropylen,
@@ -3090,13 +3092,19 @@ static void start_provisional(struct group *group,
 	}
 
 	if (cid) {
-		dict_add(g_sft->provisional.calls, provid, call);
+		err = dict_add(g_sft->provisional.calls, provid, call);
+		if (!err) {
+			/* Call is now owned by dictionary */
+			mem_deref(call);
+		}
 	}
 	else {
-		dict_add(g_sft->provisional.calls, group->id, call);
+		err = dict_add(g_sft->provisional.calls, group->id, call);
 	}
-	/* Call is now owned by dictionary */
-	mem_deref(call);
+	if (err) {
+		warning("start_provisional: could not add to dictionary: %m\n", err);
+		goto out;
+	}
 	
 	str_dup(&call->sft_url, url);
 	sa_cpy(&call->sft_tuple, tuple);
@@ -4788,6 +4796,8 @@ static struct call *federate_request(bool direct,
 		goto out;
 	}
 
+	info("federate_request: %H\n", econn_message_brief, cmsg);
+	
 	if (!convid) {
 		convid = cmsg->sessid_sender;
 	}
