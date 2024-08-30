@@ -56,7 +56,7 @@ CPPFLAGS += \
 	-DHAVE_PROTOBUF \
 	-DSFT_PROJECT='"$(PROJECT)"' \
 	-DSFT_VERSION='"$(SFT_VERSION)"' \
-	-DUSE_REMB=1 \
+	-DUSE_REMB=0 \
 	-Iinclude \
 	-I$(BUILD)/include \
 	-I$(AVS_DIR)/include \
