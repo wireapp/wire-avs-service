@@ -34,7 +34,6 @@
 #include <avs_base.h>
 #include <avs_version.h>
 #include <pthread.h>
-#include <semaphore.h>
 
 #include <avs_service.h>
 #include "score.h"
@@ -237,23 +236,13 @@ static const char *level_prefix(enum log_level level)
 	}
 }
 
-static void logl_destructor(void *arg)
-{
-	struct log_line *logl = arg;
-
-	mem_deref(logl->mb);
-}
-
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
 	struct mbuf *mb;
 
-	logl = mem_zalloc(sizeof(*logl), logl_destructor);
-	if (!logl)
-		return;
-	logl->mb = mbuf_alloc(1024);
-	if (!logl->mb)
+	mb = mbuf_alloc(1024);
+	if (!mb)
 		return;
 
 	if (gettimeofday(&tv, NULL) == 0) {
@@ -274,11 +263,15 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 			    level_prefix(level), msg);
 	}
 	else {
-		mbuf_printf(logl->mb, "%s%s", level_prefix(level), msg);
+		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
 	}
 
-	fwrite(mb->buf, 1, mb->end, avsd.log.fp);
-	fflush(avsd.log.fp);
+	if (avsd.log.fp) {
+		fwrite(mb->buf, 1, mb->end, avsd.log.fp);
+		fflush(avsd.log.fp);
+	}
+
+	mem_deref(mb);
 }
 
 static struct log logh = {
