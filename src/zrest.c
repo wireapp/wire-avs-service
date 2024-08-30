@@ -94,7 +94,7 @@ enum zrest_state zrest_authenticate(const char *user, const char *credential)
 	     user, credential);
 	
 	if (0 == re_regex(user, strlen(user),
-			  "d=[0-9]+.v=1.k=[0-9]+.t=s.s=[0-9]+.r=[a-z0-9]*",
+			  "d=[0-9]+.v=1.k=[0-9]+.s=[0-9]+.r=[a-z0-9]*",
 			  &expires, NULL, &sstate, NULL)) {
 
 		can_start = pl_u32(&sstate);
