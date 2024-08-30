@@ -112,3 +112,8 @@ coredumps:
   enabled: false
   # storageClassName: my-storage-class
   storageSize: 10Gi
+
+# Arguments to be appended to sftd's command line arguments. This is a plain
+# string. Use it for development; established arguments should get their own
+# fields/options.
+additionalCmdArgs: ""

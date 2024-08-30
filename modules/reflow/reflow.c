@@ -78,7 +78,7 @@ enum {
 enum {
 	AUDIO_BANDWIDTH = 32,   /* kilobits/second */
 	AUDIO_PTIME     = 40,   /* ms */
-	VIDEO_BANDWIDTH = 600,  /* kilobits/second */
+	VIDEO_BANDWIDTH = 800,  /* kilobits/second */
 };
 
 enum {
@@ -2924,10 +2924,12 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 		if (strlen(ssrc_fid))
 			ssrc_fid[strlen(ssrc_fid) - 1] = '\0';
 
-		err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
-					  "FID %s", ssrc_fid);
-		if (err)
-			goto out;
+		if (i > 1) {
+			err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
+						  "FID %s", ssrc_fid);
+			if (err)
+				goto out;
+		}
 
 		if (ssrcc > 0)
 			rf->lssrcv[MEDIA_VIDEO] = ssrcv[0];
@@ -3448,7 +3450,8 @@ static void bundle_ssrc(struct reflow *rf,
 	struct le *le;
 
 	mtype = is_video ? sdp_media_video : sdp_media_audio;
-	bw = is_video ? VIDEO_BANDWIDTH : AUDIO_BANDWIDTH; 
+	bw = is_video ? VIDEO_BANDWIDTH : AUDIO_BANDWIDTH;
+	(void)bw;
 	disabled = ssrc == 0;
 	lport = 9; //disabled ? 0 : 9;
 	err = sdp_media_add(&newm, sess, mtype, lport, sdp_media_proto(sdpm));

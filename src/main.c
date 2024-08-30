@@ -34,6 +34,7 @@
 #include <avs_base.h>
 #include <avs_version.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #include <avs_service.h>
 #include "score.h"
@@ -79,7 +80,6 @@ struct avs_service {
 	struct pl secret;
 
 	struct dnsc *dnsc;
-
 	struct {
 		bool enabled;
 		int nprocs;
@@ -155,9 +155,7 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-q              Quiet (less-verbose logging)\n");
 	(void)re_fprintf(stderr, "\t-T              Use TURN servers when gathering\n");
 	(void)re_fprintf(stderr, "\t-t <url>        Multi SFT TURN URL\n");
-	(void)re_fprintf(stderr, "\t-s <path>       "
-			 "Multi SFT TURN path to file with secret\n");
-	
+	(void)re_fprintf(stderr, "\t-s <path>       Path to shared secrets file\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 	(void)re_fprintf(stderr, "\t-d              Spawn SFT processes\n");
 	(void)re_fprintf(stderr, "\t-n <nprocs>     Used together with -d and indicates # of processes to spawn "
@@ -239,15 +237,25 @@ static const char *level_prefix(enum log_level level)
 	}
 }
 
+static void logl_destructor(void *arg)
+{
+	struct log_line *logl = arg;
+
+	mem_deref(logl->mb);
+}
+
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
 	struct mbuf *mb;
 
-	mb = mbuf_alloc(1024);
-	if (!mb)
+	logl = mem_zalloc(sizeof(*logl), logl_destructor);
+	if (!logl)
 		return;
-	
+	logl->mb = mbuf_alloc(1024);
+	if (!logl->mb)
+		return;
+
 	if (gettimeofday(&tv, NULL) == 0) {
 		struct tm  tstruct;
 		uint32_t tms;
@@ -266,13 +274,11 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 			    level_prefix(level), msg);
 	}
 	else {
-		mbuf_printf(mb, "%s%s", level_prefix(level), msg);
+		mbuf_printf(logl->mb, "%s%s", level_prefix(level), msg);
 	}
 
 	fwrite(mb->buf, 1, mb->end, avsd.log.fp);
 	fflush(avsd.log.fp);
-
-	mem_deref(mb);
 }
 
 static struct log logh = {
@@ -520,7 +526,6 @@ int main(int argc, char *argv[])
 
 		avsd.log.fp = fopen(log_file_name, "a");
 	}
-	
 
 	if (avsd.lb.enabled) {
 		int nprocs = 0;
