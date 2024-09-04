@@ -193,6 +193,7 @@ struct dce {
 	dce_estab_h *estabh;
 	struct list channell;
 	bool snd_dry_event;
+	struct tmr tmr_retry;
 	void *arg;
 
 	struct le le; /* member of global active list */
@@ -1935,6 +1936,30 @@ void dce_recv_pkt(struct dce *dce, const uint8_t *pkt, size_t len)
 	usrsctp_conninput(dce, pkt, len, 0);
 }
 
+struct retry_entry {
+	struct dce *dce;
+	struct dce_channel *ch;
+	void *data;
+	size_t len;
+	
+};
+
+static void retry_handler(void *arg)
+{
+	struct retry_entry *rent = arg;
+
+	info("dce(%p): retry-send: re-trying len=%zu\n", rent->dce, rent->len);
+	
+	dce_send(rent->dce, rent->ch, rent->data, rent->len);
+	mem_deref(rent);
+}
+	
+static void rent_destructor(void *arg)
+{
+	struct retry_entry *rent = arg;
+
+	mem_deref(rent->data);
+}
 
 int dce_send(struct dce *dce, struct dce_channel *ch, const void *data, size_t len)
 {
@@ -1954,6 +1979,32 @@ int dce_send(struct dce *dce, struct dce_channel *ch, const void *data, size_t l
 			  &dce->pc.channels[ch->id],
 			  data, len);
 	unlock_peer_connection(&dce->pc);
+
+	if (EAGAIN == ret) {
+		struct retry_entry *rent;
+
+		info("dce(%p): send: re-trying len=%zu\n", dce, len);
+		rent = mem_zalloc(sizeof(*rent), rent_destructor);
+		if (!rent) {
+			ret = ENOMEM;
+		}
+		else {
+			rent->dce = dce;
+			rent->ch = ch;
+			rent->data = mem_alloc(len, NULL);
+			if (!rent->data) {
+				mem_deref(rent);
+				ret = ENOMEM;
+			}
+			else {
+				memcpy(rent->data, data, len);
+				rent->len = len;
+				tmr_start(&dce->tmr_retry, 100, retry_handler, rent);
+				ret = 0;
+			}
+		}
+	}
+	
 
 	return (ret == 0) ? 0 : EIO;
 }
@@ -1984,6 +2035,7 @@ static void dce_destructor(void *arg)
 		lock_rel(g_dce.lock);
 		return;
 	}
+
 	list_unlink(&dce->le);
 	lock_rel(g_dce.lock);
 
@@ -1991,6 +2043,7 @@ static void dce_destructor(void *arg)
     
 	info("dce(%p): destructor\n", dce);
 
+	tmr_cancel(&dce->tmr_retry);
 	dce->sendh = NULL;
 	dce->estabh = NULL;
     
