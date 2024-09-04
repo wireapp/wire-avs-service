@@ -77,6 +77,30 @@ void zrest_generate_sft_username(char *user, size_t sz)
 		    (uint64_t)(now + USERNAME_TTL), x);
 }
 
+static bool pass_eq(const char *credential, const char *pass, size_t passlen, size_t clen)
+{
+	size_t i;
+	size_t j = 0;
+	bool match = true;
+	
+	for(i = 0; i < clen; ++i) {
+		bool cm = false;
+		
+		if (credential[j] == '0') {
+			if (j == passlen) {
+				cm = true;
+			}
+		}
+		else {
+			cm = credential[j] == pass[i];
+			++j;
+		}
+		
+		match = match && cm;
+	}
+
+	return match;
+}
 
 enum zrest_state zrest_authenticate(const char *user, const char *credential)
 {
@@ -85,6 +109,7 @@ enum zrest_state zrest_authenticate(const char *user, const char *credential)
 	time_t expi;
 	char pass[256];
 	size_t passlen = sizeof(pass);
+	size_t clen = passlen;
 	uint32_t can_start = 0;
 	const struct pl *secret;
 	int err;
@@ -122,7 +147,7 @@ enum zrest_state zrest_authenticate(const char *user, const char *credential)
 			err);
 		return ZREST_ERROR;
 	}
-	if (strncmp(credential, pass, passlen) != 0)
+	if (!pass_eq(credential, pass, passlen, clen))
 		return ZREST_UNAUTHORIZED;
 
 	return can_start == 1 ? ZREST_OK : ZREST_JOIN;
