@@ -172,7 +172,7 @@ spec:
 
               AUTH_SFT_ARGS=""
 
-              {{- if and (not .Values.multiSFT.enabled) (.Values.sftTokenSecret) }}
+              {{- if and (not .Values.multiSFT.enabled) .Values.sftTokenSecret }}
               AUTH_SFT_ARGS="-s /secrets/sftTokenSecret.txt -a"
               {{- end }}
 
