@@ -2474,6 +2474,7 @@ int reflow_alloc(struct iflow		**flowp,
 		goto out;
 
 	(void)sdp_session_set_lattr(rf->sdp, true, "tool", avs_version_str());
+	(void)sdp_session_set_lattr(rf->sdp, true, "extmap-allow-mixed", "true");
 
 	info("reflow_alloc sdp_session_alloc\n");
 	err = sdp_media_add(&rf->audio.sdpm, rf->sdp, "audio",
@@ -2482,8 +2483,8 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	sdp_media_set_lbandwidth(rf->audio.sdpm,
-				 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
+	//sdp_media_set_lbandwidth(rf->audio.sdpm,
+	//			 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
 	sdp_media_set_lattr(rf->audio.sdpm, true, "ptime", "%u", AUDIO_PTIME);
 
 	/* needed for new versions of WebRTC */
@@ -2800,8 +2801,8 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	if (err)
 		goto out;
 
-	sdp_media_set_lbandwidth(rf->video.sdpm,
-				 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
+	//sdp_media_set_lbandwidth(rf->video.sdpm,
+	//			 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
 
 	/* needed for new versions of WebRTC */
 	err = sdp_media_set_alt_protos(rf->video.sdpm, 2,
@@ -2816,9 +2817,39 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+	
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
-			    "3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
+			    "4 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "5 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "11 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
+#if 0
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "3 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "3 urn:ietf:params:rtp-hdrext:toffset");	
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",	
+			    "6 http://www.webrtc.org/experiments/rtp-hdrext/playout-delay");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",		
+			    "7 http://www.webrtc.org/experiments/rtp-hdrext/video-content-type");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",		
+			    "8 http://www.webrtc.org/experiments/rtp-hdrext/video-timing");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "9 http://www.webrtc.org/experiments/rtp-hdrext/color-space");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "10 urn:ietf:params:rtp-hdrext:sdes:mid");
+#endif
 
 	/*
 	  sdp_media_set_lattr(rf->video.sdpm, false,
@@ -2907,12 +2938,14 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 			}
 
 			if (vc->uses_rtcp) {
+#if 1
 				sdp_media_set_lattr(rf->video.sdpm, false,
 						    "rtcp-fb", "%s nack",
 						    vc->pt);
 				sdp_media_set_lattr(rf->video.sdpm, false,
 						    "rtcp-fb", "%s nack pli",
 						    vc->pt);
+#endif
 #if USE_TRANSCC
 				sdp_media_set_lattr(rf->video.sdpm, false,
 						    "rtcp-fb", "%s transport-cc",
@@ -2942,6 +2975,9 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 				goto out;
 		}
 
+		err = sdp_media_set_lattr(rf->video.sdpm, false,
+					  "msid", "%s vtrack", rf->msid);
+		
 		if (ssrcc > 0)
 			rf->lssrcv[MEDIA_VIDEO] = ssrcv[0];
 		if (ssrcc > 1)
@@ -2958,6 +2994,10 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 			if (err)
 				goto out;
 		}
+
+		sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
+		sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
+		sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv l;h");		
 	}
 
  out:
@@ -3484,9 +3524,11 @@ static void bundle_ssrc(struct reflow *rf,
 	if (is_video) {
 		sdp_media_set_lattr(newm, false, "extmap",
 			"2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+#if 0
 		sdp_media_set_lattr(newm, false, "extmap",
-			"3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
-		
+				    /"3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
+				    "3 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
+#endif
 	}
 	else {
 		sdp_media_set_lattr(newm, false, "extmap",
@@ -3532,7 +3574,7 @@ static void bundle_ssrc(struct reflow *rf,
 
 	
 	sdp_media_set_ldir(newm, disabled ? SDP_INACTIVE : SDP_SENDONLY);
-	sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
+        //sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
 }
 
 
@@ -6137,15 +6179,19 @@ static struct aucodec opus = {
 	.extensions = audio_exts,
 };
 
-const char *video_exts[] = {"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
-			    NULL};
+//const char *video_exts[] = {"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+//			    NULL};
 
 static struct vidcodec vp8 = {
 	.pt         = "100",
 	.name       = "VP8",
-	.variant    = NULL,
 	.fmtp       = NULL,
-	.extensions = video_exts,
+	//.name       = "VP9",
+	//.fmtp       = "profile-id=0",
+	//.name         = "AV1",
+	//.fmtp         = "level-idx=5;profile=0;tier=0",
+	.variant    = NULL,
+	.extensions = NULL,
 	.uses_rtcp  = true,
 };
 static struct vidcodec rtx = {
@@ -6180,7 +6226,7 @@ static int module_init(void)
 
 	/* Video codecs we support */
 	list_append(&g_reflow.vidcodecl, &vp8.le, &vp8);
-	list_append(&g_reflow.vidcodecl, &rtx.le, &rtx);
+	//list_append(&g_reflow.vidcodecl, &rtx.le, &rtx);
 	
 	info("reflow_init: setting flow to reflow\n");
 	if (g_reflow.initialized)
