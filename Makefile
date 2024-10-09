@@ -57,7 +57,7 @@ CPPFLAGS += \
 	-DSFT_PROJECT='"$(PROJECT)"' \
 	-DSFT_VERSION='"$(SFT_VERSION)"' \
 	-DUSE_REMB=0 \
-	-DUSE_TRANSCC=0 \
+	-DUSE_TWCC=1 \
 	-Iinclude \
 	-I$(BUILD)/include \
 	-I$(AVS_DIR)/include \

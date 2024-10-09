@@ -124,6 +124,7 @@ static struct {
 	struct list rfl;
 	struct list aucodecl;
 	struct list vidcodecl;
+	struct list bundle_vidcodecl;
 
 	struct {
 		struct mediapump *mp;
@@ -2498,10 +2499,6 @@ int reflow_alloc(struct iflow		**flowp,
 		"extmap", "1 urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on");
 	sdp_media_set_lattr(rf->audio.sdpm, false,
 			    "extmap", "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-#if USE_TRANSCC
-	sdp_media_set_lattr(rf->audio.sdpm, false,
-			    "extmap", "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-#endif
 	
 	rand_str(rf->cname, sizeof(rf->cname));
 	rand_str(rf->msid, sizeof(rf->msid));
@@ -2551,7 +2548,7 @@ int reflow_alloc(struct iflow		**flowp,
 		af->ac = ac;
 		list_append(&rf->audio.formatl, &af->le, af);
 
-#if USE_TRANSCC
+#if USE_TWCC
 		sdp_media_set_lattr(rf->audio.sdpm, false,
 				    "rtcp-fb", "%s transport-cc",
 				    ac->pt);
@@ -2817,7 +2814,11 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-	
+#if USE_TWCC
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif	
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "4 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id");
@@ -2830,25 +2831,7 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 #if 0
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
-			    "3 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",
-			    "3 urn:ietf:params:rtp-hdrext:toffset");	
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",	
-			    "6 http://www.webrtc.org/experiments/rtp-hdrext/playout-delay");
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",		
-			    "7 http://www.webrtc.org/experiments/rtp-hdrext/video-content-type");
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",		
-			    "8 http://www.webrtc.org/experiments/rtp-hdrext/video-timing");
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",
-			    "9 http://www.webrtc.org/experiments/rtp-hdrext/color-space");
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",
-			    "10 urn:ietf:params:rtp-hdrext:sdes:mid");
+			    "6 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
 #endif
 
 	/*
@@ -2856,12 +2839,6 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	  "extmap",
 	  "2 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-01");
 	*/
-
-#if USE_TRANSCC
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",
-			    "4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-#endif
 	
 	sdp_media_set_lattr(rf->video.sdpm, false, "rtcp-mux", NULL);
 	sdp_media_set_lattr(rf->video.sdpm, false, "rtcp-rsize", NULL);
@@ -2946,7 +2923,7 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 						    "rtcp-fb", "%s nack pli",
 						    vc->pt);
 #endif
-#if USE_TRANSCC
+#if USE_TWCC
 				sdp_media_set_lattr(rf->video.sdpm, false,
 						    "rtcp-fb", "%s transport-cc",
 						    vc->pt);
@@ -3523,12 +3500,9 @@ static void bundle_ssrc(struct reflow *rf,
 	
 	if (is_video) {
 		sdp_media_set_lattr(newm, false, "extmap",
-			"2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-#if 0
+				    "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
 		sdp_media_set_lattr(newm, false, "extmap",
-				    /"3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
-				    "3 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
-#endif
+				    "11 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
 	}
 	else {
 		sdp_media_set_lattr(newm, false, "extmap",
@@ -3540,15 +3514,15 @@ static void bundle_ssrc(struct reflow *rf,
 	uuid_v4(&label);
 	
 	if (!disabled) {
-		sdp_media_set_lattr(newm, false, "ssrc-group",
-				    "FID %u %u", ssrc, rtx_ssrc);
-
 		sdp_media_set_lattr(newm, false, "ssrc", "%u cname:%s",
 				    ssrc, label);
 		sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
 				    ssrc, label, label);
 
 		if (rtx_ssrc) {
+			sdp_media_set_lattr(newm, false, "ssrc-group",
+					    "FID %u %u", ssrc, rtx_ssrc);
+
 			sdp_media_set_lattr(newm, false, "ssrc", "%u cname:%s",
 					    rtx_ssrc, label);
 			sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
@@ -3564,14 +3538,37 @@ static void bundle_ssrc(struct reflow *rf,
 	//sdp_media_rattr_apply(sdpm, NULL,
 	//		      media_rattr_handler, newm);
 
-	LIST_FOREACH(sdp_media_format_lst(sdpm, true), le) {
-		struct sdp_format *fmt = le->data;
 
-		sdp_format_add(NULL, newm, false,
-		       fmt->id, fmt->name, fmt->srate, fmt->ch,
-		       NULL, NULL, NULL, false, "%s", fmt->params);
+	if (is_video) {
+		LIST_FOREACH(&g_reflow.bundle_vidcodecl, le) {
+			struct vidcodec *vc = list_ledata(le);
+			struct vid_ref *vr;
+		   
+			vr = mem_zalloc(sizeof(*vr), NULL);
+			if (!vr)
+				continue;
+
+			vr->rf = rf;
+			vr->vc = vc;
+			
+			sdp_format_add(NULL, newm, false,
+				       vc->pt, vc->name, 90000, 1,
+				       NULL,
+				       NULL,
+				       vr, true,
+				       "%s", vc->fmtp);
+			mem_deref(vr);
+		}
 	}
+	else {
+		LIST_FOREACH(sdp_media_format_lst(sdpm, true), le) {
+			struct sdp_format *fmt = le->data;
 
+			sdp_format_add(NULL, newm, false,
+				       fmt->id, fmt->name, fmt->srate, fmt->ch,
+				       NULL, NULL, NULL, false, "%s", fmt->params);		
+		}
+	}
 	
 	sdp_media_set_ldir(newm, disabled ? SDP_INACTIVE : SDP_SENDONLY);
         //sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
@@ -6226,7 +6223,9 @@ static int module_init(void)
 
 	/* Video codecs we support */
 	list_append(&g_reflow.vidcodecl, &vp8.le, &vp8);
-	//list_append(&g_reflow.vidcodecl, &rtx.le, &rtx);
+
+	list_append(&g_reflow.bundle_vidcodecl, &vp8.bundle_le, &vp8);
+	list_append(&g_reflow.bundle_vidcodecl, &rtx.bundle_le, &rtx);
 	
 	info("reflow_init: setting flow to reflow\n");
 	if (g_reflow.initialized)
