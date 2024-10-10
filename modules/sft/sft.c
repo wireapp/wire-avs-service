@@ -1136,6 +1136,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 		}
 		seqno = tp->seqno + 1;
 	}
+	twcc->seqno = seqno;
 	
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
@@ -1406,15 +1407,29 @@ static void twcc_handler(void *arg)
 	}
 
 #if 1
-	info("twcc: ssrc(%u): %w\n", twcc->rssrc, mb->buf, mb->end);
+	info("twcc_handler: ssrc(%u): %w\n", twcc->rssrc, mb->buf, mb->end);
 #endif
 	
 	if (call->mf)
 		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
 
+#if 0
+	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
+			  lssrc,
+			  twcc->rssrc,
+			  twcc_encode_handler, twcc);
+	if (err) {
+		warning("twcc: RTCP-encode failed: %m\n", err);
+		goto out;
+	}
+
+	if (call->mf)
+		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
+#endif
+
 	//send_gnack(call, twcc);
 
-	twcc->seqno = -1;
+	//twcc->seqno = -1;
 	list_flush(&twcc->pktl);
 
  out:
@@ -4316,6 +4331,7 @@ static void call_destructor(void *arg)
 	mem_deref(call->video.jb);
 	mem_deref(call->video.hi.dd);
 	mem_deref(call->video.lo.dd);
+	mem_deref(call->video.twcc.lock);
 	mem_deref(call->lock);
 }
 
