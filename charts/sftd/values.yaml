@@ -108,6 +108,10 @@ multiSFT:
   secret:
   turnServerURI:
 
+# This is the secret used for authentication when the multiSFT feature is disabled
+# Do not use this when multiSFT is enabled, and instead use the `multiSFT.secret` field
+sftTokenSecret: # "my_secret_string"
+
 coredumps:
   enabled: false
   # storageClassName: my-storage-class

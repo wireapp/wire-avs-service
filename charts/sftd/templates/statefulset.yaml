@@ -33,18 +33,18 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: {{ include "sftd.fullname" . }}
       volumes:
+        {{- if or .Values.sftTokenSecret .Values.multiSFT.secret }}
+        - name: sft-secret
+          secret:
+            secretName: {{ include "sftd.fullname" . }}-secret
+        {{- end }}
         - name: external-ip
           emptyDir: {}
       {{- if .Values.multiSFT.enabled }}
         {{- if .Values.multiSFT.discoveryRequired }}
         - name: multi-sft-config
           emptyDir: {}
-        {{- else }}
-        - name: sft-secret
-          secret:
-            secretName: {{ include "sftd.fullname" . }}-secret
         {{- end }}
-
       {{- end }}
       initContainers:
         - name: get-external-ip
@@ -128,15 +128,16 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
           volumeMounts:
+            {{- if or .Values.sftTokenSecret .Values.multiSFT.secret }}
+            - name: sft-secret
+              mountPath: /secrets
+            {{- end }}
             - name: external-ip
               mountPath: /external-ip
             {{- if .Values.multiSFT.enabled }}
             {{- if .Values.multiSFT.discoveryRequired }}
             - name: multi-sft-config
               mountPath: /multi-sft-config
-            {{- else }}
-            - name: sft-secret
-              mountPath: /secrets
             {{- end }}
             {{- end }}
             {{- if .Values.coredumps.enabled }}
@@ -169,6 +170,12 @@ spec:
               {{- end }}
               {{- end }}
 
+              AUTH_SFT_ARGS=""
+
+              {{- if and (not .Values.multiSFT.enabled) .Values.sftTokenSecret }}
+              AUTH_SFT_ARGS="-s /secrets/sftTokenSecret.txt -a"
+              {{- end }}
+
               {{- if .Values.coredumps.enabled }}
               ulimit -c unlimited
               {{- end }}
@@ -180,7 +187,8 @@ spec:
                       ${MULTI_SFT_ARGS} \
                       {{ if .Values.turnDiscoveryEnabled }}-T{{ end }} \
                       -u "https://{{ required "must specify host" .Values.host }}/sfts/${POD_NAME}" \
-                      {{ .Values.additionalCmdArgs }}
+                      {{ .Values.additionalCmdArgs }} \
+                      ${AUTH_SFT_ARGS}
           ports:
             - name: sft
               containerPort: 8585
