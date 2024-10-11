@@ -3,8 +3,8 @@
 #include <string.h>
 #include <re.h>
 #include "avs.h"
-#include "avs_bitstream.h"
-#include "avs_dep_desc.h"
+#include "bitstream.h"
+#include "dep_desc.h"
 
 
 static int read_mandatory(struct bitstream *bs, struct dep_desc *dd)

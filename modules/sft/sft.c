@@ -1141,7 +1141,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
 	/* reference time is in multiples of 64ms */
-	refcnt = (((uint32_t)(twcc->deltats - twcc->refts) >> 6) << 8) | twcc->fbcnt;
+	refcnt = (((uint32_t)(now - twcc->refts) >> 6) << 8) | twcc->fbcnt;
 	mbuf_write_u32(mb, htonl(refcnt));
 
 	/* Use status chunk 
@@ -1190,7 +1190,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 		}
 	}
 
-	twcc->deltats = now;
+	twcc->deltats = prevts;
 	twcc->fbcnt++;
 
 	return 0;
