@@ -3,7 +3,7 @@
 #include <memory.h>
 #include <re.h>
 
-#include "avs_bitstream.h"
+#include "bitstream.h"
 
 struct bitstream {
 	bool allocated;
