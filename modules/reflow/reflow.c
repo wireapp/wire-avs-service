@@ -631,28 +631,6 @@ static int start_codecs(struct reflow *rf)
 
 static const uint8_t app_label[4] = "DATA";
 
-
-static int send_rtcp_app(struct reflow *rf, const uint8_t *pkt, size_t len)
-{
-	struct mbuf *mb = mbuf_alloc(len);
-	int err;
-
-	err = rtcp_encode(mb, RTCP_APP, 0, (uint32_t)0, app_label, pkt, len);
-	if (err) {
-		warning("reflow(%p): rtcp_encode failed (%m)\n", rf, err);
-		goto out;
-	}
-
-	err = reflow_send_raw_rtcp(rf, mb->buf, mb->end);
-	if (err) {
-		warning("reflow(%p): send_raw_rtcp failed (%m)\n", rf, err);
-	}
-
- out:
-	mem_deref(mb);
-	return err;
-}
-
 static int reflow_send_dc_data(struct reflow *rf, const uint8_t *data, size_t len)
 {
 	int err = ENOSYS;
@@ -743,6 +721,7 @@ static int start_video_codecs(struct reflow *rf)
 }
 
 
+#if 0
 static void timeout_rtp(void *arg)
 {
 	struct reflow *rf = arg;
@@ -774,6 +753,7 @@ static void timeout_rtp(void *arg)
 		IFLOW_CALL_CB(rf->iflow, closeh, ETIMEDOUT, rf->iflow.arg);
 	}
 }
+#endif
 
 
 /* this function is only called once */
@@ -2915,7 +2895,7 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 			}
 
 			if (vc->uses_rtcp) {
-#if 1
+#if USE_RTX
 				sdp_media_set_lattr(rf->video.sdpm, false,
 						    "rtcp-fb", "%s nack",
 						    vc->pt);
@@ -3488,8 +3468,10 @@ static void bundle_ssrc(struct reflow *rf,
 	sdp_media_set_lattr(newm, false, "rtcp-mux", NULL);
 	if (is_video) {
 		sdp_media_set_lattr(newm, false, "rtcp-rsize", NULL);
+#if USE_RTX
 		sdp_media_set_lattr(newm, false, "rtcp-fb", "100 nack");
 		sdp_media_set_lattr(newm, false, "rtcp-fb", "100 nack pli");
+#endif
 	}
 
 	sdp_media_set_lattr(newm, false, "ice-ufrag", "%s", rf->ice_ufrag);
@@ -6191,6 +6173,7 @@ static struct vidcodec vp8 = {
 	.extensions = NULL,
 	.uses_rtcp  = true,
 };
+#if USE_RTX
 static struct vidcodec rtx = {
 	.pt         = "101",
 	.name       = "rtx",
@@ -6199,6 +6182,7 @@ static struct vidcodec rtx = {
 	.extensions = NULL,
 	.uses_rtcp  = false,
 };
+#endif
 
 
 static void mf_set_handlers(mediaflow_alloc_h *alloch,
@@ -6225,7 +6209,9 @@ static int module_init(void)
 	list_append(&g_reflow.vidcodecl, &vp8.le, &vp8);
 
 	list_append(&g_reflow.bundle_vidcodecl, &vp8.bundle_le, &vp8);
+#if USE_RTX
 	list_append(&g_reflow.bundle_vidcodecl, &rtx.bundle_le, &rtx);
+#endif
 	
 	info("reflow_init: setting flow to reflow\n");
 	if (g_reflow.initialized)

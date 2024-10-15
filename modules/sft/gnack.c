@@ -12,6 +12,8 @@
 
 #define RTX_PT 101
 
+#if USE_RTX
+
 struct gnack_entry {
 	struct call *call;
 
@@ -220,3 +222,5 @@ int gnack_add_payload(struct call *call, struct gnack_rtx_stream *rs,
 
 	return err;
 }
+
+#endif
