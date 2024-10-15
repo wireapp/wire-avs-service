@@ -218,7 +218,7 @@ struct nack_entry {
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 20000
 #define TIMEOUT_RR 500
-#define TIMEOUT_TWCC 500
+#define TIMEOUT_TWCC 100
 #define TIMEOUT_PROVISIONAL 10000
 
 
@@ -273,9 +273,12 @@ struct twcc_arg {
 
 struct twcc {
 	uint64_t refts;
-	uint8_t fbcnt;
+	uint64_t fbcnt;
+	//uint8_t fbcnt;
 	int seqno;
 	uint64_t deltats;
+	uint64_t now;
+	uint64_t prevts;
 	struct list pktl;
 
 	uint32_t lssrc;
@@ -984,6 +987,7 @@ static void update_jitter(struct ssrc_stats *s, uint32_t ts, uint64_t now)
 	s->jitter += (1.0/16.0) * ((double)d - s->jitter);	
 }
 
+#if 0
 static int ssrc_stats_debug(struct re_printf *pf, const struct ssrc_stats *s)
 {
 	int err;
@@ -1001,6 +1005,7 @@ static int ssrc_stats_debug(struct re_printf *pf, const struct ssrc_stats *s)
 
 	return err;
 }
+#endif
 
 
 static void update_ssrc_stats(struct ssrc_stats *s, struct rtp_header *rtp,
@@ -1086,7 +1091,6 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	struct le *le;
 	uint16_t seqno;
 	uint32_t refcnt;
-	uint64_t now = tmr_jiffies();
 	uint64_t prevts;
 
 	/*
@@ -1141,7 +1145,8 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
 	/* reference time is in multiples of 64ms */
-	refcnt = (((uint32_t)(now - twcc->refts) >> 6) << 8) | twcc->fbcnt;
+	//refcnt = (((uint32_t)(twcc->now - twcc->refts) >> 6) << 8) | twcc->fbcnt;
+	refcnt = ((uint32_t)(twcc->fbcnt << 8)) | (uint8_t)twcc->fbcnt;
 	mbuf_write_u32(mb, htonl(refcnt));
 
 	/* Use status chunk 
@@ -1190,14 +1195,13 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 		}
 	}
 
-	twcc->deltats = prevts;
-	twcc->fbcnt++;
+	twcc->prevts = prevts;
 
 	return 0;
 }
 #endif
 
-
+#if USE_RTX
 static int gnack_encode_handler(struct mbuf *mb, struct nack_entry *ne)
 {
 	uint16_t seq = ne->seq;
@@ -1235,6 +1239,7 @@ static void send_gnack(struct call *call, struct nack_entry *ne)
 
 	mem_deref(mb);
 }
+#endif
 
 #if 0
 static void rr_handler(void *arg)
@@ -1383,6 +1388,7 @@ static void twcc_handler(void *arg)
 	struct twcc *twcc = ta->twcc;
 	struct mbuf *mb = NULL;
 	uint32_t lssrc;
+	uint32_t rssrc;
 	int err;
 
 	lock_write_get(twcc->lock);
@@ -1395,18 +1401,25 @@ static void twcc_handler(void *arg)
 		goto out;
 	}
 
+	rssrc = call->video.hi.ssrc;
+	if (!rssrc) {
+		rssrc = call->video.lo.ssrc;
+	}
+	if (!rssrc)
+		goto out;
 	
 	lssrc = mediaflow_get_ssrc(call->mf, "video", true);
+	twcc->now = tmr_jiffies();
 	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
 			  lssrc,
-			  twcc->rssrc,
+			  rssrc,
 			  twcc_encode_handler, twcc);
 	if (err) {
 		warning("twcc: RTCP-encode failed: %m\n", err);
 		goto out;
 	}
 
-#if 1
+#if 0
 	info("twcc_handler: ssrc(%u): %w\n", twcc->rssrc, mb->buf, mb->end);
 #endif
 	
@@ -1414,23 +1427,28 @@ static void twcc_handler(void *arg)
 		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
 
 #if 0
-	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
-			  lssrc,
-			  twcc->rssrc,
-			  twcc_encode_handler, twcc);
-	if (err) {
-		warning("twcc: RTCP-encode failed: %m\n", err);
-		goto out;
+	if (rssrc == call->video.hi.ssrc) {
+		rssrc = call->video.lo.ssrc;
 	}
+	if (rssrc) {
+		mb->pos = 0;
+		err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
+				  lssrc,
+				  rssrc,
+				  twcc_encode_handler, twcc);
+		if (err) {
+			warning("twcc: RTCP-encode failed: %m\n", err);
+			goto out;
+		}
 
-	if (call->mf)
-		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
+		if (call->mf)
+			mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
+	}
 #endif
 
-	//send_gnack(call, twcc);
-
-	//twcc->seqno = -1;
 	list_flush(&twcc->pktl);
+	twcc->deltats = twcc->prevts;
+	twcc->fbcnt++;
 
  out:
 	mem_deref(mb);
@@ -1525,6 +1543,7 @@ static const char *ssrc2userid(struct list *partl, bool issft, uint32_t ssrc)
 	return found ? userid : NULL;
 }
 
+#if USE_RTX
 static struct rtp_stream *video_rtx_find(struct call *call, uint32_t ssrc)
 {
 	struct rtp_stream *rs = NULL;
@@ -1538,6 +1557,7 @@ static struct rtp_stream *video_rtx_find(struct call *call, uint32_t ssrc)
 
 	return found ? rs : NULL;
 }
+#endif
 
 static struct rtp_stream *video_stream_find(struct call *fcall,
 					    struct call *call,
@@ -1847,6 +1867,8 @@ static int tc_send(struct turn_conn *tc,
 	return err;
 }
 
+
+#if USE_RTX
 static void jbuf_lost_handler(uint32_t ssrc, uint16_t seq, int nlost, void *arg)
 {
 	struct call *call = arg;
@@ -1859,8 +1881,9 @@ static void jbuf_lost_handler(uint32_t ssrc, uint16_t seq, int nlost, void *arg)
 	ne.seq = seq;
 	ne.nlost = nlost;
 	
-	//send_gnack(call, &ne);
+	send_gnack(call, &ne);
 }
+#endif
 
 static void process_dd(struct call *call,
 		       struct dep_desc **dd,
@@ -1869,7 +1892,6 @@ static void process_dd(struct call *call,
 {
 	int err;
 	
-	//info("call(%p): extmap_dd of size=%d\n", call, sz);
 	err = dep_desc_read(dd, frame, buf, sz);
 	if (err) {
 		warning("call(%p): failed to read dd\n", call);
@@ -2014,6 +2036,7 @@ static void process_rtp(struct call *call,
 			is_keyframe = (gfh & (GFH_MASK_SOF | GFH_MASK_DEP)) == GFH_MASK_SOF;
 
 			if (is_keyframe) {
+#ifdef GFH_DEBUG				
 				uint16_t frame_w = 0;
 				uint16_t frame_h = 0;
 				
@@ -2021,7 +2044,6 @@ static void process_rtp(struct call *call,
 					frame_w = ntohs(*(uint16_t*)((void*)&mb->buf[mb->pos + 4]));
 					frame_h = ntohs(*(uint16_t*)((void*)&mb->buf[mb->pos + 6]));
 				}
-#ifdef GFH_DEBUG
 				info("call(%p): GFH: ssrc=%u keyframe=%d len=%d res=%dx%d\n",
 				     call, ssrc, (int)is_keyframe, xlen, frame_w, frame_h);
 #endif
@@ -2403,8 +2425,10 @@ static void process_rtp(struct call *call,
 			}
 			else if (rcall->mf) {
 				if (!rcall->issft && rst == RTP_STREAM_TYPE_VIDEO) {
+#if USE_RTX
 					gnack_add_payload(rcall, &rs->rtx, rtp,
 							  rdata, rlen, plpos - pos);
+#endif
 				}
 
 				mediaflow_send_rtp(rcall->mf, rdata, rlen);
@@ -2512,6 +2536,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 #endif
 }
 
+#if USE_RTX
 static void rtx_send_handler(struct call *call,
 			     struct gnack_rtx_stream *rs,
 			     struct list *rtxl)
@@ -2528,7 +2553,7 @@ static void rtx_send_handler(struct call *call,
 		mb.end = mb.size = rtx->pllen;
 		rtp_hdr_decode(&rtp, &mb);
 
-#if 1
+#if 0
 		info("rtx_send: pt=%d seq=%d ssrc=%u ts=%u len=%u OSN[%d]=%d\n",
 		     rtp.pt, rtp.seq, rtp.ssrc, rtp.ts, rtx->pllen,
 		     rtx->plpos, ntohs(*(uint16_t *)((void*)&rtx->plb[rtx->plpos])));
@@ -2537,7 +2562,7 @@ static void rtx_send_handler(struct call *call,
 		mediaflow_send_rtp(call->mf, rtx->plb, rtx->pllen);
 	}
 }
-
+#endif
 
 
 static void reflow_rtcp_recv(struct mbuf *mb, void *arg)
@@ -2555,6 +2580,8 @@ static void reflow_rtcp_recv(struct mbuf *mb, void *arg)
 		switch (rtcp->hdr.pt) {
 		case RTCP_RTPFB:
 			switch (rtcp->hdr.count) {
+				
+#if USE_RTX
 			case RTCP_RTPFB_GNACK: {
 				struct rtp_stream *rs;
 				uint32_t ssrc = rtcp->r.fb.ssrc_media;
@@ -2568,6 +2595,7 @@ static void reflow_rtcp_recv(struct mbuf *mb, void *arg)
 				}
 			}
 				break;
+#endif
 
 			default:
 				break;
@@ -4963,12 +4991,15 @@ static int alloc_call(struct call **callp, struct sft *sft,
 		call->turnc = turnc;
 	}
 
-	call->video.twcc.seqno = -1;
-	lock_alloc(&call->video.twcc.lock);
+	call->audio.is_selective = selective_audio;
+	call->audio.ssrcc = selective_audio ? astreams : 0;
 	
+	call->video.twcc.seqno = -1;
 	call->video.is_selective = selective_video;
 	call->video.ssrcc = selective_video ? vstreams : 0;
 
+	lock_alloc(&call->video.twcc.lock);
+	
 	tmr_init(&call->tmr_setup);
 	tmr_init(&call->tmr_conn);
 	tmr_init(&call->tmr_rr);
