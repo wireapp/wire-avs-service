@@ -130,6 +130,7 @@ static struct {
 		struct mediapump *mp;
 		mediaflow_alloc_h *alloch;
 		mediaflow_close_h *closeh;
+		mediaflow_version_h *verh;
 		mediaflow_recv_data_h *recv_rtph;
 		mediaflow_recv_data_h *recv_rtcph;
 		mediaflow_recv_dc_h *recv_dch;
@@ -147,6 +148,8 @@ struct reflow {
 
 	enum icall_conv_type conv_type;
 	enum icall_call_type call_type;
+	struct ver_elem ver;
+
 	/* common stuff */
 	char *clientid_local;
 	char *clientid_remote;
@@ -2401,6 +2404,14 @@ int reflow_alloc(struct iflow		**flowp,
 	rf->group_mode = false;
 	rf->af = sa_af(&laddr_sdp);
 
+	if (g_reflow.mediaflow.verh) {
+		g_reflow.mediaflow.verh(&rf->ver, extarg);
+
+		info("reflow(%p): version %d.%d.%d\n",
+		     rf,
+		     rf->ver.major, rf->ver.minor, rf->ver.build);
+	}
+
 	rf->rf_stats.turn_alloc = -1;
 	rf->rf_stats.nat_estab  = -1;
 	rf->rf_stats.dtls_estab = -1;
@@ -2805,10 +2816,11 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "5 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id");
+#if 1
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "11 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
-#if 0
+#else
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "6 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
@@ -2952,9 +2964,11 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 				goto out;
 		}
 
-		sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
-		sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
-		sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv l;h");		
+		if (rf->ver.major == 0 || rf->ver.major >= 10) {
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv l;h");
+		}
 	}
 
  out:
@@ -4311,7 +4325,6 @@ static int mf_assign_streams(struct mediaflow *mf,
 
 	return err;
 }
-
 
 static int mf_send_rtp(struct mediaflow *mf, const uint8_t *data, size_t len)
 {
@@ -6187,12 +6200,14 @@ static struct vidcodec rtx = {
 
 static void mf_set_handlers(mediaflow_alloc_h *alloch,
 			    mediaflow_close_h *closeh,
+			    mediaflow_version_h *verh,
 			    mediaflow_recv_data_h *rtph,
 			    mediaflow_recv_data_h *rtcph,
 			    mediaflow_recv_dc_h *dch)
 {
 	g_reflow.mediaflow.alloch = alloch;
 	g_reflow.mediaflow.closeh = closeh;
+	g_reflow.mediaflow.verh = verh;
 	g_reflow.mediaflow.recv_rtph = rtph;
 	g_reflow.mediaflow.recv_rtcph = rtcph;
 	g_reflow.mediaflow.recv_dch = dch;

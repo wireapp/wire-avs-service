@@ -20,10 +20,7 @@ struct dep_desc_template {
 };
 
 struct dep_desc {
-	bool sof;
-	bool eof;
 	uint32_t tid;
-	uint32_t fid;
 	bool has_dtis;
 	bool has_fdiffs;
 	bool has_chains;
@@ -58,6 +55,11 @@ struct dep_desc {
 
 
 struct dep_desc_frame {
+	bool sof;
+	bool eof;
+	uint32_t fid;
+	bool has_template;
+
 	int s;
 	int t;
 	

@@ -134,6 +134,8 @@ struct mediaflow {
 /* Functions implementig mediaflows should use these functions */
 typedef void (mediaflow_alloc_h) (struct mediaflow *mf, void *arg);
 typedef void (mediaflow_close_h) (struct mediaflow *mf, void *arg);
+struct ver_elem;
+typedef void (mediaflow_version_h) (struct ver_elem *vel, void *arg);
 typedef void (mediaflow_assign_worker_h) (struct mediaflow *mf, struct worker *w);
 typedef int  (mediaflow_send_data_h)(struct mediaflow *mf,
 				     const uint8_t *buf, size_t len);
@@ -153,6 +155,7 @@ typedef int  (mediaflow_assign_streams_h)(struct mediaflow *mf,
 					  int vssrcc);
 typedef void (mediapump_set_handlers_h)(mediaflow_alloc_h *alloch,
 					mediaflow_close_h *closeh,
+					mediaflow_version_h *verh,
 					mediaflow_recv_data_h *rtph,
 					mediaflow_recv_data_h *rtcph,
 					mediaflow_recv_dc_h *dch);
@@ -175,6 +178,7 @@ struct mediapump *mediapump_get(const char *name);
 int mediapump_set_handlers(struct mediapump *mp,
 			   mediaflow_alloc_h *alloch,
 			   mediaflow_close_h *closeh,
+			   mediaflow_version_h *verh,
 			   mediaflow_recv_data_h *rtph,
 			   mediaflow_recv_data_h *rtcph,
 			   mediaflow_recv_dc_h *dch);
@@ -219,4 +223,14 @@ int zrest_get_password(char *pass, size_t *passlen, const char *user,
 		       const char *secret, size_t sec_len);
 void zrest_generate_sft_username(char *user, size_t sz);
 enum zrest_state zrest_authenticate(const char *user, const char *credential);
+
+/* Version element */
+struct ver_elem {
+	bool lessthan;
+	int major;
+	int minor;
+	int build;
+
+	struct le le;
+};
 
