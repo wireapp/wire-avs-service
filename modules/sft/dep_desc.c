@@ -7,12 +7,14 @@
 #include "dep_desc.h"
 
 
-static int read_mandatory(struct bitstream *bs, struct dep_desc *dd)
+static int read_mandatory(struct bitstream *bs,
+			  struct dep_desc *dd,
+			  struct dep_desc_frame *frame)
 {
-	dd->sof = bitstream_read_bits(bs, 1) == 1;
-	dd->eof = bitstream_read_bits(bs, 1) == 1;
+	frame->sof = bitstream_read_bits(bs, 1) == 1;
+	frame->eof = bitstream_read_bits(bs, 1) == 1;
 	dd->tid = bitstream_read_bits(bs, 6);
-	dd->fid = bitstream_read_bits(bs, 16);
+	frame->fid = bitstream_read_bits(bs, 16);
 
 	return 0;
 }
@@ -292,16 +294,20 @@ static int read_template(struct bitstream *bs, struct dep_desc *dd)
 
 			
 
-static int read_extended(struct bitstream *bs, struct dep_desc *dd)
+static int read_extended(struct bitstream *bs, struct dep_desc *dd, bool *has_template)
 {
-	bool has_template = bitstream_read_bits(bs, 1) == 1;
+	bool has_tl = bitstream_read_bits(bs, 1) == 1;
 	bool has_active_dt = bitstream_read_bits(bs, 1) == 1;
 
 	dd->has_dtis   = bitstream_read_bits(bs, 1) == 1;
 	dd->has_fdiffs = bitstream_read_bits(bs, 1) == 1;
 	dd->has_chains = bitstream_read_bits(bs, 1) == 1;
 
-	if (has_template) {
+	if (!has_tl) {
+		*has_template = false;
+	}
+	else {
+		*has_template = true;
 		read_template(bs, dd);
 		dd->dt.mask = (1 << dd->dt.cnt) - 1;
 	}
@@ -504,13 +510,13 @@ int dep_desc_read(struct dep_desc **ddp,
 	if (err)
 		goto out;
 
-	err = read_mandatory(bs, dd);
+	err = read_mandatory(bs, dd, frame);
 	if (err) {
 		warning("dep_desc: failed to read mandatory\n");
 		goto out;
 	}
 	if (sz > 3) {
-		err = read_extended(bs, dd);
+		err = read_extended(bs, dd, &frame->has_template);
 		if (err) {
 			warning("dep_desc: failed to read extended\n");
 			goto out;
@@ -549,10 +555,7 @@ int dep_desc_dd_debug(struct re_printf *pf, const struct dep_desc *dd)
 	int err;
 	size_t i;
 	
-	err = re_hprintf(pf, "\tsof: %d\n", dd->sof);
-	err = re_hprintf(pf, "\teof: %d\n", dd->eof);
 	err = re_hprintf(pf, "\ttid: %d\n", dd->tid);
-	err = re_hprintf(pf, "\tfid: %d\n", dd->fid);
 	err = re_hprintf(pf, "\ttid: %d\n", dd->tid);
 	err = re_hprintf(pf, "\thas_dtis: %d\n", dd->has_dtis);
 	err = re_hprintf(pf, "\thas_fdiffs: %d\n", dd->has_fdiffs);
@@ -576,7 +579,10 @@ int dep_desc_dd_debug(struct re_printf *pf, const struct dep_desc *dd)
 int dep_desc_frame_debug(struct re_printf *pf, const struct dep_desc_frame *frame)
 {
 	int err;
-	
+
+	err = re_hprintf(pf, "\tsof: %d\n", frame->sof);
+	err = re_hprintf(pf, "\teof: %d\n", frame->eof);
+	err = re_hprintf(pf, "\tfid: %d\n", frame->fid);
 	err = re_hprintf(pf, "\ts: %d\n", frame->s);
 	err = re_hprintf(pf, "\tt: %d\n", frame->t);
 	err = re_hprintf(pf, "\tresolution: %dx%d", frame->resolution.w, frame->resolution.h);

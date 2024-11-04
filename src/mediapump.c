@@ -69,6 +69,7 @@ struct mediapump *mediapump_get(const char *name)
 int mediapump_set_handlers(struct mediapump *mp,
 			   mediaflow_alloc_h *alloch,
 			   mediaflow_close_h *closeh,
+			   mediaflow_version_h *verh,
 			   mediaflow_recv_data_h *rtph,
 			   mediaflow_recv_data_h *rtcph,
 			   mediaflow_recv_dc_h *dch)
@@ -79,7 +80,7 @@ int mediapump_set_handlers(struct mediapump *mp,
 	if (!mp->set_handlersh)
 		return ENOSYS;
 
-	mp->set_handlersh(alloch, closeh, rtph, rtcph, dch);
+	mp->set_handlersh(alloch, closeh, verh, rtph, rtcph, dch);
 
 	return 0;
 }

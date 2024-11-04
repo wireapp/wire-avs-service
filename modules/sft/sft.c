@@ -80,6 +80,10 @@
 #define GFH_MASK_SOF 0x80
 #define GFH_MASK_DEP 0x08
 
+
+#define TEST_QUALITY_SWITCH 0
+
+
 enum select_mode {
 	SELECT_MODE_NONE = 0x0,
 	SELECT_MODE_LEVEL = 0x1,
@@ -177,15 +181,6 @@ struct group {
 		char relay_str[128];
 		struct list pendingl;		
 	} federate;
-};
-
-struct blacklist_elem {
-	bool lessthan;
-	int major;
-	int minor;
-	int build;
-
-	struct le le;
 };
 
 typedef int (sft_task_h) (struct call *call, void *arg);
@@ -350,6 +345,8 @@ struct call {
 	char *clientid;
 	char *callid;
 	char *sessid;
+
+	struct ver_elem ver;
 
 	struct zapi_ice_server *turnv;
 	size_t turnc;
@@ -892,6 +889,14 @@ static void reflow_close_handler(struct mediaflow *mf, void *arg)
 	lock_rel(call->lock);
 }
 
+static void reflow_version_handler(struct ver_elem *vel, void *arg)
+{
+	struct call *call = arg;
+
+	*vel = call->ver;
+}
+
+
 static void reflow_dc_recv(struct mbuf *mb, void *arg)
 {
 	struct call *call = arg;
@@ -1071,11 +1076,11 @@ static void add_trans_pkt(struct twcc *twcc, struct transpkt *tp)
 }
 #endif
 
-static void blel_destructor(void *arg)
+static void vel_destructor(void *arg)
 {
-	struct blacklist_elem *blel = arg;
+	struct ver_elem *vel = arg;
 
-	(void)blel;
+	(void)vel;
 }
 
 #if USE_TWCC
@@ -1446,11 +1451,11 @@ static void twcc_handler(void *arg)
 	}
 #endif
 
+ out:
 	list_flush(&twcc->pktl);
 	twcc->deltats = twcc->prevts;
 	twcc->fbcnt++;
 
- out:
 	mem_deref(mb);
 	tmr_start(&twcc->tmr, TIMEOUT_TWCC, twcc_handler, ta);
 	lock_rel(twcc->lock);
@@ -1929,6 +1934,7 @@ static void process_rtp(struct call *call,
 	uint16_t wseq = 0;
 	int err = 0;
 	bool is_keyframe = false;
+	bool has_gfh = false;
 	struct dep_desc *dd = NULL;
 	
 
@@ -2016,13 +2022,22 @@ static void process_rtp(struct call *call,
 
 			process_dd(call, pd, &dd_frame, &mb->buf[mb->pos], xlen);
 			if (dd_frame) {
-				info("call(%p): SVC [%d/%d] -> %dx%d\n",
+#if 0
+				info("call(%p): t=%d sof=%d dti.c=%d SVC [%d/%d] -> %dx%d\n",
 				     call,
+				     dd_frame->has_template,
+				     dd_frame->sof,
+				     dd_frame->dti.c,
 				     dd_frame->s, dd_frame->t,
 				     dd_frame->resolution.w, dd_frame->resolution.h);
-			}			
+#endif
+
+				if (!is_keyframe)
+					is_keyframe = dd_frame->has_template && dd_frame->sof;
+			}
 			dd_frame = mem_deref(dd_frame);
 			mb->pos += xlen;
+
 		}
 			break;
 
@@ -2031,9 +2046,12 @@ static void process_rtp(struct call *call,
 			break;
 
 		case EXTMAP_VIDEO_GFH: {
+			has_gfh = true;
 			uint8_t gfh = mb->buf[mb->pos];
 
-			is_keyframe = (gfh & (GFH_MASK_SOF | GFH_MASK_DEP)) == GFH_MASK_SOF;
+			if (!is_keyframe) {
+				is_keyframe = (gfh & (GFH_MASK_SOF | GFH_MASK_DEP)) == GFH_MASK_SOF;
+			}
 
 			if (is_keyframe) {
 #ifdef GFH_DEBUG				
@@ -2335,7 +2353,7 @@ static void process_rtp(struct call *call,
 					enum video_stream_q q = rs->q;
 					
 					if (rs->change) {
-						if (is_keyframe) {
+						if (!has_gfh || is_keyframe) {
 							q = rs->q;
 							rs->change = false;
 						}
@@ -4612,6 +4630,7 @@ static void attach_video_stream(struct call *call, const char *userid, uint32_t 
 	return;
 }
 
+#if TEST_QUALITY_SWITCH
 static void timeout_q_switch(void *arg)
 {
 	struct call *call = arg;
@@ -4637,6 +4656,7 @@ static void timeout_q_switch(void *arg)
 	
 	tmr_start(&call->tmr_q, 5000, timeout_q_switch, call);
 }
+#endif
 
 static void select_video_streams(struct call *call,
 				 const char *mode,
@@ -4665,7 +4685,9 @@ static void select_video_streams(struct call *call,
 		attach_video_stream(call, si->userid, si->quality, ix);
 		++ix;
 	}
+#if TEST_QUALITY_SWITCH
 	tmr_start(&call->tmr_q, 5000, timeout_q_switch, call);
+#endif
 
 	lock_rel(call->lock);
 }
@@ -4677,7 +4699,7 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 {
 	struct call *call = arg;
 
-	info("ecall_confstreams_handler(%p): ecall=%p\n", call, ecall);
+	info("ecall_confstreams_handler(%p): ecall=%p n=%d\n", call, ecall, (int)list_count(&msg->u.confstreams.streaml));
 	
 	select_video_streams(call,
 			     msg->u.confstreams.mode,
@@ -5674,7 +5696,7 @@ static void sft_req_handler(struct http_conn *hc,
 
 	
 
-static int ver2blel(const char *ver, struct blacklist_elem *blel)
+static int ver2vel(const char *ver, struct ver_elem *vel)
 {
 	char *vactual;
 	char *vstr;
@@ -5687,20 +5709,20 @@ static int ver2blel(const char *ver, struct blacklist_elem *blel)
 
 	vstr = vactual;
 	v = strsep(&vstr, ".");
-	blel->major = v ? atoi(v) : -1;
+	vel->major = v ? atoi(v) : -1;
 	v = strsep(&vstr, ".");
-	blel->minor = v ? atoi(v) : -1;
+	vel->minor = v ? atoi(v) : -1;
 	if (!vstr) 
-		blel->build = -1;
+		vel->build = -1;
 	else {
 		if (streq(vstr, "local"))
-			blel->build = 999;
+			vel->build = 999;
 		else
-			blel->build = atoi(vstr);
+			vel->build = atoi(vstr);
 	}
 
-	//info("ver: %s to blel: %d.%d.%d\n",
-	//     ver, blel->major, blel->minor, blel->build);
+	//info("ver: %s to vel: %d.%d.%d\n",
+	//     ver, vel->major, vel->minor, vel->build);
 	
 	mem_deref(vactual);
 
@@ -5709,7 +5731,7 @@ static int ver2blel(const char *ver, struct blacklist_elem *blel)
 
 static bool is_blacklisted(const char *ver, struct list *cbl)
 {
-	struct blacklist_elem bver;
+	struct ver_elem bver;
 	bool found = false;
 	struct le *le;
 
@@ -5718,34 +5740,34 @@ static bool is_blacklisted(const char *ver, struct list *cbl)
 	if (!ver || !cbl || !cbl->head)
 		return false;
 
-	ver2blel(ver, &bver);
+	ver2vel(ver, &bver);
 
 	/* Never blacklist master builds which have version 0.0.x */
 	if (bver.major == 0 && bver.minor == 0)
 		return false;
 	
 	for(le = cbl->head; !found && le; le = le->next) {
-		struct blacklist_elem *blel = le->data;
+		struct ver_elem *vel = le->data;
 
-		//info("is_blacklisted: lt:%d %d.%d.%d\n", blel->lessthan, blel->major, blel->minor, blel->build);
-		if (blel->lessthan) {
-			found = bver.major < blel->major;
+		//info("is_blacklisted: lt:%d %d.%d.%d\n", vel->lessthan, vel->major, vel->minor, vel->build);
+		if (vel->lessthan) {
+			found = bver.major < vel->major;
 			if (found)
 				continue;
 			
-			if (bver.major == blel->major) {
-				found = bver.minor < blel->minor;
+			if (bver.major == vel->major) {
+				found = bver.minor < vel->minor;
 				if (found)
 					continue;
 				
-				if (bver.minor == blel->minor)
-					found = bver.build < blel->build;
+				if (bver.minor == vel->minor)
+					found = bver.build < vel->build;
 			}
 		}
 		else {
-			found = bver.major == blel->major
-			     && bver.minor == blel->minor
-			     && bver.build == blel->build;
+			found = bver.major == vel->major
+			     && bver.minor == vel->minor
+			     && bver.build == vel->build;
 		}
 	}
 
@@ -6310,6 +6332,10 @@ static void http_req_handler(struct http_conn *hc,
 
 		//call->join_ts = tmr_jiffies();
 
+		if (toolver) {
+			ver2vel(toolver, &call->ver);
+		}
+
 		if (cmsg->u.confconn.update) {
 			call->update = true;
 			if (!group->started)
@@ -6490,19 +6516,19 @@ static void generate_client_blacklist(struct list *cbl, const char *blstr)
 
 	blsep = blactual;
 	while ((vstr = strsep(&blsep, ",")) != NULL) {
-		struct blacklist_elem *blel;
+		struct ver_elem *vel;
 
-		blel = mem_zalloc(sizeof(*blel), blel_destructor);
+		vel = mem_zalloc(sizeof(*vel), vel_destructor);
 		while(isspace(*vstr)) {
 			++vstr;
 		}
 
 		if (*vstr == '<') {
-			blel->lessthan = true;
+			vel->lessthan = true;
 			++vstr;
 		}
-		ver2blel(vstr, blel);
-		list_append(cbl, &blel->le, blel);
+		ver2vel(vstr, vel);
+		list_append(cbl, &vel->le, vel);
 	}
 
 	mem_deref(blactual);
@@ -6567,6 +6593,7 @@ static int module_init(void)
 	err = mediapump_set_handlers(mp,
 				     reflow_alloc_handler,
 				     reflow_close_handler,
+				     reflow_version_handler,
 				     reflow_rtp_recv,
 				     reflow_rtcp_recv,
 				     reflow_dc_recv);
