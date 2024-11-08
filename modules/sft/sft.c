@@ -40,7 +40,10 @@
 #include <avs_service_turn.h>
 #include <avs_audio_level.h>
 
+#if USE_RTX
 #include "jbuf.h"
+#endif
+
 #include "zauth.h"
 #include "gnack.h"
 #include "dep_desc.h"
@@ -397,8 +400,9 @@ struct call {
 		uint32_t *ssrcv;
 		uint32_t *rtx_ssrcv;
 		int ssrcc;
-
+#if USE_RTX
 		struct jb *jb;
+#endif
 		struct twcc twcc;
 
 		uint64_t last_ts;
@@ -2535,9 +2539,7 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 		return;
 	}
 
-#if 1
-	(void)has_frames;
-#else
+#if USE_RTX
 	jb_put(call->video.jb, &rtp, mb);
 	while(has_frames) {
 		struct mbuf *new_mb;
@@ -2551,6 +2553,8 @@ static void reflow_rtp_recv(struct mbuf *mb, void *arg)
 			mem_deref(new_mb);
 		}
 	}
+#else
+	(void)has_frames;
 #endif
 }
 
@@ -3262,9 +3266,12 @@ static int send_conf_part(struct call *call, uint64_t ts,
 		if (pcall->mf) {
 			part->ssrca = mediaflow_get_ssrc(pcall->mf,
 							 "audio", false);
-			part->ssrcv = pcall->video.ssrc;
-				//mediaflow_get_ssrc(pcall->mf,
-				//		 "video", false);
+			if (pcall->ver.major > 0 && pcall->ver.major < 10) {
+				part->ssrcv = mediaflow_get_ssrc(pcall->mf, "video", false);
+			}
+			else {
+				part->ssrcv = pcall->video.ssrc;
+			}
 		}
 		part->authorized = false;
 		part->muted_state =
@@ -3673,7 +3680,10 @@ static void icall_datachan_estab_handler(struct icall *icall,
 
 	if (call->mf) {
 		call->audio.ssrc = mediaflow_get_ssrc(call->mf, "audio", false);
-		//call->video.ssrc = mediaflow_get_ssrc(call->mf, "video", false);
+		if (call->ver.major > 0 && call->ver.major < 10) {
+			call->video.ssrc = mediaflow_get_ssrc(call->mf, "video", false);
+			call->video.hi.ssrc = call->video.ssrc;
+		}
 	}
 	call->audio.stats.freq_ms = 48;
 	call->video.hi.stats.freq_ms = 90;
@@ -4374,7 +4384,9 @@ static void call_destructor(void *arg)
 	mem_deref(call->group);
 	mem_deref(call->federate.url);
 	mem_deref(call->federate.dstid);
+#if USE_RTX
 	mem_deref(call->video.jb);
+#endif
 	mem_deref(call->video.hi.dd);
 	mem_deref(call->video.lo.dd);
 	mem_deref(call->video.twcc.lock);
@@ -4985,20 +4997,24 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	if (err)
 		goto out;
 
+#if USE_RTX
 	err = jb_alloc(&call->video.jb, VIDEO_JBUF_MIN, VIDEO_JBUF_MAX);
 	if (err)
 		goto out;
+#endif
 
 	call->video.select.mode = SELECT_MODE_LIST;
 
-	/* generate a "fake" video ssrc,
-	 * since we will have multiple ssrcs
-	 * for quality purposes
-	 */
-	do {
-		ssrc = regen_lssrc(ssrc);
-	} while(exist_group_ssrc(call, ssrc));
-	call->video.ssrc = ssrc;
+	if (call->ver.major == 0 && call->ver.major >= 10) {
+		/* generate a "fake" video ssrc,
+		 * since we will have multiple ssrcs
+		 * for quality purposes
+		 */
+		do {
+			ssrc = regen_lssrc(ssrc);
+		} while(exist_group_ssrc(call, ssrc));
+		call->video.ssrc = ssrc;
+	}
 
 	if (turnc > 0) {
 		call->turnv = mem_zalloc(turnc * sizeof(*turnv), NULL);
