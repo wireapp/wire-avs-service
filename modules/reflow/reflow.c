@@ -2945,7 +2945,8 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 		}
 
 		err = sdp_media_set_lattr(rf->video.sdpm, false,
-					  "msid", "%s vtrack", rf->msid);
+					  "msid", "%s %s",
+					  rf->msid, rf->video.label);
 		
 		if (ssrcc > 0)
 			rf->lssrcv[MEDIA_VIDEO] = ssrcv[0];
@@ -3671,7 +3672,11 @@ int reflow_generate_offer(struct iflow *iflow,
 				mbuf_printf(bmb, " %u", mid);
 				bundle_ssrc(rf, rf->sdp, sdpv,
 					    rf->rtps.vssrcv[i],
+#if USE_RTX
 					    rf->rtps.rtx_ssrcv[i],
+#else
+					    0,
+#endif
 					    mid,
 					    rf->video.fingerprint, true);
 				++mid;
