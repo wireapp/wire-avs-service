@@ -487,6 +487,7 @@ struct turn_chan_hdr {
 
 
 static int alloc_call(struct call **callp, struct sft *sft,
+		      const char *toolver,
 		      struct zapi_ice_server *turnv, size_t turnc,
 		      struct group *group,
 		      const char *userid, const char *clientid,
@@ -1285,8 +1286,10 @@ static void send_rtcp_rr(struct call *call, uint32_t ssrc, uint32_t last_ntp)
 	else if (call->video.lo.ssrc && ssrc == call->video.lo.ssrc) {
 		stats = &call->video.lo.stats;
 	}
-	if (!stats)
+	if (!stats) {
+		warning("send_rtcp_rr: call(%p): no stats\n", call);
 		return;
+	}
 
 	lssrc = mediaflow_get_ssrc(call->mf, is_audio ? "audio" : "video", true);
 		
@@ -1300,9 +1303,9 @@ static void send_rtcp_rr(struct call *call, uint32_t ssrc, uint32_t last_ntp)
 	rr.dlsr = 0;
 
 #if 0
-	info("send_rtcp_rr: call(%p): lssrc=%u(ssrc=%u) %H "
+	info("send_rtcp_rr: call(%p): lssrc=%u(ssrc=%u) "
 	     "last_ntp=%08x last_seq=%d lost=%d.%d jitter=%d\n",
-	     call, lssrc, ssrc, ssrc_stats_debug, stats,
+	     call, lssrc, ssrc, stats,
 	     last_ntp, rr.last_seq, rr.fraction, rr.lost, rr.jitter);
 #endif
 	
@@ -2100,6 +2103,7 @@ static void process_rtp(struct call *call,
 	}
 	else {
 		if (0 == call->video.hi.ssrc ) {
+			//info("call(%p): no hi video current rid=%s\n", call, rid ? rid : "???");
 			if (rid && streq(rid, RID_HI)) {
 				info("call(%p): assigning ssrc=%u to rid-hi\n", call, rtp->ssrc);		
 				call->video.hi.ssrc = rtp->ssrc;
@@ -2111,6 +2115,7 @@ static void process_rtp(struct call *call,
 			}
 		}
 		if (0 == call->video.lo.ssrc) {
+			//info("call(%p): no lo video current rid=%s\n", call, rid ? rid : "???");
 			if (rid && streq(rid, RID_LO)) {
 				info("call(%p): assigning ssrc=%u to rid-lo\n", call, rtp->ssrc);
 				call->video.lo.ssrc = rtp->ssrc;
@@ -3586,6 +3591,7 @@ static void start_provisional(struct group *group,
 		goto out;
 
 	err = alloc_call(&call, g_sft,
+			 NULL,
 			 NULL, 0,
 			 NULL,
 			 "sft", "_",
@@ -3680,7 +3686,10 @@ static void icall_datachan_estab_handler(struct icall *icall,
 
 	if (call->mf) {
 		call->audio.ssrc = mediaflow_get_ssrc(call->mf, "audio", false);
+		SFTLOG(LOG_LEVEL_INFO, "call has version: %d.%d.%d\n",
+		       call, call->ver.major, call->ver.minor, call->ver.build);
 		if (call->ver.major > 0 && call->ver.major < 10) {
+			SFTLOG(LOG_LEVEL_INFO, "legacy ssrcv handling\n", call);
 			call->video.ssrc = mediaflow_get_ssrc(call->mf, "video", false);
 			call->video.hi.ssrc = call->video.ssrc;
 		}
@@ -4958,8 +4967,42 @@ static bool exist_group_ssrc(struct call *call, uint32_t ssrc)
 	return found;
 }
 
+static int ver2vel(const char *ver, struct ver_elem *vel)
+{
+	char *vactual;
+	char *vstr;
+	char *v;
+	int err;
+
+	err = str_dup(&vactual, ver);
+	if (err)
+		return err;
+
+	vstr = vactual;
+	v = strsep(&vstr, ".");
+	vel->major = v ? atoi(v) : -1;
+	v = strsep(&vstr, ".");
+	vel->minor = v ? atoi(v) : -1;
+	if (!vstr)
+		vel->build = -1;
+	else {
+		if (streq(vstr, "local"))
+			vel->build = 999;
+		else
+			vel->build = atoi(vstr);
+	}
+
+	//info("ver: %s to vel: %d.%d.%d\n",
+	//     ver, vel->major, vel->minor, vel->build);
+
+	mem_deref(vactual);
+
+	return 0;
+}
+
 
 static int alloc_call(struct call **callp, struct sft *sft,
+		      const char *toolver,
 		      struct zapi_ice_server *turnv, size_t turnc,
 		      struct group *group,
 		      const char *userid, const char *clientid,
@@ -4981,9 +5024,13 @@ static int alloc_call(struct call **callp, struct sft *sft,
 		err = ENOMEM;
 		goto out;
 	}
+	if (toolver) {
+		ver2vel(toolver, &call->ver);
+	}
 
-	SFTLOG(LOG_LEVEL_INFO, "callid: %s sessid: %s sel_audio: %d/%d sel_video: %d/%d\n",
-	       call, callid, sessid, selective_audio, astreams, selective_video, vstreams);
+	SFTLOG(LOG_LEVEL_INFO, "toolver: %s callid: %s sessid: %s sel_audio: %d/%d sel_video: %d/%d\n",
+	       call, toolver, callid, sessid,
+	       selective_audio, astreams, selective_video, vstreams);
 
 	call->active = true;
 	str_dup(&call->userid, userid);
@@ -5005,7 +5052,10 @@ static int alloc_call(struct call **callp, struct sft *sft,
 
 	call->video.select.mode = SELECT_MODE_LIST;
 
-	if (call->ver.major == 0 && call->ver.major >= 10) {
+	if (call->ver.major > 0 && call->ver.major < 10) {
+		SFTLOG(LOG_LEVEL_INFO, "using legacy ssrcv generation\n", call);
+	}
+	else {
 		/* generate a "fake" video ssrc,
 		 * since we will have multiple ssrcs
 		 * for quality purposes
@@ -5185,6 +5235,9 @@ static int restart_call(struct call *call, void *arg)
 	deauth_call(call, true);
 	tmr_cancel(&call->tmr_conn);
 
+	call->video.hi.ssrc = 0;
+	call->video.lo.ssrc = 0;
+
 	/* We want to move this call to the end of the list,
 	 * so it loses its KG privilage on the clients
 	 */
@@ -5218,6 +5271,9 @@ static int recreate_call(struct call *call, void *arg)
 
 	deauth_call(call, true);
 
+	call->video.hi.ssrc = 0;
+	call->video.lo.ssrc = 0;
+	
 	start_icall(call);
 
 	return 0;
@@ -5502,6 +5558,7 @@ static struct call *federate_request(struct group *group,
 		}
 		else {
 			err = alloc_call(&call, g_sft,
+					 NULL,
 					 NULL, 0,
 					 NULL,
 					 "prov", "_",
@@ -5708,41 +5765,6 @@ static void sft_req_handler(struct http_conn *hc,
 	}
 	else
 		http_creply(hc, 200, "OK", "text/plain", "All good\n");
-}
-
-	
-
-static int ver2vel(const char *ver, struct ver_elem *vel)
-{
-	char *vactual;
-	char *vstr;
-	char *v;
-	int err;
-
-	err = str_dup(&vactual, ver);
-	if (err)
-		return err;
-
-	vstr = vactual;
-	v = strsep(&vstr, ".");
-	vel->major = v ? atoi(v) : -1;
-	v = strsep(&vstr, ".");
-	vel->minor = v ? atoi(v) : -1;
-	if (!vstr) 
-		vel->build = -1;
-	else {
-		if (streq(vstr, "local"))
-			vel->build = 999;
-		else
-			vel->build = atoi(vstr);
-	}
-
-	//info("ver: %s to vel: %d.%d.%d\n",
-	//     ver, vel->major, vel->minor, vel->build);
-	
-	mem_deref(vactual);
-
-	return 0;
 }
 
 static bool is_blacklisted(const char *ver, struct list *cbl)
@@ -6333,7 +6355,9 @@ static void http_req_handler(struct http_conn *hc,
 		}
 
 		info("sft: using %d TURN servers for call\n", turnc);
-		err = alloc_call(&call, sft,
+		err = alloc_call(&call,
+				 sft,
+				 toolver,
 				 turnv,
 				 turnc,
 				 group, userid, clientid,
@@ -6347,10 +6371,6 @@ static void http_req_handler(struct http_conn *hc,
 			goto out;
 
 		//call->join_ts = tmr_jiffies();
-
-		if (toolver) {
-			ver2vel(toolver, &call->ver);
-		}
 
 		if (cmsg->u.confconn.update) {
 			call->update = true;
