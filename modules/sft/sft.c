@@ -257,7 +257,6 @@ struct ssrc_stats {
 
 struct transpkt {
 	uint16_t seqno;
-	uint16_t rseq;
 	uint64_t ts;
 
 	struct le le;
@@ -267,6 +266,7 @@ struct transpkt {
 struct twcc_arg {
 	struct call *call;
 	struct twcc *twcc;
+	uint32_t rssrc;
 };
 
 struct twcc {
@@ -403,8 +403,6 @@ struct call {
 #if USE_RTX
 		struct jb *jb;
 #endif
-		struct twcc twcc;
-
 		uint64_t last_ts;
 	} video;
 
@@ -439,6 +437,8 @@ struct call {
 	bool issft;
 	bool isprov;
 	struct http_cli *http_cli;
+
+	struct twcc twcc;
 
 	struct {
 		bool isready;
@@ -1064,7 +1064,7 @@ static inline bool seq_less(uint16_t x, uint16_t y)
 	return ((int16_t)(x - y)) < 0;
 }
 
-static void add_trans_pkt(struct twcc *twcc, struct transpkt *tp)
+static void add_twcc_pkt(struct twcc *twcc, struct transpkt *tp)
 {
 	bool found = false;
 	struct le *le;
@@ -1155,7 +1155,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
 	/* reference time is in multiples of 64ms */
-	//refcnt = (((uint32_t)(twcc->now - twcc->refts) >> 6) << 8) | twcc->fbcnt;
+	//refcnt = (((uint32_t)(twcc->now - twcc->refts) >> 6) << 8) | (uint8_t)twcc->fbcnt;
 	refcnt = ((uint32_t)(twcc->fbcnt << 8)) | (uint8_t)twcc->fbcnt;
 	mbuf_write_u32(mb, htonl(refcnt));
 
@@ -1352,8 +1352,7 @@ static int remb_encode_handler(struct mbuf *mb, void *arg)
 
 	/* 2 ssrcs with 1000kbit bandwidth */
 	mbuf_write_u32(mb, htonl(0x0271312d));
-	mbuf_write_u32(mb, htonl(call->audio.twcc.rssrc));
-	mbuf_write_u32(mb, htonl(call->video.twcc.rssrc));
+	mbuf_write_u32(mb, htonl(call->twcc.rssrc));
 
 	return 0;
 }
@@ -1372,7 +1371,7 @@ static void remb_handler(void *arg)
 
 
 	err = rtcp_encode(mb, RTCP_PSFB, RTCP_RTPFB_REMB,
-			  call->video.twcc.lssrc,
+			  call->twcc.lssrc,
 			  0,
 			  remb_encode_handler, call);
 	if (err) {
@@ -1387,7 +1386,7 @@ static void remb_handler(void *arg)
 
  out:
 	mem_deref(mb);
-	tmr_start(&call->video.twcc.tmr, TIMEOUT_FB, remb_handler, call);
+	tmr_start(&call->twcc.tmr, TIMEOUT_FB, remb_handler, call);
 }
 #endif
 
@@ -1400,12 +1399,13 @@ static void twcc_handler(void *arg)
 	struct twcc *twcc = ta->twcc;
 	struct mbuf *mb = NULL;
 	uint32_t lssrc;
-	uint32_t rssrc;
 	int err;
 
 	lock_write_get(twcc->lock);
-	if (list_count(&twcc->pktl) == 0)
-		goto out;
+
+	if (list_count(&twcc->pktl) == 0) {
+		SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);		
+	}
 	
 	mb = mbuf_alloc(256);
 	if (!mb) {
@@ -1413,18 +1413,31 @@ static void twcc_handler(void *arg)
 		goto out;
 	}
 
-	rssrc = call->video.hi.ssrc;
-	if (!rssrc) {
-		rssrc = call->video.lo.ssrc;
+	if (!ta->rssrc) {
+		if (call->video.lo.ssrc) {
+			ta->rssrc = call->video.lo.ssrc;
+			info("twcc_handler(%p): assigning rid-lo as source: %u\n", call, ta->rssrc);
+		}
+		else if (call->video.hi.ssrc) {
+			ta->rssrc = call->video.hi.ssrc;
+			info("twcc_handler(%p): assigning rid-ho as source: %u\n", call, ta->rssrc);
+		}
+		else {
+			ta->rssrc = call->audio.ssrc;
+			info("twcc_handler(%p): assigning audio as source: %u\n", call, ta->rssrc);
+		}
 	}
-	if (!rssrc)
+	
+	if (!ta->rssrc) {
+		warning("twcc_handler(%p): no valid ssrc yet\n");
 		goto out;
+	}
 	
 	lssrc = mediaflow_get_ssrc(call->mf, "video", true);
 	twcc->now = tmr_jiffies();
 	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
 			  lssrc,
-			  rssrc,
+			  ta->rssrc,
 			  twcc_encode_handler, twcc);
 	if (err) {
 		warning("twcc: RTCP-encode failed: %m\n", err);
@@ -1432,31 +1445,11 @@ static void twcc_handler(void *arg)
 	}
 
 #if 0
-	info("twcc_handler: ssrc(%u): %w\n", twcc->rssrc, mb->buf, mb->end);
+	info("twcc_handler(%p): ssrc(%u): %w\n", call, ta->rssrc, mb->buf, mb->end);
 #endif
 	
 	if (call->mf)
 		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
-
-#if 0
-	if (rssrc == call->video.hi.ssrc) {
-		rssrc = call->video.lo.ssrc;
-	}
-	if (rssrc) {
-		mb->pos = 0;
-		err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
-				  lssrc,
-				  rssrc,
-				  twcc_encode_handler, twcc);
-		if (err) {
-			warning("twcc: RTCP-encode failed: %m\n", err);
-			goto out;
-		}
-
-		if (call->mf)
-			mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
-	}
-#endif
 
  out:
 	list_flush(&twcc->pktl);
@@ -1464,16 +1457,15 @@ static void twcc_handler(void *arg)
 	twcc->fbcnt++;
 
 	mem_deref(mb);
-	tmr_start(&twcc->tmr, TIMEOUT_TWCC, twcc_handler, ta);
+	if (twcc->running)
+		tmr_start(&twcc->tmr, TIMEOUT_TWCC, twcc_handler, ta);
 	lock_rel(twcc->lock);
 }
 
 
-static void update_twcc(struct call *call,
-			   uint64_t ts,
-			   struct twcc *twcc,
-			   int wseq,
-			   int rseq)
+static void update_twcc(struct twcc *twcc,
+			uint64_t ts,
+			int wseq)
 {
 	struct transpkt *tp;
 
@@ -1489,10 +1481,9 @@ static void update_twcc(struct call *call,
 
 	tp = mem_zalloc(sizeof(*tp), transpkt_destructor);
 	tp->seqno = wseq;
-	tp->rseq = rseq;
 	tp->ts = ts;
 
-	add_trans_pkt(twcc, tp);
+	add_twcc_pkt(twcc, tp);
 	lock_rel(twcc->lock);
 }
 
@@ -1925,7 +1916,6 @@ static void process_rtp(struct call *call,
 	size_t hdrlen;
 	struct ssrc_stats *stats = NULL;
 	uint64_t now = tmr_jiffies();
-	struct twcc *twcc = NULL;
 	uint32_t ssrc = 0;
 	uint8_t *rdata = NULL;
 	size_t rlen = 0;
@@ -2107,8 +2097,8 @@ static void process_rtp(struct call *call,
 			if (rid && streq(rid, RID_HI)) {
 				info("call(%p): assigning ssrc=%u to rid-hi\n", call, rtp->ssrc);		
 				call->video.hi.ssrc = rtp->ssrc;
-				if (0 == call->video.twcc.rssrc)
-					call->video.twcc.rssrc = rtp->ssrc;
+				if (0 == call->twcc.rssrc)
+					call->twcc.rssrc = rtp->ssrc;
 			}
 			if (dd) {
 				call->video.hi.dd = mem_ref(dd);
@@ -2119,8 +2109,8 @@ static void process_rtp(struct call *call,
 			if (rid && streq(rid, RID_LO)) {
 				info("call(%p): assigning ssrc=%u to rid-lo\n", call, rtp->ssrc);
 				call->video.lo.ssrc = rtp->ssrc;
-				if (0 == call->video.twcc.rssrc)
-					call->video.twcc.rssrc = rtp->ssrc;
+				if (0 == call->twcc.rssrc)
+					call->twcc.rssrc = rtp->ssrc;
 			}
 			if (dd) {
 				call->video.lo.dd = mem_ref(dd);
@@ -2129,30 +2119,26 @@ static void process_rtp(struct call *call,
 		
 		if (call->video.hi.ssrc && rtp->ssrc == call->video.hi.ssrc) {
 			rst = RTP_STREAM_TYPE_VIDEO;
-
 			stats = &call->video.hi.stats;
-			twcc = &call->video.twcc;
 		} else if (call->video.lo.ssrc && rtp->ssrc == call->video.lo.ssrc) {
 			rst = RTP_STREAM_TYPE_VIDEO;
-
 			stats = &call->video.lo.stats;
-			twcc = &call->video.twcc;			
-		}
-		if (twcc) {
-#if USE_TWCC
-			if (wseq) {
-				update_twcc(call, now, twcc, wseq, rtp->seq);
-			}
-			if (!twcc->running) {
-				twcc->ta.call = call;
-				twcc->ta.twcc = twcc;
-				twcc->running = true;
-				tmr_start(&twcc->tmr, TIMEOUT_TWCC,
-					  twcc_handler, &twcc->ta);				
-			}
-#endif
 		}
 	}
+
+#if USE_TWCC
+	if (!call->twcc.running) {
+		call->twcc.ta.call = call;
+		call->twcc.ta.twcc = &call->twcc;
+		call->twcc.ta.rssrc = 0;
+		call->twcc.running = true;
+		tmr_start(&call->twcc.tmr, TIMEOUT_TWCC,
+			  twcc_handler, &call->twcc.ta);				
+	}
+	if (wseq) {
+		update_twcc(&call->twcc, now, wseq);
+	}
+#endif
 
 	mem_deref(dd);
 	
@@ -2175,14 +2161,12 @@ static void process_rtp(struct call *call,
 	}
 
 	if (rst == RTP_STREAM_TYPE_VIDEO) {
-		if (twcc) {
 #if USE_REMB
-			if (!tmr_isrunning(&twcc->tmr)) {
-				tmr_start(&twcc->tmr, TIMEOUT_FB,
-					  remb_handler, call);
-			}
-#endif
+		if (!tmr_isrunning(&twcc->tmr)) {
+			tmr_start(&twcc->tmr, TIMEOUT_FB,
+				  remb_handler, call);
 		}
+#endif
 	}
 
 	/* Never forward padding packets */
@@ -2358,7 +2342,10 @@ static void process_rtp(struct call *call,
 
 				rs = video_stream_find(call, rcall, call->video.ssrc);
 
-				if (rs) {
+				if (!rs) {
+					warning("process_rtp: call(%p): no video ssrc=%u\n", call, ssrc);
+				}
+				else {
 					enum video_stream_q q = rs->q;
 					
 					if (rs->change) {
@@ -2388,6 +2375,8 @@ static void process_rtp(struct call *call,
 							skip = true;
 						break;
 					}
+
+					//info("process_rtp(%p): change=%d q=%d ssrc=%u skip=%d\n", call, rs->change, q, ssrc, skip);
 				}
 			}
 			else {
@@ -3694,9 +3683,28 @@ static void icall_datachan_estab_handler(struct icall *icall,
 			call->video.hi.ssrc = call->video.ssrc;
 		}
 	}
+
+	memset(&call->video.hi.stats, 0, sizeof(call->video.hi.stats));
+	memset(&call->video.lo.stats, 0, sizeof(call->video.lo.stats));
 	call->audio.stats.freq_ms = 48;
 	call->video.hi.stats.freq_ms = 90;
 	call->video.lo.stats.freq_ms = 90;
+
+	call->video.hi.ssrc = 0;
+	call->video.lo.ssrc = 0;
+	call->video.hi.dd = mem_deref(call->video.hi.dd);
+	call->video.lo.dd = mem_deref(call->video.lo.dd);
+	call->video.hi.fir_seq = 0;
+	call->video.lo.fir_seq = 0;
+
+	tmr_cancel(&call->twcc.tmr);
+	list_flush(&call->twcc.pktl);
+	call->twcc.seqno = -1;
+	call->twcc.refts = 0;
+	call->twcc.deltats = 0;
+	call->twcc.fbcnt = 0;
+	call->twcc.running = false;
+	
 
 	lock_write_get(g_sft->lock);
 	/* If this is an SFT call, we need to move 
@@ -4348,11 +4356,10 @@ static void call_destructor(void *arg)
 	tmr_cancel(&call->tmr_conn);
 	tmr_cancel(&call->tmr_q);
 
-	tmr_cancel(&call->video.twcc.tmr);
+	tmr_cancel(&call->twcc.tmr);
 
 	close_call(call);
 	list_flush(&call->partl);
-	list_flush(&call->video.twcc.pktl);
 
 	mem_deref(call->turnv);
 	mem_deref(call->callid);
@@ -4367,7 +4374,7 @@ static void call_destructor(void *arg)
 
 	rtp_stream_destroy(call->audio.rtps.v, call->audio.rtps.c);
 	rtp_stream_destroy(call->video.rtps.v, call->video.rtps.c);
-
+	
 	list_flush(&call->video.select.streaml);
 
 	/* Finally check, if we were the last participant in the group,
@@ -4398,7 +4405,8 @@ static void call_destructor(void *arg)
 #endif
 	mem_deref(call->video.hi.dd);
 	mem_deref(call->video.lo.dd);
-	mem_deref(call->video.twcc.lock);
+	list_flush(&call->twcc.pktl);	
+	mem_deref(call->twcc.lock);
 	mem_deref(call->lock);
 }
 
@@ -4656,23 +4664,28 @@ static void timeout_q_switch(void *arg)
 {
 	struct call *call = arg;
 	struct le *le;
+	enum video_stream_q q;
+
 
 	LIST_FOREACH(&call->video.select.streaml, le) {
 		struct video_stream *vs = le->data;
 
 		switch (vs->q) {
 		case VIDEO_STREAM_Q_ANY:
-			vs->q = VIDEO_STREAM_Q_HI;
+			q = VIDEO_STREAM_Q_HI;
 			break;
 			
 		case VIDEO_STREAM_Q_HI:
-			vs->q = VIDEO_STREAM_Q_LO;
+			q = VIDEO_STREAM_Q_LO;
 			break;
 			
 		case VIDEO_STREAM_Q_LO:
-			vs->q = VIDEO_STREAM_Q_HI;
+			q = VIDEO_STREAM_Q_HI;
 			break;
 		}
+		info("timeout_q_switch(%p): %d -> %d\n", call, vs->q, q);
+
+		vs->q = q;
 	}
 	
 	tmr_start(&call->tmr_q, 5000, timeout_q_switch, call);
@@ -5082,11 +5095,11 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	call->audio.is_selective = selective_audio;
 	call->audio.ssrcc = selective_audio ? astreams : 0;
 	
-	call->video.twcc.seqno = -1;
+	call->twcc.seqno = -1;
 	call->video.is_selective = selective_video;
 	call->video.ssrcc = selective_video ? vstreams : 0;
 
-	lock_alloc(&call->video.twcc.lock);
+	lock_alloc(&call->twcc.lock);
 	
 	tmr_init(&call->tmr_setup);
 	tmr_init(&call->tmr_conn);
@@ -5235,9 +5248,6 @@ static int restart_call(struct call *call, void *arg)
 	deauth_call(call, true);
 	tmr_cancel(&call->tmr_conn);
 
-	call->video.hi.ssrc = 0;
-	call->video.lo.ssrc = 0;
-
 	/* We want to move this call to the end of the list,
 	 * so it loses its KG privilage on the clients
 	 */
@@ -5271,8 +5281,8 @@ static int recreate_call(struct call *call, void *arg)
 
 	deauth_call(call, true);
 
-	call->video.hi.ssrc = 0;
-	call->video.lo.ssrc = 0;
+	//call->video.hi.ssrc = 0;
+	//call->video.lo.ssrc = 0;
 	
 	start_icall(call);
 
