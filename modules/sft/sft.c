@@ -394,8 +394,8 @@ struct call {
 			uint8_t fir_seq;
 			struct ssrc_stats stats;
 		} lo;
-		
 
+		bool started;
 		bool is_selective;
 		uint32_t *ssrcv;
 		uint32_t *rtx_ssrcv;
@@ -1404,7 +1404,8 @@ static void twcc_handler(void *arg)
 	lock_write_get(twcc->lock);
 
 	if (list_count(&twcc->pktl) == 0) {
-		SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);		
+		SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);
+		goto out;
 	}
 	
 	mb = mbuf_alloc(256);
@@ -2118,9 +2119,11 @@ static void process_rtp(struct call *call,
 		}
 		
 		if (call->video.hi.ssrc && rtp->ssrc == call->video.hi.ssrc) {
+			call->video.started = true;
 			rst = RTP_STREAM_TYPE_VIDEO;
 			stats = &call->video.hi.stats;
 		} else if (call->video.lo.ssrc && rtp->ssrc == call->video.lo.ssrc) {
+			call->video.started = true;
 			rst = RTP_STREAM_TYPE_VIDEO;
 			stats = &call->video.lo.stats;
 		}
@@ -2133,7 +2136,7 @@ static void process_rtp(struct call *call,
 		call->twcc.ta.rssrc = 0;
 		call->twcc.running = true;
 		tmr_start(&call->twcc.tmr, TIMEOUT_TWCC,
-			  twcc_handler, &call->twcc.ta);				
+			  twcc_handler, &call->twcc.ta);
 	}
 	if (wseq) {
 		update_twcc(&call->twcc, now, wseq);
@@ -3673,6 +3676,8 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	       "issft: %d group: %p userid: %s clientid: %s update=%d\n",
 	       call, call->issft, group, userid, clientid, update);	
 
+	call->video.hi.ssrc = 0;
+	call->video.lo.ssrc = 0;
 	if (call->mf) {
 		call->audio.ssrc = mediaflow_get_ssrc(call->mf, "audio", false);
 		SFTLOG(LOG_LEVEL_INFO, "call has version: %d.%d.%d\n",
@@ -3690,8 +3695,6 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	call->video.hi.stats.freq_ms = 90;
 	call->video.lo.stats.freq_ms = 90;
 
-	call->video.hi.ssrc = 0;
-	call->video.lo.ssrc = 0;
 	call->video.hi.dd = mem_deref(call->video.hi.dd);
 	call->video.lo.dd = mem_deref(call->video.lo.dd);
 	call->video.hi.fir_seq = 0;
@@ -5247,6 +5250,8 @@ static int restart_call(struct call *call, void *arg)
 	
 	deauth_call(call, true);
 	tmr_cancel(&call->tmr_conn);
+
+	call->video.started = false;
 
 	/* We want to move this call to the end of the list,
 	 * so it loses its KG privilage on the clients

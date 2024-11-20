@@ -2490,9 +2490,11 @@ int reflow_alloc(struct iflow		**flowp,
 		"extmap", "1 urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on");
 	sdp_media_set_lattr(rf->audio.sdpm, false,
 			    "extmap", "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+#if USE_TWCC
 	sdp_media_set_lattr(rf->audio.sdpm, false,
 			    "extmap",
 			    "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif
 	
 	
 	rand_str(rf->cname, sizeof(rf->cname));
