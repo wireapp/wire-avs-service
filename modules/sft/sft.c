@@ -898,7 +898,13 @@ static void reflow_version_handler(struct ver_elem *vel, void *arg)
 {
 	struct call *call = arg;
 
-	*vel = call->ver;
+	if (call->issft) {
+		vel->major = SFT_VERSION_MARK; /* indicate SFT */
+		vel->minor = 0;
+	}
+	else {
+		*vel = call->ver;
+	}
 }
 
 
@@ -2092,7 +2098,7 @@ static void process_rtp(struct call *call,
 
 		stats = &call->audio.stats;
 	}
-	else {
+	else if (!call->issft) {
 		if (0 == call->video.hi.ssrc ) {
 			//info("call(%p): no hi video current rid=%s\n", call, rid ? rid : "???");
 			if (rid && streq(rid, RID_HI)) {
@@ -2130,7 +2136,7 @@ static void process_rtp(struct call *call,
 	}
 
 #if USE_TWCC
-	if (!call->twcc.running) {
+	if (!call->twcc.running && !call->issft) {
 		call->twcc.ta.call = call;
 		call->twcc.ta.twcc = &call->twcc;
 		call->twcc.ta.rssrc = 0;
@@ -2138,7 +2144,7 @@ static void process_rtp(struct call *call,
 		tmr_start(&call->twcc.tmr, TIMEOUT_TWCC,
 			  twcc_handler, &call->twcc.ta);
 	}
-	if (wseq) {
+	if (wseq && !call->issft) {
 		update_twcc(&call->twcc, now, wseq);
 	}
 #endif
@@ -2163,14 +2169,14 @@ static void process_rtp(struct call *call,
 		update_ssrc_stats(stats, rtp, now);
 	}
 
-	if (rst == RTP_STREAM_TYPE_VIDEO) {
 #if USE_REMB
+	if (rst == RTP_STREAM_TYPE_VIDEO) {
 		if (!tmr_isrunning(&twcc->tmr)) {
 			tmr_start(&twcc->tmr, TIMEOUT_FB,
 				  remb_handler, call);
 		}
-#endif
 	}
+#endif
 
 	/* Never forward padding packets */
 	if (rtp->pad) {
@@ -3263,7 +3269,7 @@ static int send_conf_part(struct call *call, uint64_t ts,
 		if (pcall->mf) {
 			part->ssrca = mediaflow_get_ssrc(pcall->mf,
 							 "audio", false);
-			if (pcall->ver.major > 0 && pcall->ver.major < 10) {
+			if (pcall->issft || (pcall->ver.major > 0 && pcall->ver.major < 10)) {
 				part->ssrcv = mediaflow_get_ssrc(pcall->mf, "video", false);
 			}
 			else {
@@ -3682,7 +3688,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 		call->audio.ssrc = mediaflow_get_ssrc(call->mf, "audio", false);
 		SFTLOG(LOG_LEVEL_INFO, "call has version: %d.%d.%d\n",
 		       call, call->ver.major, call->ver.minor, call->ver.build);
-		if (call->ver.major > 0 && call->ver.major < 10) {
+		if (call->issft || (call->ver.major > 0 && call->ver.major < 10)) {
 			SFTLOG(LOG_LEVEL_INFO, "legacy ssrcv handling\n", call);
 			call->video.ssrc = mediaflow_get_ssrc(call->mf, "video", false);
 			call->video.hi.ssrc = call->video.ssrc;
@@ -5068,7 +5074,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 
 	call->video.select.mode = SELECT_MODE_LIST;
 
-	if (call->ver.major > 0 && call->ver.major < 10) {
+	if (call->issft || (call->ver.major > 0 && call->ver.major < 10)) {
 		SFTLOG(LOG_LEVEL_INFO, "using legacy ssrcv generation\n", call);
 	}
 	else {

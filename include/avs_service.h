@@ -1,5 +1,5 @@
 #define MAX_OPEN_FILES 1048576
-
+#define SFT_VERSION_MARK 9999
 
 /*
  * HTTP Server
