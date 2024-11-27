@@ -4509,6 +4509,7 @@ static void trice_estab_handler(struct ice_candpair *pair,
 {
 	struct reflow *rf = arg;
 	void *sock;
+	bool use_pair = false;
 	int err;
 
 	info("reflow(%p): ice pair established  %H\n",
@@ -4528,12 +4529,18 @@ static void trice_estab_handler(struct ice_candpair *pair,
 	}
 #endif
 
+	if (rf->sel_pair) {
+		use_pair = pair->rcand->attr.type < rf->sel_pair->rcand->attr.type;
+	}
+	
 	/* We use the first pair that is working */
-	if (!rf->ice_ready) {
+	if (use_pair || !rf->ice_ready) {
 		struct stun_attr *attr;
 		struct turn_conn *conn;
+		struct ice_candpair *p = rf->sel_pair;
 
-		mem_deref(rf->sel_pair);
+		rf->sel_pair = NULL;
+		mem_deref(p);
 		rf->sel_pair = mem_ref(pair);
 
 		rf->ice_ready = true;
