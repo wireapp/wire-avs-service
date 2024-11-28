@@ -2354,7 +2354,7 @@ static void process_rtp(struct call *call,
 				if (!rs) {
 					warning("process_rtp: call(%p): no video ssrc=%u\n", call, ssrc);
 				}
-				else {
+				else if (!call->issft) {
 					enum video_stream_q q = rs->q;
 					
 					if (rs->change) {
