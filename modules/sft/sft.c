@@ -2098,7 +2098,7 @@ static void process_rtp(struct call *call,
 
 		stats = &call->audio.stats;
 	}
-	else if (!call->issft) {
+	else {
 		if (0 == call->video.hi.ssrc ) {
 			//info("call(%p): no hi video current rid=%s\n", call, rid ? rid : "???");
 			if (rid && streq(rid, RID_HI)) {
@@ -2158,14 +2158,16 @@ static void process_rtp(struct call *call,
 			       RTP_STREAM_TYPE_AUDIO)) {
 		    rst = RTP_STREAM_TYPE_AUDIO;
 		}
-		else if (exist_ssrc(call, ishost, rtp->ssrc,
-				    RTP_STREAM_TYPE_VIDEO)) {
+		else {
+			/* Assume it is video, since it can be multiple
+			 * ssrcs due to simulcast
+			 */
 		    rst = RTP_STREAM_TYPE_VIDEO;
 		}
 	}
 
 	
-	if (stats) {
+	if (!call->issft && stats) {
 		update_ssrc_stats(stats, rtp, now);
 	}
 
@@ -2354,7 +2356,7 @@ static void process_rtp(struct call *call,
 				if (!rs) {
 					warning("process_rtp: call(%p): no video ssrc=%u\n", call, ssrc);
 				}
-				else if (!call->issft) {
+				else {
 					enum video_stream_q q = rs->q;
 					
 					if (rs->change) {
@@ -3706,13 +3708,13 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	call->video.hi.fir_seq = 0;
 	call->video.lo.fir_seq = 0;
 
+	call->twcc.running = false;
 	tmr_cancel(&call->twcc.tmr);
 	list_flush(&call->twcc.pktl);
 	call->twcc.seqno = -1;
 	call->twcc.refts = 0;
 	call->twcc.deltats = 0;
 	call->twcc.fbcnt = 0;
-	call->twcc.running = false;
 	
 
 	lock_write_get(g_sft->lock);
@@ -6153,7 +6155,7 @@ static void http_req_handler(struct http_conn *hc,
 
 	info("sft: req for %s.%s [%s] for convid=%s %H\n",
 	     userid, clientid, callid, convid, econn_message_brief, cmsg);
-	
+
 	if (call) {
 		switch(cmsg->msg_type) {
 		case ECONN_SETUP:
