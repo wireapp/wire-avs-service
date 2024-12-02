@@ -2347,11 +2347,12 @@ static void process_rtp(struct call *call,
 		else {
 			struct rtp_stream *rs;
 			bool skip = false;
+			uint32_t ssrcv = call->issft ? ssrc : call->video.ssrc;
 
 			if (rst == RTP_STREAM_TYPE_VIDEO
 			    && rcall->video.select.mode == SELECT_MODE_LIST) {
 
-				rs = video_stream_find(call, rcall, call->video.ssrc);
+				rs = video_stream_find(call, rcall, ssrcv);
 
 				if (!rs) {
 					warning("process_rtp: call(%p): no video ssrc=%u\n", call, ssrc);
