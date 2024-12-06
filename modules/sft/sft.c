@@ -213,6 +213,11 @@ struct nack_entry {
 	int nlost;
 };
 
+struct ssrcv_update {
+	struct call *call;
+	struct call *rcall;
+};
+
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 20000
 #define TIMEOUT_RR 500
@@ -404,6 +409,7 @@ struct call {
 		struct jb *jb;
 #endif
 		uint64_t last_ts;
+		struct tmr tmr_ssrcv;
 	} video;
 
 	struct sft *sft;
@@ -462,6 +468,11 @@ struct participant {
 	bool remote;
 	char *userid;
 	char *clientid;
+
+	struct {
+		uint32_t ssrcv_hi;
+		uint32_t ssrcv_lo;
+	} simulcast;
 
 	struct le le;
 };
@@ -1516,42 +1527,60 @@ static bool ssrc_isauth(struct participant *part, uint32_t ssrc)
 	return found;
 }
 
-static const char *ssrc2userid(struct list *partl, bool issft, uint32_t ssrc)
+static struct participant *ssrc2part(struct list *partl, bool issft, uint32_t ssrc)
 {
-	const char *userid;
 	struct le *le;
 	bool found = false;
+	struct participant *p = NULL;
 
 	le = partl->head;
 	while(le && !found) {
-		struct participant *p = le->data;
-
+		p = le->data;
 		le = le->next;
 
-		if (issft) {
-			found = ssrc == p->ssrca || ssrc == p->ssrcv;
+		found = ssrc == p->ssrca
+		     || ssrc == p->ssrcv
+		     || ssrc == p->simulcast.ssrcv_hi
+		     || ssrc == p->simulcast.ssrcv_lo;
+	}
+
+	return found ? p : NULL;
+}
+
+static const char *ssrc2userid(struct list *partl, bool issft, uint32_t ssrc)
+{
+	const char *userid = NULL;
+	struct le *le;
+	bool found = false;
+	struct participant *p = NULL;
+
+	if (issft) {
+		p = ssrc2part(partl, issft, ssrc);
+		return p ? p->userid : NULL;
+	}
+
+	le = partl->head;
+	while(le && !found) {
+		struct le *ale = p->authl.head;
+
+		p = le->data;
+		le = le->next;
+
+		while(ale && !found) {
+			struct auth_part *aup = ale->data;
+
+			ale = ale->next;
+
+			found = ssrc == aup->ssrca
+			     || ssrc == aup->ssrcv;
 			if (found)
-				userid = p->userid;
-		}
-		else {
-			struct le *ale = p->authl.head;
-
-			while(ale && !found) {
-				struct auth_part *aup = ale->data;
-
-				ale = ale->next;
-
-				found = ssrc == aup->ssrca
-					|| ssrc == aup->ssrcv;
-
-				if (found)
-					userid = aup->userid;
-			}
+				userid = aup->userid;
 		}
 	}
 
-	return found ? userid : NULL;
+	return userid;
 }
+
 
 #if USE_RTX
 static struct rtp_stream *video_rtx_find(struct call *call, uint32_t ssrc)
@@ -1610,7 +1639,6 @@ static struct rtp_stream *video_stream_find(struct call *fcall,
 		    le = le->next) {
 			vs = le->data;
 			found = streq(vs->userid, userid);
-			info("video_stream_find(%p): userid %s == %s\n", call, userid, vs->userid);
 		}
 	}
 
@@ -1815,12 +1843,16 @@ static bool exist_ssrc(struct call *call, bool ishost, uint32_t ssrc,
 			break;
 
 		case RTP_STREAM_TYPE_VIDEO:
-			found = ssrc == part->ssrcv;
+			found = ssrc == part->ssrcv
+			     || ssrc == part->simulcast.ssrcv_hi
+			     || ssrc == part->simulcast.ssrcv_lo;
 			break;
 
 		case RTP_STREAM_TYPE_ANY:
 			found = ssrc == part->ssrca
-				|| ssrc == part->ssrcv;
+			     || ssrc == part->ssrcv
+			     || ssrc == part->simulcast.ssrcv_hi
+			     || ssrc == part->simulcast.ssrcv_lo;
 			break;
 
 		default:
@@ -1908,6 +1940,79 @@ static void process_dd(struct call *call,
 	}
 }
 
+static void ssrcv_timeout_handler(void *arg)
+{
+	struct ssrcv_update *ssu = arg;
+	struct econn_message *msg = NULL;
+	struct econn_stream_info *sinfo = NULL;
+	struct call *call = ssu->call;
+	struct call *rcall = ssu->rcall;
+	int err = 0;
+
+	msg = econn_message_alloc();
+	if (!msg) {
+		warning("call(%p): ssrcv_timeout_handler no message\n", call);
+		goto out;
+	}
+	econn_message_init(msg, ECONN_CONF_STREAMS,
+			   call->group ? call->group->id : "sft");
+	str_ncpy(msg->dest_userid, rcall->federate.dstid,
+		 ARRAY_SIZE(msg->dest_userid));
+	msg->resp = true;
+	sinfo = mem_zalloc(sizeof(*sinfo), NULL);
+	if (!sinfo) {
+		warning("call(%p): ssrcv_timeout: cannot allocate sinfo\n",
+			call);
+		goto out;
+	}
+	str_ncpy(sinfo->userid, call->userid,
+		 ARRAY_SIZE(sinfo->userid));
+	sinfo->quality = 0;
+	str_ncpy(sinfo->ssrcv.clientid, call->clientid,
+		 sizeof(sinfo->ssrcv.clientid));
+	sinfo->ssrcv.hi = call->video.hi.ssrc;
+	sinfo->ssrcv.lo = call->video.lo.ssrc;
+	list_append(&msg->u.confstreams.streaml, &sinfo->le, sinfo);
+
+	info("call(%p): ssrcv_timeout: hi:%u lo:%u\n", call, sinfo->ssrcv.hi, sinfo->ssrcv.lo);
+
+	if (rcall->dc_estab) {
+		err = send_dce_msg(rcall, msg);
+		if (err) {
+			warning("call(%p): ssrcv_timeout_handler: "
+				"send_dce failed: %m\n",
+				call, err);
+			goto out;
+		}
+	}
+	else if (rcall->sft_cid) {
+		char *mstr;
+
+		err = econn_message_encode(&mstr, msg);
+		if (err) {
+			warning("call(%p): ssrcv_timeout: failed to "
+				"encode message: %m\n", call, err);
+		}
+		else {
+			tc_send(rcall->federate.tc,
+				&rcall->sft_tuple, rcall->sft_cid,
+				(uint8_t *)mstr, str_len(mstr));
+			mem_deref(mstr);
+		}
+	}
+
+ out:
+	mem_deref(msg);
+	mem_deref(ssu);
+}
+
+static void ssu_destructor(void *arg)
+{
+	struct ssrcv_update *ssu = arg;
+
+	mem_deref(ssu->call);
+	mem_deref(ssu->rcall);
+}
 
 static void process_rtp(struct call *call,
 			struct rtp_header *rtp,
@@ -1940,6 +2045,7 @@ static void process_rtp(struct call *call,
 	bool is_keyframe = false;
 	bool has_gfh = false;
 	struct dep_desc *dd = NULL;
+	bool update_ssrcv = false;
 	
 
 	group = call->group;
@@ -2098,7 +2204,7 @@ static void process_rtp(struct call *call,
 
 		stats = &call->audio.stats;
 	}
-	else {
+	else if (!call->issft) {
 		if (0 == call->video.hi.ssrc ) {
 			//info("call(%p): no hi video current rid=%s\n", call, rid ? rid : "???");
 			if (rid && streq(rid, RID_HI)) {
@@ -2106,6 +2212,7 @@ static void process_rtp(struct call *call,
 				call->video.hi.ssrc = rtp->ssrc;
 				if (0 == call->twcc.rssrc)
 					call->twcc.rssrc = rtp->ssrc;
+				update_ssrcv = true;
 			}
 			if (dd) {
 				call->video.hi.dd = mem_ref(dd);
@@ -2118,6 +2225,7 @@ static void process_rtp(struct call *call,
 				call->video.lo.ssrc = rtp->ssrc;
 				if (0 == call->twcc.rssrc)
 					call->twcc.rssrc = rtp->ssrc;
+				update_ssrcv = true;
 			}
 			if (dd) {
 				call->video.lo.dd = mem_ref(dd);
@@ -2268,6 +2376,19 @@ static void process_rtp(struct call *call,
 		     ssrc, is_selective, aulevel,
 		     rcall->issft ? "SFT" : "CLI", rcall, rcall->mf);
 #endif
+		if (rcall->issft) {
+			if (update_ssrcv) {
+				struct ssrcv_update *ssu;
+
+				ssu = mem_zalloc(sizeof(*ssu), ssu_destructor);
+				if (ssu) {
+					ssu->call = mem_ref(call);
+					ssu->rcall = mem_ref(rcall);
+					tmr_start(&call->video.tmr_ssrcv, 0,
+						  ssrcv_timeout_handler, ssu);
+				}
+			}
+		}
 
 		if (is_selective) {
 			if ((rst == RTP_STREAM_TYPE_AUDIO && !kg)
@@ -2347,7 +2468,27 @@ static void process_rtp(struct call *call,
 		else {
 			struct rtp_stream *rs;
 			bool skip = false;
-			uint32_t ssrcv = call->issft ? ssrc : call->video.ssrc;
+			uint32_t ssrcv;
+			uint32_t ssrcv_hi;
+			uint32_t ssrcv_lo;
+
+			if (call->issft) {
+				bool ishost = group ? group->sft.ishost : false;
+				struct list *partl = ishost ? &call->partl : &call->sft_partl;
+				struct participant *p;
+
+				p = ssrc2part(partl, call->issft, ssrc);
+				if (p) {
+					ssrcv = p->ssrcv;
+					ssrcv_hi = p->simulcast.ssrcv_hi;
+					ssrcv_lo = p->simulcast.ssrcv_lo;
+				}
+			}
+			else {
+				ssrcv = call->video.ssrc;
+				ssrcv_hi = call->video.hi.ssrc;
+				ssrcv_lo = call->video.lo.ssrc;
+			}
 
 			if (rst == RTP_STREAM_TYPE_VIDEO
 			    && rcall->video.select.mode == SELECT_MODE_LIST) {
@@ -2372,18 +2513,17 @@ static void process_rtp(struct call *call,
 
 					switch (q) {
 					case VIDEO_STREAM_Q_ANY:
-						if (call->video.hi.ssrc
-						    && ssrc != call->video.hi.ssrc)
+						if (ssrcv_hi && ssrc != ssrcv_hi)
 							skip = true;
 						break;
 					
 					case VIDEO_STREAM_Q_LO:
-						if (call->video.lo.ssrc && ssrc != call->video.lo.ssrc)
+						if (ssrcv_lo && ssrc != ssrcv_lo)
 							skip = true;
 						break;
 
 					case VIDEO_STREAM_Q_HI:
-						if (call->video.hi.ssrc && ssrc != call->video.hi.ssrc)
+						if (ssrcv_hi && ssrc != ssrcv_hi)
 							skip = true;
 						break;
 					}
@@ -2396,12 +2536,10 @@ static void process_rtp(struct call *call,
 						     kg, aulevel);
 			}
 			
-			
 			if (!rs || skip) {
 				deref_locked(rcall);
 				continue;
 			}
-			
 
 			rtp_stream_update(rs, &rrtp, aulevel);
 					
@@ -2426,7 +2564,7 @@ static void process_rtp(struct call *call,
 				rrtp.csrc[0] = ssrc;
 			}
 			else {
-				rrtp.csrc[0] = call->video.ssrc;				
+				rrtp.csrc[0] = ssrcv;
 			}
 
 			rmb.pos = 0;
@@ -3075,7 +3213,7 @@ static int send_dce_msg(struct call *call, void *arg)
 	if (call->dc_estab)
 		err = ecall_dce_sendmsg((struct ecall *)call->icall, msg);
 	else {
-		warning("send_dce_msg(%p): no datachannel\n");
+		warning("send_dce_msg(%p): no datachannel\n", call);
 		err = 0;
 	}
 
@@ -3695,6 +3833,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 			SFTLOG(LOG_LEVEL_INFO, "legacy ssrcv handling\n", call);
 			call->video.ssrc = mediaflow_get_ssrc(call->mf, "video", false);
 			call->video.hi.ssrc = call->video.ssrc;
+			call->video.lo.ssrc = call->video.ssrc;
 		}
 	}
 
@@ -4367,6 +4506,7 @@ static void call_destructor(void *arg)
 	tmr_cancel(&call->tmr_fir);
 	tmr_cancel(&call->tmr_conn);
 	tmr_cancel(&call->tmr_q);
+	tmr_cancel(&call->video.tmr_ssrcv);
 
 	tmr_cancel(&call->twcc.tmr);
 
@@ -4436,11 +4576,19 @@ static struct participant *find_part_by_userclient(struct list *partl,
 	while(le && !found) {
 		part = le->data;
 		le = le->next;
+#if 0
+		info("find_part_by_userclient: partl=%p userid:%s==%s clientid:%s==%s\n",
+		     partl, userid, part->userid, clientid, part->clientid);
+#endif
 		if (part && part->userid && part->clientid) {
 			found = streq(part->userid, userid)
-				&& streq(part->clientid, clientid)
-				&& ssrca == part->ssrca
-				&& ssrcv == part->ssrcv;
+				&& streq(part->clientid, clientid);
+			if (found) {
+				if (ssrca)
+					found = found && ssrca == part->ssrca;
+				if (ssrcv)
+					found = found && ssrcv == part->ssrcv;
+			}
 		}
 	}
 
@@ -4485,6 +4633,7 @@ static void sft_confpart_handler(const struct econn_message *msg,
 	struct le *le;
 	const struct list *partl = &msg->u.confpart.partl;
 	struct list *call_partl;
+	struct list tpl = LIST_INIT;
 	bool resp = false;
 
 	SFTLOG(LOG_LEVEL_INFO, "CONFPART-%s participants: %d\n",
@@ -4498,6 +4647,9 @@ static void sft_confpart_handler(const struct econn_message *msg,
 	call_partl = resp ? &call->sft_partl : &call->partl;
 
 	if (resp) {
+		tpl = *call_partl;
+		list_init(call_partl);
+#if 0
 		/* First remove all previous participants */
 		le = call_partl->head;
 		while(le) {
@@ -4509,6 +4661,7 @@ static void sft_confpart_handler(const struct econn_message *msg,
 			if (NULL == rpart->call)
 				mem_deref(rpart);
 		}
+#endif
 	}
 	else { /* request */
 		/* cleanup all removed participants */
@@ -4534,6 +4687,7 @@ static void sft_confpart_handler(const struct econn_message *msg,
 
 	LIST_FOREACH(partl, le) {
 		struct econn_group_part *part = le->data;
+		struct participant *tpart;
 		//struct auth_part *aup;
 
 #if 1
@@ -4547,7 +4701,19 @@ static void sft_confpart_handler(const struct econn_message *msg,
 						part->ssrcv);
 		if (rpart)
 			continue;
-		
+
+		if (tpl.head == NULL) {
+			tpart = NULL;
+		}
+		else {
+			tpart = find_part_by_userclient(&tpl,
+							part->userid,
+							part->clientid,
+							0, 0);
+			info("sft_confpart_handler: part=%s.%s tpart=%p\n",
+			     part->userid, part->clientid, tpart);
+		}
+
 		rpart = mem_zalloc(sizeof(*rpart), part_destructor);
 		if (!rpart) {
 			warning("sft_confpart_handler: failed rpart\n");
@@ -4560,12 +4726,16 @@ static void sft_confpart_handler(const struct econn_message *msg,
 		str_dup(&rpart->clientid, part->clientid);
 		rpart->ssrca = part->ssrca;
 		rpart->ssrcv = part->ssrcv;
+		if (tpart) {
+			rpart->simulcast = tpart->simulcast;
+		}
 		//rpart->ts = call->join_ts + part->ts;
 		rpart->ix = group ? group->part_ix++ : 0;
 
 		list_init(&rpart->authl);
 		list_append(call_partl, &rpart->le, rpart);
 	}
+	list_flush(&tpl);
 
 	if (!resp && group) {
 		uint8_t *entropy;
@@ -4744,8 +4914,43 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 				      void *arg)
 {
 	struct call *call = arg;
+	struct le *le;
+	bool ishost = call->group ? call->group->sft.ishost : false;
 
-	info("ecall_confstreams_handler(%p): ecall=%p n=%d\n", call, ecall, (int)list_count(&msg->u.confstreams.streaml));
+	info("ecall_confstreams_handler(%p): issft=%d(ishost=%d) ecall=%p group=%p n=%d\n",
+	     call, call->issft, ishost, ecall, call->group,
+	     (int)list_count(&msg->u.confstreams.streaml));
+
+	if (call->issft) {
+		struct list *partl = ishost ? &call->partl : &call->sft_partl;
+
+		LIST_FOREACH(&msg->u.confstreams.streaml, le) {
+			struct econn_stream_info *si = le->data;
+			struct participant *part;
+
+			part = find_part_by_userclient(partl,
+						       si->userid,
+						       "_",
+						       0,
+						       0);
+			info("ecall_confstreams_handler(%p): part=%p(%s.%s) "
+			     "simulcast: hi:%u lo:%u\n",
+			     call, part, si->userid, si->ssrcv.clientid,
+			     si->ssrcv.hi, si->ssrcv.lo);
+
+			if (part) {
+				if (si->ssrcv.hi)
+					part->simulcast.ssrcv_hi = si->ssrcv.hi;
+				if (si->ssrcv.lo)
+					part->simulcast.ssrcv_lo = si->ssrcv.lo;
+			}
+			else {
+				warning("ecall_confstreams_handler(%p): participant not found: %s.%s\n",
+					call, si->userid, si->ssrcv.clientid);
+			}
+		}
+		return;
+	}
 	
 	select_video_streams(call,
 			     msg->u.confstreams.mode,
@@ -5717,7 +5922,25 @@ static struct call *federate_request(struct group *group,
 		if (call)
 			ecall_propsync_handler(NULL, cmsg, call);
 		break;
+
+	case ECONN_CONF_STREAMS:
+		dstid = cmsg->dest_userid;
+
+		info("federate_request: CONF_STREAMS-%s convid=%s dstid=%s\n",
+		     cmsg->resp ? "resp" : "req", convid, dstid);
+		lock_write_get(g_sft->lock);
+		call = dict_lookup(g_sft->calls, dstid);
+		lock_rel(g_sft->lock);
+		if (!call) {
+			warning("federate_request: cannot find call: %s\n",
+				dstid);
+			err = ENOSYS;
+			goto out;
+		}
 		
+		ecall_confstreams_handler(NULL, cmsg, call);
+		break;
+
 	default:
 		err = ENOENT;
 		break;
@@ -5981,6 +6204,11 @@ static bool tc_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 					reflow_rtp_recv(mb, call);
 					return true;
 				}
+#if DEBUG_PACKET
+				else {
+					warning("tc_recv(%p): ssrc: %u not found for call\n", call, rtp.ssrc);
+				}
+#endif
 			}
 		}
 		else {
