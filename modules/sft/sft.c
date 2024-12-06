@@ -1552,18 +1552,18 @@ static const char *ssrc2userid(struct list *partl, bool issft, uint32_t ssrc)
 	const char *userid = NULL;
 	struct le *le;
 	bool found = false;
-	struct participant *p = NULL;
 
 	if (issft) {
-		p = ssrc2part(partl, issft, ssrc);
+		struct participant *p = ssrc2part(partl, issft, ssrc);
+
 		return p ? p->userid : NULL;
 	}
 
 	le = partl->head;
 	while(le && !found) {
+		struct participant *p = le->data;
 		struct le *ale = p->authl.head;
 
-		p = le->data;
 		le = le->next;
 
 		while(ale && !found) {
@@ -1616,8 +1616,9 @@ static struct rtp_stream *video_stream_find(struct call *fcall,
 		found = ssrc == vs->ssrc;
 	}
 	if (!found && fcall) {
-		if (!fcall->issft)
+		if (!fcall->issft) {
 			userid = ssrc2userid(&fcall->partl, false, ssrc);
+		}
 		else {
 			userid = ssrc2userid(&fcall->partl, true, ssrc);
 			if (!userid) {
@@ -3399,8 +3400,8 @@ static int send_conf_part(struct call *call, uint64_t ts,
 		}
 
 #if 0
-		info("send_confpart: adding CLIENT call:%p part_ix=%lu %s/%s\n",
-		     pcall, pcall->part_ix, pcall->userid, pcall->clientid);
+		info("send_confpart: adding CLIENT call:%p part_ix=%lu %s/%s video_ssrc=%u\n",
+		     pcall, pcall->part_ix, pcall->userid, pcall->clientid, pcall->video.ssrc);
 #endif
 		part = econn_part_alloc(pcall->userid, pcall->clientid);
 		if (!part) {
