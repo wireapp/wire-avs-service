@@ -156,6 +156,7 @@ struct reflow {
 	char *userid_remote;
 	struct sa laddr_default;
 	struct sa media_laddr;	
+	struct sa alt_media_laddr;
 	char tag[32];
 	bool terminated;
 	bool closed;
@@ -2443,6 +2444,10 @@ int reflow_alloc(struct iflow		**flowp,
 	maddr = avs_service_media_addr();
 	if (maddr) {
 		sa_cpy(&rf->media_laddr, maddr);
+	}
+	maddr = avs_service_alt_media_addr();
+	if (maddr) {
+		sa_cpy(&rf->alt_media_laddr, maddr);
 	}
 	
 	/* RTP must listen on 0.0.0.0 so that we can send/recv
@@ -6006,7 +6011,8 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		 */
 		udp_handler_set(lcand->us, trice_udp_recv_handler, rf);
 
-		if (sa_isset(&rf->media_laddr, SA_ADDR)) {
+		if (sa_isset(&rf->media_laddr, SA_ADDR)
+		    && sa_af(rf->media_laddr) == sa_af(sa)) {
 			struct ice_cand_attr mcand =
 				*(struct ice_cand_attr *)lcand;
 			uint16_t port;
@@ -6019,6 +6025,15 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 						  "%H",
 						  ice_cand_attr_encode,
 						  &mcand);
+			if (sa_isset(&rf->alt_media_laddr, SA_ADDR)) {
+				sa_cpy(&mcand.addr, &rf->alt_media_laddr);
+				sa_set_port(&mcand.addr, port);
+				err = sdp_media_set_lattr(rf->audio.sdpm, false,
+							  "candidate",
+							  "%H",
+							  ice_cand_attr_encode,
+							  &mcand);
+			}
 		}
 		else {
 			err = sdp_media_set_lattr(rf->audio.sdpm, false,
