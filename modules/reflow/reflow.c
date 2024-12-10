@@ -5930,7 +5930,7 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		udp_handler_set(lcand->us, trice_udp_recv_handler, rf);
 
 		if (sa_isset(&rf->media_laddr, SA_ADDR)
-		    && sa_af(rf->media_laddr) == sa_af(sa)) {
+		    && sa_af(&rf->media_laddr) == sa_af(sa)) {
 			struct ice_cand_attr mcand =
 				*(struct ice_cand_attr *)lcand;
 			uint16_t port;
