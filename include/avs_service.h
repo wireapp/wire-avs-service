@@ -43,6 +43,7 @@ int module_load(const char *name);
 
 struct sa  *avs_service_req_addr(void);
 struct sa  *avs_service_media_addr(void);
+struct sa  *avs_service_alt_media_addr(void);
 
 /* Member of iflist */
 struct avs_service_ifentry {

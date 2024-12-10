@@ -48,6 +48,7 @@ struct avs_service {
 
 	struct sa req_addr;
 	struct sa media_addr;
+	struct sa alt_media_addr;
 	struct sa mediaif_addr;
 	struct sa metrics_addr;
 	struct sa sft_req_addr;
@@ -394,7 +395,7 @@ int main(int argc, char *argv[])
 	
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:B:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -405,6 +406,10 @@ int main(int argc, char *argv[])
 			
 		case 'A':
 			sa_set_str(&avsd.media_addr, optarg, 0);
+			break;
+
+		case 'B':
+			sa_set_str(&avsd.alt_media_addr, optarg, 0);
 			break;
 
 		case 'b':
@@ -610,6 +615,12 @@ struct sa  *avs_service_media_addr(void)
 {
 	return sa_isset(&avsd.media_addr, SA_ADDR) ? &avsd.media_addr
 		                                   : NULL;
+}
+
+struct sa  *avs_service_alt_media_addr(void)
+{
+	return sa_isset(&avsd.alt_media_addr, SA_ADDR) ? &avsd.alt_media_addr
+		                                       : NULL;
 }
 
 struct list  *avs_service_iflist(void)
