@@ -29,8 +29,10 @@ spec:
         - name: sftd-disco
           emptyDir: {}
       containers:
+        {{ with .Values.sftd_disco }}
         - name: sftd-disco
-          image: quay.io/wire/sftd_disco:wip-2 # TODO configure + version
+          image: "{{ .image.repository }}:{{ .image.tag }}"
+          imagePullPolicy: {{ .image.pullPolicy }}
           volumeMounts:
           - name: sftd-disco
             mountPath: /etc/wire/sftd-disco
@@ -39,7 +41,8 @@ spec:
             - "/bin/sh"
             - "-c"
             - |
-              /usr/bin/sftd_disco.sh _sft._tcp.{{ include "sftd.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+              /usr/bin/sftd_disco.sh _sft._tcp.{{ include "sftd.fullname" $ }}.{{ $.Release.Namespace }}.svc.cluster.local
+        {{- end }}
         - name: nginx
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
