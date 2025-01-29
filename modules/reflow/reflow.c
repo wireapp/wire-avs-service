@@ -2972,9 +2972,9 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 		}
 
 		if (rf->ver.major != SFT_VERSION_MARK && (rf->ver.major == 0 || rf->ver.major >= 10)) {
-			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
 			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
-			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv l;h");
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv h;l");
 		}
 	}
 
