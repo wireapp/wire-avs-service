@@ -33,7 +33,7 @@ ENV HOME /build/sftd
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
 # Needed to workaround JENKINS-38438
-RUN chown -R 1001:1001 /build/sftd/.cargo
+RUN chown -R 1015:1015 /build/sftd/.cargo
 
 ENV PATH="/build/sftd/.cargo/bin:${PATH}"
 
