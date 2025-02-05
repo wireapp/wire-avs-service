@@ -31,6 +31,8 @@ WORKDIR /build/sftd
 ENV HOME /build/sftd
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+RUN /build/sftd/.cargo/bin/rustup install 1.71.1
+RUN /build/sftd/.cargo/bin/rustup default 1.71.1-x86_64-unknown-linux-gnu
 
 # Needed to workaround JENKINS-38438
 RUN chown -R 1015:1015 /build/sftd/.cargo
