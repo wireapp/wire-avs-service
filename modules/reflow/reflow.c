@@ -63,6 +63,8 @@
 
 #define NUM_RTP_STREAMS 2
 
+void *(* volatile memset_s)(void *s, int c, size_t n) = memset;
+
 enum {
 	RTP_TIMEOUT_MS = 20000,
 	RTP_FIRST_PKT_TIMEOUT_MS = 10000,
@@ -122,11 +124,13 @@ static struct {
 	struct list rfl;
 	struct list aucodecl;
 	struct list vidcodecl;
+	struct list bundle_vidcodecl;
 
 	struct {
 		struct mediapump *mp;
 		mediaflow_alloc_h *alloch;
 		mediaflow_close_h *closeh;
+		mediaflow_version_h *verh;
 		mediaflow_recv_data_h *recv_rtph;
 		mediaflow_recv_data_h *recv_rtcph;
 		mediaflow_recv_dc_h *recv_dch;
@@ -144,6 +148,8 @@ struct reflow {
 
 	enum icall_conv_type conv_type;
 	enum icall_call_type call_type;
+	struct ver_elem ver;
+
 	/* common stuff */
 	char *clientid_local;
 	char *clientid_remote;
@@ -313,6 +319,8 @@ struct reflow {
 		int assrcc;
 		uint32_t *vssrcv;
 		int vssrcc;
+		uint32_t *rtx_ssrcv;
+		int rtx_ssrcc;
 	} rtps;
 };
 
@@ -626,28 +634,6 @@ static int start_codecs(struct reflow *rf)
 
 static const uint8_t app_label[4] = "DATA";
 
-
-static int send_rtcp_app(struct reflow *rf, const uint8_t *pkt, size_t len)
-{
-	struct mbuf *mb = mbuf_alloc(len);
-	int err;
-
-	err = rtcp_encode(mb, RTCP_APP, 0, (uint32_t)0, app_label, pkt, len);
-	if (err) {
-		warning("reflow(%p): rtcp_encode failed (%m)\n", rf, err);
-		goto out;
-	}
-
-	err = reflow_send_raw_rtcp(rf, mb->buf, mb->end);
-	if (err) {
-		warning("reflow(%p): send_raw_rtcp failed (%m)\n", rf, err);
-	}
-
- out:
-	mem_deref(mb);
-	return err;
-}
-
 static int reflow_send_dc_data(struct reflow *rf, const uint8_t *data, size_t len)
 {
 	int err = ENOSYS;
@@ -738,6 +724,7 @@ static int start_video_codecs(struct reflow *rf)
 }
 
 
+#if 0
 static void timeout_rtp(void *arg)
 {
 	struct reflow *rf = arg;
@@ -769,6 +756,7 @@ static void timeout_rtp(void *arg)
 		IFLOW_CALL_CB(rf->iflow, closeh, ETIMEDOUT, rf->iflow.arg);
 	}
 }
+#endif
 
 
 /* this function is only called once */
@@ -1219,8 +1207,8 @@ static void dtls_estab_handler(void *arg)
 	check_data_channel(rf);
 
 	/* Wipe the keys from memory */
-	memset(cli_key, 0, sizeof(cli_key));
-	memset(srv_key, 0, sizeof(srv_key));
+	memset_s(cli_key, 0, sizeof(cli_key));
+	memset_s(srv_key, 0, sizeof(srv_key));
 
 	return;
 
@@ -1228,8 +1216,8 @@ static void dtls_estab_handler(void *arg)
 	warning("reflow(%p): DTLS-SRTP error (%m)\n", rf, err);
 
 	/* Wipe the keys from memory */
-	memset(cli_key, 0, sizeof(cli_key));
-	memset(srv_key, 0, sizeof(srv_key));
+	memset_s(cli_key, 0, sizeof(cli_key));
+	memset_s(srv_key, 0, sizeof(srv_key));
 
 	IFLOW_CALL_CB(rf->iflow, closeh,
 		err, rf->iflow.arg);
@@ -1704,12 +1692,6 @@ static void external_rtp_recv(struct reflow *rf,
 		rf->got_rtp = true;
 	}
 
-#if 0	
-	if (g_reflow.mediaflow.recv_rtph) {
-		g_reflow.mediaflow.recv_rtph(mb, rf->extarg);
-	}
-#endif
-
 	if (is_rtp) {
 		if (g_reflow.mediaflow.recv_rtph) {
 			g_reflow.mediaflow.recv_rtph(mb, rf->extarg);
@@ -2125,6 +2107,7 @@ static void destructor(void *arg)
 
 	rf->rtps.assrcv = mem_deref(rf->rtps.assrcv);
 	rf->rtps.vssrcv = mem_deref(rf->rtps.vssrcv);
+	rf->rtps.rtx_ssrcv = mem_deref(rf->rtps.rtx_ssrcv);
 	rf->destructed = true;
 }
 
@@ -2322,6 +2305,9 @@ static bool exist_ssrc(struct reflow *rf, uint32_t ssrc)
 	for (i = 0; !found && i < rf->rtps.vssrcc; ++i) {
 		found = rf->rtps.vssrcv[i] == ssrc;
 	}
+	for (i = 0; !found && i < rf->rtps.rtx_ssrcc; ++i) {
+		found = rf->rtps.rtx_ssrcv[i] == ssrc;
+	}
 
 	return found;
 }
@@ -2418,6 +2404,14 @@ int reflow_alloc(struct iflow		**flowp,
 	rf->group_mode = false;
 	rf->af = sa_af(&laddr_sdp);
 
+	if (g_reflow.mediaflow.verh) {
+		g_reflow.mediaflow.verh(&rf->ver, extarg);
+
+		info("reflow(%p): version %d.%d.%d\n",
+		     rf,
+		     rf->ver.major, rf->ver.minor, rf->ver.build);
+	}
+
 	rf->rf_stats.turn_alloc = -1;
 	rf->rf_stats.nat_estab  = -1;
 	rf->rf_stats.dtls_estab = -1;
@@ -2472,6 +2466,7 @@ int reflow_alloc(struct iflow		**flowp,
 		goto out;
 
 	(void)sdp_session_set_lattr(rf->sdp, true, "tool", avs_version_str());
+	(void)sdp_session_set_lattr(rf->sdp, true, "extmap-allow-mixed", "true");
 
 	info("reflow_alloc sdp_session_alloc\n");
 	err = sdp_media_add(&rf->audio.sdpm, rf->sdp, "audio",
@@ -2480,8 +2475,8 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	sdp_media_set_lbandwidth(rf->audio.sdpm,
-				 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
+	//sdp_media_set_lbandwidth(rf->audio.sdpm,
+	//			 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
 	sdp_media_set_lattr(rf->audio.sdpm, true, "ptime", "%u", AUDIO_PTIME);
 
 	/* needed for new versions of WebRTC */
@@ -2495,10 +2490,12 @@ int reflow_alloc(struct iflow		**flowp,
 		"extmap", "1 urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on");
 	sdp_media_set_lattr(rf->audio.sdpm, false,
 			    "extmap", "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-#if USE_TRANSCC
+#if USE_TWCC
 	sdp_media_set_lattr(rf->audio.sdpm, false,
-			    "extmap", "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+			    "extmap",
+			    "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
 #endif
+	
 	
 	rand_str(rf->cname, sizeof(rf->cname));
 	rand_str(rf->msid, sizeof(rf->msid));
@@ -2548,7 +2545,7 @@ int reflow_alloc(struct iflow		**flowp,
 		af->ac = ac;
 		list_append(&rf->audio.formatl, &af->le, af);
 
-#if USE_TRANSCC
+#if USE_TWCC
 		sdp_media_set_lattr(rf->audio.sdpm, false,
 				    "rtcp-fb", "%s transport-cc",
 				    ac->pt);
@@ -2798,8 +2795,8 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	if (err)
 		goto out;
 
-	sdp_media_set_lbandwidth(rf->video.sdpm,
-				 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
+	//sdp_media_set_lbandwidth(rf->video.sdpm,
+	//			 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
 
 	/* needed for new versions of WebRTC */
 	err = sdp_media_set_alt_protos(rf->video.sdpm, 2,
@@ -2814,23 +2811,35 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
 			    "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+#if USE_TWCC
 	sdp_media_set_lattr(rf->video.sdpm, false,
 			    "extmap",
-			    "3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
+			    "3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+#endif	
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "4 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id");
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "5 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id");
+#if 1
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "11 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
+#else
+	sdp_media_set_lattr(rf->video.sdpm, false,
+			    "extmap",
+			    "6 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension");
+#endif
 
 	/*
 	  sdp_media_set_lattr(rf->video.sdpm, false,
 	  "extmap",
 	  "2 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-01");
 	*/
-
-#if USE_TRANSCC
-	sdp_media_set_lattr(rf->video.sdpm, false,
-			    "extmap",
-			    "4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-#endif
 	
 	sdp_media_set_lattr(rf->video.sdpm, false, "rtcp-mux", NULL);
+	sdp_media_set_lattr(rf->video.sdpm, false, "rtcp-rsize", NULL);
 
 	sdp_media_set_lport_rtcp(rf->video.sdpm, PORT_DISCARD);
 
@@ -2903,17 +2912,26 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 				goto out;
 			}
 
-#if USE_TRANSCC
-			sdp_media_set_lattr(rf->video.sdpm, false,
-					    "rtcp-fb", "%s transport-cc",
-					    vc->pt);
+			if (vc->uses_rtcp) {
+#if USE_RTX
+				sdp_media_set_lattr(rf->video.sdpm, false,
+						    "rtcp-fb", "%s nack",
+						    vc->pt);
+				sdp_media_set_lattr(rf->video.sdpm, false,
+						    "rtcp-fb", "%s nack pli",
+						    vc->pt);
+#endif
+#if USE_TWCC
+				sdp_media_set_lattr(rf->video.sdpm, false,
+						    "rtcp-fb", "%s transport-cc",
+						    vc->pt);
 #endif
 #if USE_REMB
-			sdp_media_set_lattr(rf->video.sdpm, false,
-					    "rtcp-fb", "%s goog-remb",
-					    vc->pt);
+				sdp_media_set_lattr(rf->video.sdpm, false,
+						    "rtcp-fb", "%s goog-remb",
+						    vc->pt);
 #endif
-
+			}
 			
 			ssrcv[i] = rand_u32();
 			re_snprintf(ssrc_group, sizeof(ssrc_group),
@@ -2921,16 +2939,21 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 			strcat(ssrc_fid, ssrc_group);
 			++i;
 		}
-		if (strlen(ssrc_fid))
-			ssrc_fid[strlen(ssrc_fid) - 1] = '\0';
 
 		if (i > 1) {
+			if (strlen(ssrc_fid))
+				ssrc_fid[strlen(ssrc_fid) - 1] = '\0';
+		
 			err = sdp_media_set_lattr(rf->video.sdpm, false, "ssrc-group",
 						  "FID %s", ssrc_fid);
 			if (err)
 				goto out;
 		}
 
+		err = sdp_media_set_lattr(rf->video.sdpm, false,
+					  "msid", "%s %s",
+					  rf->msid, rf->video.label);
+		
 		if (ssrcc > 0)
 			rf->lssrcv[MEDIA_VIDEO] = ssrcv[0];
 		if (ssrcc > 1)
@@ -2944,14 +2967,14 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 						  "ssrc", "%u msid:%s %s",
 						   ssrcv[k],
 						   rf->msid, rf->video.label);
-			err |= sdp_media_set_lattr(rf->video.sdpm, false,
-						  "ssrc", "%u mslabel:%s",
-						   ssrcv[k], rf->msid);
-			err |= sdp_media_set_lattr(rf->video.sdpm, false,
-						  "ssrc", "%u label:%s",
-						   ssrcv[k], rf->video.label);
 			if (err)
 				goto out;
+		}
+
+		if (rf->ver.major != SFT_VERSION_MARK && (rf->ver.major == 0 || rf->ver.major >= 10)) {
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv h;l");
 		}
 	}
 
@@ -3427,16 +3450,12 @@ void reflow_set_ice_role(struct reflow *rf, enum ice_role role)
 	}
 }
 
-static bool fmt_add(struct sdp_media *sdpm, struct sdp_format *fmt)
-{
-
-	return true;
-}
-
 
 static void bundle_ssrc(struct reflow *rf,
 			struct sdp_session *sess, struct sdp_media *sdpm,
-			uint32_t ssrc, uint32_t mid, const char *fingerprint,
+			uint32_t ssrc,
+			uint32_t rtx_ssrc,
+			uint32_t mid, const char *fingerprint,
 			bool is_video)
 {
 	struct sdp_media *newm;
@@ -3466,7 +3485,16 @@ static void bundle_ssrc(struct reflow *rf,
 	sdp_media_set_laddr(newm, &sa);
 	sdp_media_set_lport(newm, lport);
 	sdp_media_set_lattr(newm, false, "mid", "%u", mid);
+
 	sdp_media_set_lattr(newm, false, "rtcp-mux", NULL);
+	if (is_video) {
+		sdp_media_set_lattr(newm, false, "rtcp-rsize", NULL);
+#if USE_RTX
+		sdp_media_set_lattr(newm, false, "rtcp-fb", "100 nack");
+		sdp_media_set_lattr(newm, false, "rtcp-fb", "100 nack pli");
+#endif
+	}
+
 	sdp_media_set_lattr(newm, false, "ice-ufrag", "%s", rf->ice_ufrag);
 	sdp_media_set_lattr(newm, false, "ice-pwd", "%s", rf->ice_pwd);
 	
@@ -3475,10 +3503,9 @@ static void bundle_ssrc(struct reflow *rf,
 	
 	if (is_video) {
 		sdp_media_set_lattr(newm, false, "extmap",
-			"2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+				    "2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
 		sdp_media_set_lattr(newm, false, "extmap",
-			"3 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
-		
+				    "11 http://www.webrtc.org/experiments/rtp-hdrext/generic-frame-descriptor-00");
 	}
 	else {
 		sdp_media_set_lattr(newm, false, "extmap",
@@ -3494,10 +3521,16 @@ static void bundle_ssrc(struct reflow *rf,
 				    ssrc, label);
 		sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
 				    ssrc, label, label);
-		sdp_media_set_lattr(newm, false, "ssrc", "%u mslabel:%s",
-				    ssrc, label);
-		sdp_media_set_lattr(newm, false, "ssrc", "%u label:%s",
-				    ssrc, label);
+
+		if (rtx_ssrc) {
+			sdp_media_set_lattr(newm, false, "ssrc-group",
+					    "FID %u %u", ssrc, rtx_ssrc);
+
+			sdp_media_set_lattr(newm, false, "ssrc", "%u cname:%s",
+					    rtx_ssrc, label);
+			sdp_media_set_lattr(newm, false, "ssrc", "%u msid:%s %s",
+					    rtx_ssrc, label, label);
+		}
 	}
 	mem_deref(label);
 
@@ -3508,16 +3541,40 @@ static void bundle_ssrc(struct reflow *rf,
 	//sdp_media_rattr_apply(sdpm, NULL,
 	//		      media_rattr_handler, newm);
 
-	LIST_FOREACH(sdp_media_format_lst(sdpm, true), le) {
-		struct sdp_format *fmt = le->data;
 
-		sdp_format_add(NULL, newm, false,
-		       fmt->id, fmt->name, fmt->srate, fmt->ch,
-		       NULL, NULL, NULL, false, "%s", fmt->params);
+	if (is_video) {
+		LIST_FOREACH(&g_reflow.bundle_vidcodecl, le) {
+			struct vidcodec *vc = list_ledata(le);
+			struct vid_ref *vr;
+		   
+			vr = mem_zalloc(sizeof(*vr), NULL);
+			if (!vr)
+				continue;
+
+			vr->rf = rf;
+			vr->vc = vc;
+			
+			sdp_format_add(NULL, newm, false,
+				       vc->pt, vc->name, 90000, 1,
+				       NULL,
+				       NULL,
+				       vr, true,
+				       "%s", vc->fmtp);
+			mem_deref(vr);
+		}
+	}
+	else {
+		LIST_FOREACH(sdp_media_format_lst(sdpm, true), le) {
+			struct sdp_format *fmt = le->data;
+
+			sdp_format_add(NULL, newm, false,
+				       fmt->id, fmt->name, fmt->srate, fmt->ch,
+				       NULL, NULL, NULL, false, "%s", fmt->params);		
+		}
 	}
 	
 	sdp_media_set_ldir(newm, disabled ? SDP_INACTIVE : SDP_SENDONLY);
-	sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
+        //sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
 }
 
 
@@ -3596,7 +3653,6 @@ int reflow_generate_offer(struct iflow *iflow,
 
 		//list_flush((struct list *)sdp_session_medial(rf->sdp, true));
 	
-		
 		bmb = mbuf_alloc(256);
 		if (!bmb) {
 			err = ENOMEM;
@@ -3613,7 +3669,7 @@ int reflow_generate_offer(struct iflow *iflow,
 		for (i = 0; i < rf->rtps.assrcc; ++i) {
 			mbuf_printf(bmb, " %u", mid);
 			bundle_ssrc(rf, rf->sdp, sdpa,
-				    rf->rtps.assrcv[i], mid,
+				    rf->rtps.assrcv[i], 0, mid,
 				    rf->audio.fingerprint, false);
 			++mid;
 		}
@@ -3621,7 +3677,13 @@ int reflow_generate_offer(struct iflow *iflow,
 			for (i = 0; i < rf->rtps.vssrcc; ++i) {
 				mbuf_printf(bmb, " %u", mid);
 				bundle_ssrc(rf, rf->sdp, sdpv,
-					    rf->rtps.vssrcv[i], mid,
+					    rf->rtps.vssrcv[i],
+#if USE_RTX
+					    rf->rtps.rtx_ssrcv[i],
+#else
+					    0,
+#endif
+					    mid,
 					    rf->video.fingerprint, true);
 				++mid;
 			}
@@ -4126,8 +4188,9 @@ int reflow_send_rtp(struct reflow *rf, const struct rtp_header *hdr,
 
 
 /* NOTE: might be called from different threads */
-int reflow_send_raw_rtp(struct reflow *rf, const uint8_t *buf,
-			   size_t len)
+int reflow_send_raw_rtp(struct reflow *rf,
+			const uint8_t *buf,
+			size_t len)
 {
 	struct mbuf *mb;
 	size_t headroom;
@@ -4198,8 +4261,11 @@ static void mf_assign_worker(struct mediaflow *mf, struct worker *w)
 }
 
 static int mf_assign_streams(struct mediaflow *mf,
-			     uint32_t **assrcv, int assrcc,
-			     uint32_t **vssrcv, int vssrcc)
+			     uint32_t **assrcv,
+			     int assrcc,
+			     uint32_t **vssrcv,
+			     uint32_t **rtx_ssrcv,
+			     int vssrcc)
 {
 	struct reflow *rf;
 	uint32_t *ssrcv;
@@ -4247,13 +4313,29 @@ static int mf_assign_streams(struct mediaflow *mf,
 	if (vssrcv)
 		*vssrcv = ssrcv;
 
+	ssrcv = mem_zalloc(vssrcc * sizeof(*ssrcv), NULL);
+	if (!ssrcv) {
+		err = ENOMEM;
+		goto out;
+	}
+	rf->rtps.rtx_ssrcv = ssrcv;
+	for(i = 0; i < vssrcc; ++i) {
+		uint32_t ssrc = 0;
+		do {
+			ssrc = regen_lssrc(ssrc);
+		} while(exist_ssrc(rf, ssrc));
+		ssrcv[i] = ssrc;
+		rf->rtps.rtx_ssrcc = i + 1;
+	}
+	if (vssrcv)
+		*rtx_ssrcv = ssrcv;
+
  out:
 	if (err)
 		mem_deref(ssrcv);
 
 	return err;
 }
-
 
 static int mf_send_rtp(struct mediaflow *mf, const uint8_t *data, size_t len)
 {
@@ -4427,6 +4509,7 @@ static void trice_estab_handler(struct ice_candpair *pair,
 {
 	struct reflow *rf = arg;
 	void *sock;
+	bool use_pair = false;
 	int err;
 
 	info("reflow(%p): ice pair established  %H\n",
@@ -4446,12 +4529,18 @@ static void trice_estab_handler(struct ice_candpair *pair,
 	}
 #endif
 
+	if (rf->sel_pair) {
+		use_pair = pair->rcand->attr.type < rf->sel_pair->rcand->attr.type;
+	}
+	
 	/* We use the first pair that is working */
-	if (!rf->ice_ready) {
+	if (use_pair || !rf->ice_ready) {
 		struct stun_attr *attr;
 		struct turn_conn *conn;
+		struct ice_candpair *p = rf->sel_pair;
 
-		mem_deref(rf->sel_pair);
+		rf->sel_pair = NULL;
+		mem_deref(p);
 		rf->sel_pair = mem_ref(pair);
 
 		rf->ice_ready = true;
@@ -6104,25 +6193,43 @@ static struct aucodec opus = {
 	.extensions = audio_exts,
 };
 
-const char *video_exts[] = {"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
-			    NULL};
+//const char *video_exts[] = {"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+//			    NULL};
 
 static struct vidcodec vp8 = {
 	.pt         = "100",
 	.name       = "VP8",
-	.variant    = NULL,
 	.fmtp       = NULL,
-	.extensions = video_exts,
+	//.name       = "VP9",
+	//.fmtp       = "profile-id=0",
+	//.name         = "AV1",
+	//.fmtp         = "level-idx=5;profile=0;tier=0",
+	.variant    = NULL,
+	.extensions = NULL,
+	.uses_rtcp  = true,
 };
+#if USE_RTX
+static struct vidcodec rtx = {
+	.pt         = "101",
+	.name       = "rtx",
+	.variant    = NULL,
+	.fmtp       = "apt=100",
+	.extensions = NULL,
+	.uses_rtcp  = false,
+};
+#endif
+
 
 static void mf_set_handlers(mediaflow_alloc_h *alloch,
 			    mediaflow_close_h *closeh,
+			    mediaflow_version_h *verh,
 			    mediaflow_recv_data_h *rtph,
 			    mediaflow_recv_data_h *rtcph,
 			    mediaflow_recv_dc_h *dch)
 {
 	g_reflow.mediaflow.alloch = alloch;
 	g_reflow.mediaflow.closeh = closeh;
+	g_reflow.mediaflow.verh = verh;
 	g_reflow.mediaflow.recv_rtph = rtph;
 	g_reflow.mediaflow.recv_rtcph = rtcph;
 	g_reflow.mediaflow.recv_dch = dch;
@@ -6132,8 +6239,16 @@ static int module_init(void)
 {
 	int err = 0;
 
+	/* Audio codecs we support */
 	list_append(&g_reflow.aucodecl, &opus.le, &opus);
+
+	/* Video codecs we support */
 	list_append(&g_reflow.vidcodecl, &vp8.le, &vp8);
+
+	list_append(&g_reflow.bundle_vidcodecl, &vp8.bundle_le, &vp8);
+#if USE_RTX
+	list_append(&g_reflow.bundle_vidcodecl, &rtx.bundle_le, &rtx);
+#endif
 	
 	info("reflow_init: setting flow to reflow\n");
 	if (g_reflow.initialized)

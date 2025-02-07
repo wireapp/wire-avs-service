@@ -1,5 +1,4 @@
 #define MAX_OPEN_FILES 1048576
-
 #define SINGLETHREADED 1
 
 #if SINGLETHREADED
@@ -7,7 +6,7 @@
 #define lock_rel(a)
 #endif
 
-
+#define SFT_VERSION_MARK 9999
 
 /*
  * HTTP Server
@@ -147,6 +146,8 @@ struct mediaflow {
 /* Functions implementig mediaflows should use these functions */
 typedef void (mediaflow_alloc_h) (struct mediaflow *mf, void *arg);
 typedef void (mediaflow_close_h) (struct mediaflow *mf, void *arg);
+struct ver_elem;
+typedef void (mediaflow_version_h) (struct ver_elem *vel, void *arg);
 typedef void (mediaflow_assign_worker_h) (struct mediaflow *mf, struct worker *w);
 typedef int  (mediaflow_send_data_h)(struct mediaflow *mf,
 				     const uint8_t *buf, size_t len);
@@ -159,10 +160,14 @@ typedef void (mediaflow_remove_ssrc_h)(struct mediaflow *mf, uint32_t ssrc);
 typedef void (mediaflow_recv_data_h)(struct mbuf *mb, void *arg);
 typedef void (mediaflow_recv_dc_h)(struct mbuf *mb, void *arg);
 typedef int  (mediaflow_assign_streams_h)(struct mediaflow *mf,
-					  uint32_t **assrcv, int assrcc,
-					  uint32_t **vssrcv, int vssrcc);
+					  uint32_t **assrcv,
+					  int assrcc,
+					  uint32_t **vssrcv,
+					  uint32_t **rtx_ssrcv,
+					  int vssrcc);
 typedef void (mediapump_set_handlers_h)(mediaflow_alloc_h *alloch,
 					mediaflow_close_h *closeh,
+					mediaflow_version_h *verh,
 					mediaflow_recv_data_h *rtph,
 					mediaflow_recv_data_h *rtcph,
 					mediaflow_recv_dc_h *dch);
@@ -185,13 +190,17 @@ struct mediapump *mediapump_get(const char *name);
 int mediapump_set_handlers(struct mediapump *mp,
 			   mediaflow_alloc_h *alloch,
 			   mediaflow_close_h *closeh,
+			   mediaflow_version_h *verh,
 			   mediaflow_recv_data_h *rtph,
 			   mediaflow_recv_data_h *rtcph,
 			   mediaflow_recv_dc_h *dch);
 void mediaflow_assign_worker(struct mediaflow *mf, struct worker *w);
 int mediaflow_assign_streams(struct mediaflow *mf,
-			     uint32_t **assrcv, int assrcc,
-			     uint32_t **vssrcv, int vssrcc);
+			     uint32_t **assrcv,
+			     int assrcc,
+			     uint32_t **vssrcv,
+			     uint32_t **rtx_ssrcv,
+			     int vssrcc);
 int mediaflow_send_rtp(struct mediaflow *mf,
 		       const uint8_t *data, size_t len);
 int mediaflow_send_rtcp(struct mediaflow *mf,
@@ -227,7 +236,6 @@ int zrest_get_password(char *pass, size_t *passlen, const char *user,
 void zrest_generate_sft_username(char *user, size_t sz);
 enum zrest_state zrest_authenticate(const char *user, const char *credential);
 
-
 /* Load balancer */
 int lb_init(int nprocs);
 void lb_close(void);
@@ -238,3 +246,12 @@ int helper_split_paths(char *path, char **parts, int max_parts);
 char *helper_make_callid(const char *convid,
 			 const char *userid,
 			 const char *clientid);
+/* Version element */
+struct ver_elem {
+	bool lessthan;
+	int major;
+	int minor;
+	int build;
+
+	struct le le;
+};

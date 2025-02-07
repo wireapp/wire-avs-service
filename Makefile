@@ -12,6 +12,7 @@ else
 SFT_VER_BUILD := $(BUILD_NUMBER)
 endif
 
+
 SFT_VERSION := $(SFT_VER_MAJOR).$(SFT_VER_MINOR).$(SFT_VER_BUILD)
 
 
@@ -57,6 +58,8 @@ CPPFLAGS += \
 	-DSFT_PROJECT='"$(PROJECT)"' \
 	-DSFT_VERSION='"$(SFT_VERSION)"' \
 	-DUSE_REMB=0 \
+	-DUSE_RTX=0 \
+	-DUSE_TWCC=1 \
 	-Iinclude \
 	-I$(BUILD)/include \
 	-I$(AVS_DIR)/include \

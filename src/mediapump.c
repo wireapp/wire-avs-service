@@ -69,6 +69,7 @@ struct mediapump *mediapump_get(const char *name)
 int mediapump_set_handlers(struct mediapump *mp,
 			   mediaflow_alloc_h *alloch,
 			   mediaflow_close_h *closeh,
+			   mediaflow_version_h *verh,
 			   mediaflow_recv_data_h *rtph,
 			   mediaflow_recv_data_h *rtcph,
 			   mediaflow_recv_dc_h *dch)
@@ -79,7 +80,7 @@ int mediapump_set_handlers(struct mediapump *mp,
 	if (!mp->set_handlersh)
 		return ENOSYS;
 
-	mp->set_handlersh(alloch, closeh, rtph, rtcph, dch);
+	mp->set_handlersh(alloch, closeh, verh, rtph, rtcph, dch);
 
 	return 0;
 }
@@ -98,18 +99,22 @@ void mediaflow_assign_worker(struct mediaflow *mf, struct worker *w)
 }
 
 int mediaflow_assign_streams(struct mediaflow *mf,
-			      uint32_t **assrcv, int assrcc,
-			      uint32_t **vssrcv, int vssrcc)
+			     uint32_t **assrcv,
+			     int assrcc,
+			     uint32_t **vssrcv,
+			     uint32_t **rtx_ssrcv,
+			     int vssrcc)
 {
 	struct mediapump *mp;
 	int err = ENOSYS;
-	
+
 	if (!mf)
 		return EINVAL;
 
 	mp = mf->mp;
 	if (mp && mp->assign_streamsh) {
-		err = mp->assign_streamsh(mf, assrcv, assrcc, vssrcv, vssrcc);
+		err = mp->assign_streamsh(mf, assrcv, assrcc,
+					  vssrcv, rtx_ssrcv, vssrcc);
 	}
 
 	return err;

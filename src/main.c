@@ -65,10 +65,9 @@ struct avs_service {
 	} turn;
 
 	struct {
-		char prefix[256];	
+		char *prefix;
+		char path[256];
 		FILE *fp;
-		bool file;
-		bool running;
 	} log;
 
 	int worker_count;
@@ -239,6 +238,7 @@ static const char *level_prefix(enum log_level level)
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
+	const pthread_t tid = pthread_self();
 	struct mbuf *mb;
 
 	mb = mbuf_alloc(1024);
@@ -290,10 +290,10 @@ static int load_secret(const char *path)
 	 fp = fopen(path, "ra");
 	 info("sft: opening: %s fp=%p\n", path, fp);
 	 if (!fp) {
-		 warning("sft: failed to openj secret file: %s\n", path);
+		 warning("sft: failed to open secret file: %s\n", path);
 		 return EBADF;
 	 }
-	 if (fscanf(fp, "%256s", secret) > 0) {
+	 if (fscanf(fp, "%255s", secret) > 0) {
 		 char *psec;
 		 info("sft: secret %s read\n", secret);
 
@@ -303,6 +303,7 @@ static int load_secret(const char *path)
 			 avsd.secret.l = str_len(secret);
 		 }
 	 }
+	 fclose(fp);
 
 	 return err;
  }
@@ -347,7 +348,6 @@ static void generate_iflist(struct list *ifl, const char *ifstr)
 int main(int argc, char *argv[])
 {
 	enum log_level log_level = LOG_LEVEL_DEBUG;
-	char log_file_name[255];
 	struct sa goog;
 	struct sa sftsa;
 	int err;
@@ -358,9 +358,11 @@ int main(int argc, char *argv[])
 
 	avsd.worker_count = NUM_WORKERS;
 	avsd.fir_timeout = TIMEOUT_FIR;
+	avsd.log.prefix = NULL;
 	avsd.log.fp = stdout;
 	avsd.lb.nprocs = get_nprocs();
-	
+	avsd.log.fp = stdout;
+
 	for (;;) {
 
 		const int c = getopt(argc, argv, "aA:b:c:df:I:k:l:M:n:O:p:qr:s:Tt:u:vw:x:");
@@ -402,8 +404,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'l':
-			avsd.log.file = true;
-			str_ncpy(avsd.log.prefix, optarg, sizeof(avsd.log.prefix));
+			str_dup(&avsd.log.prefix, optarg);
 			break;
 
 		case 'M':
@@ -470,6 +471,12 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (avsd.use_auth && NULL == avsd.secret.p) {
+		error("sft: using auth, but no secret present. Exiting...\n");
+		err = EBADF;
+		goto out;
+	}
+
 	/* Request address */
 	if (sa_af(&avsd.req_addr) == 0)
 		sa_init(&avsd.req_addr, AF_INET);
@@ -504,7 +511,20 @@ int main(int argc, char *argv[])
 			 "http://%J", &avsd.req_addr);
 	}
 
-	if (avsd.log.file) {
+	err = libre_init();
+	fd_setsize(0);
+	fd_setsize(MAX_OPEN_FILES);	
+	if (err)
+		goto out;
+
+	err = avs_init(0);
+	if (err)
+		goto out;
+
+	log_set_min_level(log_level);
+	log_enable_stderr(false);
+
+	if (avsd.log.prefix) {
 		char  buf[256];
 		time_t     now = time(0);
 		struct tm  tstruct;
@@ -514,10 +534,10 @@ int main(int argc, char *argv[])
 		buf[13] = '-';
 		buf[16] = '-';
 
-		re_snprintf(log_file_name, sizeof(log_file_name),
+		re_snprintf(avsd.log.path, sizeof(avsd.log.path),
 			    "%s_%s.log", avsd.log.prefix, buf);
 
-		avsd.log.fp = fopen(log_file_name, "a");
+		avsd.log.fp = fopen(avsd.log.path, "a");
 	}
 
 	if (avsd.lb.enabled) {
@@ -581,18 +601,6 @@ int main(int argc, char *argv[])
 		while(nprocs < avsd.lb.nprocs && pid > 0);
 	}
 
-	err = libre_init();
-	fd_setsize(0);
-	fd_setsize(MAX_OPEN_FILES);	
-	if (err)
-		goto out;
-
-	err = avs_init(0);
-	if (err)
-		goto out;
-
-	log_set_min_level(log_level);
-	log_enable_stderr(false);
 	log_register_handler(&logh);
 
 	sa_init(&goog, AF_INET);
@@ -629,7 +637,6 @@ int main(int argc, char *argv[])
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
 	log_unregister_handler(&logh);
-	avsd.log.running = false;
 	
 	/* check for memory leaks */
 	tmr_debug();
@@ -796,5 +803,9 @@ void avs_service_terminate(void)
 	mem_deref(avsd.lb.sft_addr);
 	if (avsd.lb.main) {
 		lb_close();
+
+	mem_deref(avsd.log.prefix);
+	if (avsd.log.fp && avsd.log.fp != stdout) {
+		fclose(avsd.log.fp);
 	}
 }

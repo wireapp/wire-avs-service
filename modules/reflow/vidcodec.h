@@ -23,11 +23,14 @@
 
 
 struct vidcodec {
-	struct le le;
 	const char *pt;
 	const char *name;
 	const char *variant;
 	const char *fmtp;
 	const char **extensions;
+	bool uses_rtcp;
+
+	struct le le;
+	struct le bundle_le;
 };
 
