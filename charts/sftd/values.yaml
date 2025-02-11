@@ -83,10 +83,9 @@ tls: {}
 joinCall:
   replicaCount: 3
   image:
-    repository: nginxinc/nginx-unprivileged
+    repository: docker.io/bitnami/nginx
     pullPolicy: IfNotPresent
-    # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.25.3"
+    tag: "1.27.3-debian-12-r5"
 
 # Allow SFT instances to choose/consider using a TURN server for themselves as a proxy when
 # trying to establish a connection to clients
