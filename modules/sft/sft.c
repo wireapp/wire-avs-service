@@ -1421,7 +1421,7 @@ static void twcc_handler(void *arg)
 	lock_write_get(twcc->lock);
 
 	if (list_count(&twcc->pktl) == 0) {
-		SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);
+		//SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);
 		goto out;
 	}
 	
@@ -2542,7 +2542,7 @@ static void process_rtp(struct call *call,
 				continue;
 			}
 
-			rtp_stream_update(rs, &rrtp, aulevel);
+			rtp_stream_update(rs, rtp, aulevel);
 					
 			/* Modify the RTP header with the
 			 * RTP stream info
