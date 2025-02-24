@@ -85,7 +85,7 @@ joinCall:
   image:
     repository: docker.io/bitnami/nginx
     pullPolicy: IfNotPresent
-    tag: "1.27.3-debian-12-r5"
+    tag: "1.27.3-debian-12-r5@sha256:c02e18884badbd9482fd731668f75a3033124c748bc709651fb06062d0ab38c1"
 
 # Allow SFT instances to choose/consider using a TURN server for themselves as a proxy when
 # trying to establish a connection to clients
