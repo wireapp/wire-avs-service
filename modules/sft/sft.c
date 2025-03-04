@@ -1756,8 +1756,7 @@ static void rtp_stream_update(struct rtp_stream *rs,
 		return;
 	}
 
-
-	if (rtp->ssrc == rs->current_ssrc) {
+	if (rs->current_ssrc && rtp->ssrc == rs->current_ssrc) {
 		int seqdiff = (int)rtp->seq - (int)rs->last_seq;
 		rs->seq = (int)rs->seq + seqdiff;
 		
@@ -4906,6 +4905,14 @@ static void select_video_streams(struct call *call,
 	tmr_start(&call->tmr_q, 5000, timeout_q_switch, call);
 #endif
 
+	/* If we have un-used RTP stream-slots, reset the ssrc */
+	if (ix < call->video.rtps.c) {
+		int i;
+		for(i = ix; i < call->video.rtps.c; ++i) {
+			struct rtp_stream *rs = &call->video.rtps.v[i];
+			rs->current_ssrc = 0;
+		}
+	}
 	lock_rel(call->lock);
 }
 
