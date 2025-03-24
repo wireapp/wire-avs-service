@@ -146,6 +146,8 @@ spec:
             {{- end }}
 
           command:
+            - /usr/bin/dumb-init
+            - --
             - /bin/sh
             - -c
             - |
