@@ -31,7 +31,7 @@ RUN apt-get update \
 
 
 WORKDIR /build/sftd
-ENV HOME /build/sftd
+ENV HOME=/build/sftd
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
