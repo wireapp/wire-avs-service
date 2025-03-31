@@ -895,8 +895,10 @@ static int send_packet(struct reflow *rf, size_t headroom,
 						  ICE_CAND_TYPE_HOST,
 						  AF_INET6);
 			if (lcand) {
-				info("reflow(%p): send_packet: \n",
+#if 0
+				info("reflow(%p): send_packet:"
 				     " using local IPv6 socket\n", rf);
+#endif
 				sock = lcand->us;
 			}
 		}
@@ -2984,9 +2986,15 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 		}
 
 		if (rf->ver.major != SFT_VERSION_MARK && (rf->ver.major == 0 || rf->ver.major >= 10)) {
+#if 1
 			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
 			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
 			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv l;h");
+#else
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv h;l");
+#endif
 		}
 	}
 

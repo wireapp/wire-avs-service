@@ -223,7 +223,8 @@ struct ssrcv_update {
 #define TIMEOUT_RR 500
 #define TIMEOUT_TWCC 64
 #define TIMEOUT_PROVISIONAL 10000
-#define TIMEOUT_VIDEO_HI_FRAME 400
+#define TIMEOUT_VIDEO_HI_FRAME 800
+#define TIMEOUT_SCREENSHARE_HI_FRAME 3000
 
 
 /* Moved to avs_service as cmdline param or default
@@ -422,6 +423,7 @@ struct call {
 	struct econn_props *props;
 
 	bool muted;
+	bool screenshare;
 	bool update;
 	bool dc_estab;
 	bool active;
@@ -2509,6 +2511,7 @@ static void process_rtp(struct call *call,
 			uint32_t ssrcv_hi;
 			uint32_t ssrcv_lo;
 			bool has_hi = false;
+			uint64_t fdiff;
 
 			if (call->issft) {
 				bool ishost = group ? group->sft.ishost : false;
@@ -2526,7 +2529,9 @@ static void process_rtp(struct call *call,
 				ssrcv = call->video.ssrc;
 				ssrcv_hi = call->video.hi.ssrc;
 				ssrcv_lo = call->video.lo.ssrc;
-				has_hi = (now - call->video.hi.ts) < TIMEOUT_VIDEO_HI_FRAME;
+				fdiff = call->screenshare ? TIMEOUT_SCREENSHARE_HI_FRAME
+					                  : TIMEOUT_VIDEO_HI_FRAME;
+				has_hi = (now - call->video.hi.ts) < fdiff;
 			}
 
 			if (rst == RTP_STREAM_TYPE_VIDEO
@@ -2564,7 +2569,8 @@ static void process_rtp(struct call *call,
 							if (ssrcv_lo && ssrc != ssrcv_lo)
 								skip = true;
 							else {
-								//info("process_rtp: rcall(%p) reverting to lo-res ssrc=%u\n", rcall, ssrc);
+								info("process_rtp: rcall(%p) reverting to lo-res fdiff=%llu ssrc=%u\n",
+								     rcall, fdiff, ssrc);
 							}
 
 						}
@@ -4375,6 +4381,7 @@ static int ecall_propsync_handler(struct ecall *ecall,
 	struct call *call = arg;
 	struct le *le;
 	const char *muted_str;
+	const char *ss_str;
 
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
 
@@ -4386,6 +4393,21 @@ static int ecall_propsync_handler(struct ecall *ecall,
 		call->muted = streq(muted_str, "true");
 	else
 		call->muted = false;
+	/* Mark screenshare */
+	ss_str = econn_props_get(call->props, "screensend");
+	if (ss_str) {
+		bool screenshare = streq(ss_str, "true");
+		if (screenshare != call->screenshare) {
+			info("call(%p): screenshare: %s -> %s\n",
+			     call,
+			     call->screenshare ? "YES" : "NO",
+			     screenshare ? "YES" : "NO");
+		}
+		call->screenshare = screenshare;
+	}
+	else {
+		call->screenshare = false;
+	}
 
 	// Send same packet to all members of this group
 	LIST_FOREACH(&call->partl, le) {
