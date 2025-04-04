@@ -89,7 +89,7 @@ enum {
 enum {
 	AUDIO_BANDWIDTH = 32,   /* kilobits/second */
 	AUDIO_PTIME     = 40,   /* ms */
-	VIDEO_BANDWIDTH = 800,  /* kilobits/second */
+	VIDEO_BANDWIDTH = 2500,  /* kilobits/second */
 };
 
 enum {
