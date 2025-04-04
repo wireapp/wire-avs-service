@@ -11,6 +11,7 @@ RUN apt-get update \
        git \       
        clang \
        clang-tools \
+       dumb-init \
        rsync \
        gettext-base \
        libtool \
@@ -25,10 +26,12 @@ RUN apt-get update \
        libxcomposite-dev \
        libxdamage-dev \
        libxrender-dev \
-       libprotobuf-c-dev
+       libprotobuf-c-dev \
+    && apt-get clean
+
 
 WORKDIR /build/sftd
-ENV HOME /build/sftd
+ENV HOME=/build/sftd
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 RUN /build/sftd/.cargo/bin/rustup install 1.71.1
