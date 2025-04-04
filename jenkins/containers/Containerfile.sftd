@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 # the multi-sft feature of sftd requires obtaining turn connection details by
 # querying a restund endpoint
-RUN apt-get update && apt-get install -y curl jq dumb-init && apt-cache clean
+RUN apt-get update && apt-get install -y curl jq dumb-init && apt-get clean && rm -rf /var/lib/apt/lists/* 
 
 COPY ./sftd /usr/local/bin/sftd
 
