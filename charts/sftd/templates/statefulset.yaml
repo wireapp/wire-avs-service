@@ -147,7 +147,8 @@ spec:
 
           command:
             - /usr/bin/dumb-init
-            - --
+          args:
+            - --verbose
             - /bin/sh
             - -c
             - |
@@ -206,14 +207,6 @@ spec:
             httpGet:
               path: /metrics
               port: metrics
-          lifecycle:
-            preStop:
-              exec:
-                # TODO: Workaround because sftd does not support graceful draining natively.
-                # tracked in https://github.com/zinfra/backend-issues/issues/1451
-                command:
-                  - /bin/sleep
-                  - "{{ .Values.terminationGracePeriodSeconds }}"
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
