@@ -139,9 +139,15 @@ struct sft {
 	struct list cbl; /* client blacklist */
 
 	struct {
-		char username[256];
-		char credential[256];
-	} fed_turn;
+		struct {
+			char username[256];
+			char credential[256];
+		} turn;
+		struct {
+			char url[256];
+		} http;
+	} fed;
+		
 
 	uint64_t start_ts;
 
@@ -188,7 +194,8 @@ struct group {
 		struct udp_helper *uh;
 		struct sa relay_addr;
 		char relay_str[128];
-		struct list pendingl;		
+		struct list pendingl;
+		bool http;
 	} federate;
 };
 
@@ -457,10 +464,13 @@ struct call {
 
 	struct {
 		bool isready;
-		struct turn_conn *tc;
+		struct turn_conn *tc;		
 		struct list tcl;
 		char *url;
 		char *dstid;
+		struct {
+			char *url;
+		} http;
 	} federate;
 };
 
@@ -581,7 +591,7 @@ struct start_fed_arg {
 	struct zapi_ice_server turn;
 };
 
-static int start_federation_task(void *arg)
+static int start_turn_federation_task(void *arg)
 {
 	struct start_fed_arg *f = arg;
 	int err = 0;
@@ -2945,7 +2955,6 @@ static int send_provisional_http(struct call *call,
 	struct sft_req_ctx *ctx;
 	const char *base_url;
 	char url[256];
-	char origin[256];
 	int err;
 
 	if (!call->http_cli) {
@@ -2964,20 +2973,18 @@ static int send_provisional_http(struct call *call,
 	}
 
 	ctx->call = mem_ref(call);
-	/*
-	base_url = call->origin_url ? call->origin_url
-		                    : avs_service_federation_url();
-	*/
-	base_url = call->sft_url ? call->sft_url
-		                 : avs_service_federation_url();
-	re_snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);//call->callid);
+	if (call->federate.http.url) {
+		str_ncpy(url, call->federate.http.url, sizeof(url));
+	}
+	else {
+		base_url = call->sft_url ? call->sft_url
+			                 : avs_service_federation_url();
+		re_snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);
+	}
 
 	info("send_provisional_http: sending HTTP request to "
 	     "%s on client: %p\n", url, call->http_cli);
 
-	re_snprintf(origin, sizeof(origin),
-		    "http://%J",
-		    avs_service_sft_req_addr());
 	err = http_request(&ctx->http_req,
 			   call->http_cli,
 			   "POST",
@@ -3118,12 +3125,20 @@ static int icall_send_handler(struct icall *icall,
 			msg->u.setup.url = mem_deref(msg->u.setup.url);
 			str_dup(&msg->u.setup.url, call->sft->url);
 		}
-		if (group && group->federate.tc && group->federate.isready) {
+		if (group) {
 			msg->u.setup.sft_tuple =
 				mem_deref(msg->u.setup.sft_tuple);
+			if (group->federate.tc && group->federate.isready) {
 
-			msg->u.setup.sft_tuple = sft_tuple(call, group);
-
+				msg->u.setup.sft_tuple = sft_tuple(call, group);
+			}
+			else if (group->federate.http) {
+				if (call->federate.http.url) 
+					str_dup(&msg->u.setup.sft_tuple, call->federate.url);
+				else
+					str_dup(&msg->u.setup.sft_tuple, avs_service_sft_req_url()) ;
+			}
+			
 			info("call(%p): setting tuple: %s\n", call, msg->u.setup.sft_tuple);
 		}
 		
@@ -4494,11 +4509,11 @@ static void farg_destructor(void *arg)
 static int alloc_group(struct sft *sft,
 		       struct group **groupp,
 		       const char *groupid,
+		       bool isfederated,
 		       struct zapi_ice_server *turn)
 {
 	struct group *group;
-	bool isfederated = turn != NULL;
-
+	
 	info("alloc_group: new group with id: %s federated=%d\n",
 	     groupid, isfederated);
 	
@@ -4518,14 +4533,19 @@ static int alloc_group(struct sft *sft,
 	sft->stats.group_cnt++;
 
 	if (isfederated) {
-		struct start_fed_arg *f;
+		if (turn) {
+			struct start_fed_arg *f;
 
-		f = mem_zalloc(sizeof(*f), farg_destructor);
-		f->group = mem_ref(group);
-		f->turn = *turn;
-		worker_assign_task(worker_get(group->id),
-				   start_federation_task,
-				   f);
+			f = mem_zalloc(sizeof(*f), farg_destructor);
+			f->group = mem_ref(group);
+			f->turn = *turn;
+			worker_assign_task(worker_get(group->id),
+					   start_turn_federation_task,
+					   f);
+		}
+		else {
+			group->federate.http = true;
+		}
 	}
 
 	if (groupp)
@@ -4654,6 +4674,7 @@ static void call_destructor(void *arg)
 	mem_deref(call->group);
 	mem_deref(call->federate.url);
 	mem_deref(call->federate.dstid);
+	mem_deref(call->federate.http.url);
 #if USE_RTX
 	mem_deref(call->video.jb);
 #endif
@@ -5905,6 +5926,9 @@ static struct call *federate_request(bool direct,
 					turnconn_add_cid(call->federate.tc,
 							 call->sft_cid);
 				}
+				else if (group->federate.http) {
+					str_dup(&call->federate.http.url, cmsg->u.setup.sft_tuple);
+				}
 			}
 			if (cmsg->u.setup.url) {
 				call->federate.url =
@@ -6652,7 +6676,9 @@ static void http_req_handler(struct http_conn *hc,
 				.username = "",
 				.credential = ""
 			};
+			struct zapi_ice_server *pturn = NULL;
 			bool isfederated = false;
+			
 			const char *turl;
 			
 			switch(auth_state) {
@@ -6687,14 +6713,17 @@ static void http_req_handler(struct http_conn *hc,
 				isfederated = true;
 				str_ncpy(turn.url, turl, sizeof(turn.url));
 				str_ncpy(turn.username,
-					 sft->fed_turn.username,
+					 sft->fed.turn.username,
 					 sizeof(turn.username));
 				str_ncpy(turn.credential,
-					 sft->fed_turn.credential,
+					 sft->fed.turn.credential,
 					 sizeof(turn.credential));
+				pturn = &turn;
 			}
-			err = alloc_group(sft, &group, convid,
-					  isfederated ? &turn : NULL);
+			else {
+				isfederated = str_isset(sft->fed.http.url);
+			}
+			err = alloc_group(sft, &group, convid, isfederated, pturn);
 			if (err)
 				goto out;
 
@@ -6741,9 +6770,19 @@ static void http_req_handler(struct http_conn *hc,
 		}
 		if (cmsg->u.confconn.sft_tuple &&
 		    str_len(cmsg->u.confconn.sft_tuple) > 0) {
-			split_tuple(call, cmsg->u.confconn.sft_tuple);
-			info("new_call: tuple: %J(cid=%u)\n", &call->sft_tuple, call->sft_cid);
-			group->isfederated = true;
+			struct uri uri;
+			struct pl tpl = PL(cmsg->u.confconn.sft_tuple);
+
+			err = uri_decode(&uri, &tpl);
+			if (err) {
+				split_tuple(call, cmsg->u.confconn.sft_tuple);
+				info("new_call: tuple: %J(cid=%u)\n", &call->sft_tuple, call->sft_cid);
+				group->isfederated = true;
+			}
+			else {
+				group->federate.http = true;
+				str_dup(&call->federate.http.url, cmsg->u.confconn.sft_tuple);
+			}
 		}
 		
 		
@@ -7014,13 +7053,15 @@ static int module_init(void)
 	}
 
 	laddr = avs_service_sft_req_addr();
-	if (sa_isset(laddr, SA_ADDR) && sa_isset(laddr, SA_PORT)) {
-		info("sft: starting SFT-request server on: %J\n", laddr);
-		err = httpd_alloc(&sft->httpd_sft_req, laddr, sft_req_handler, sft);
-		if (err) {
-			error("sft: could not alloc sft_req httpd: %m\n", err);
-			goto out;
-		}
+	info("sft: starting SFT-request server on: %J\n", &laddr);
+	err = httpd_alloc(&sft->httpd_sft_req, laddr, sft_req_handler, sft);
+	if (err) {
+		error("sft: could not alloc sft_req httpd: %m\n", err);
+		goto out;
+	}
+
+	if (avs_service_sft_req_url()) {
+		str_ncpy(sft->fed.http.url, avs_service_sft_req_url(), sizeof(sft->fed.http.url));
 	}
 
 	strcpy(sft->uuid, "_");
@@ -7042,18 +7083,18 @@ static int module_init(void)
 
 	secret = avs_service_secret();
 	if (secret) {
-		size_t clen = sizeof(sft->fed_turn.credential) - 1;
+		size_t clen = sizeof(sft->fed.turn.credential) - 1;
 		
-		zrest_generate_sft_username(sft->fed_turn.username,
-					    sizeof(sft->fed_turn.username));
-		zrest_get_password(sft->fed_turn.credential,
+		zrest_generate_sft_username(sft->fed.turn.username,
+					    sizeof(sft->fed.turn.username));
+		zrest_get_password(sft->fed.turn.credential,
 				   &clen,
-				   sft->fed_turn.username,
+				   sft->fed.turn.username,
 				   secret->p, secret->l);
-		sft->fed_turn.credential[clen] = '\0';
+		sft->fed.turn.credential[clen] = '\0';
 	}
 
-	info("sft: username: %s cred: %s\n", sft->fed_turn.username, sft->fed_turn.credential);
+	info("sft: username: %s cred: %s\n", sft->fed.turn.username, sft->fed.turn.credential);
 	
 	worker_init();
 

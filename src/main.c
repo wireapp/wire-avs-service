@@ -48,13 +48,14 @@ struct avs_service {
 
 	struct sa req_addr;
 	struct sa media_addr;
+	struct sa sft_req_addr;
 	struct sa alt_media_addr;
 	struct sa mediaif_addr;
 	struct sa metrics_addr;
-	struct sa sft_req_addr;
 
 	char url[256];
 	char federation_url[256];
+	char sft_req_url[256];
 	char blacklist[256];
 	bool direct_federation;
 
@@ -241,7 +242,6 @@ static const char *level_prefix(enum log_level level)
 static void log_handler(uint32_t level, const char *msg, void *arg)
 {
 	struct timeval tv;
-	const pthread_t tid = pthread_self();
 	struct mbuf *mb;
 
 	mb = mbuf_alloc(1024);
@@ -468,7 +468,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'x':
-			sa_decode(&avsd.sft_req_addr, optarg, str_len(optarg));
+			str_ncpy(avsd.sft_req_url, optarg, sizeof(avsd.sft_req_url));
 			break;
 
 		default:
@@ -493,6 +493,18 @@ int main(int argc, char *argv[])
 	if (!sa_isset(&avsd.req_addr, SA_ADDR)) {
 		sa_set_str(&avsd.req_addr, DEFAULT_REQ_ADDR,
 			   sa_port(&avsd.req_addr));
+	}
+	if (str_isset(avsd.sft_req_url)) {
+		struct uri uri;
+		struct pl tpl = PL(avsd.sft_req_url);
+		
+		err = uri_decode(&uri, &tpl);
+		if (err) {
+			error("sft: cannot parse SFT-request URI: %s error=%m\n", avsd.sft_req_url, err);
+			goto out;
+		}
+		sa_init(&avsd.sft_req_addr, uri.af);
+		sa_set(&avsd.sft_req_addr, &uri.host, uri.port);
 	}
 
 	/* Media address */
@@ -713,11 +725,16 @@ struct sa  *avs_service_metrics_addr(void)
 }
 
 
+const char *avs_service_sft_req_url(void)
+{
+	return str_isset(avsd.sft_req_url) ? avsd.sft_req_url : NULL;
+}
+
 struct sa *avs_service_sft_req_addr(void)
 {
-	return &avsd.sft_req_addr;
+	return sa_isset(&avsd.sft_req_addr, SA_ALL) ? &avsd.sft_req_addr : NULL;
 }
-	
+
 
 const char *avs_service_url(void)
 {
@@ -814,7 +831,7 @@ void avs_service_terminate(void)
 	mem_deref(avsd.lb.req_addr);
 	mem_deref(avsd.lb.metrics_addr);
 	mem_deref(avsd.lb.sft_addr);
-	if (avsd.lb.main) {
+	if (avsd.lb.main)
 		lb_close();
 
 	mem_deref(avsd.log.prefix);
