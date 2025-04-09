@@ -227,8 +227,10 @@ struct ssrcv_update {
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 20000
 #define TIMEOUT_RR 500
-#define TIMEOUT_TWCC 100
+#define TIMEOUT_TWCC 64
 #define TIMEOUT_PROVISIONAL 10000
+#define TIMEOUT_VIDEO_HI_FRAME 800
+#define TIMEOUT_SCREENSHARE_HI_FRAME 3000
 
 
 /* Moved to avs_service as cmdline param or default
@@ -285,7 +287,6 @@ struct twcc {
 	uint64_t fbcnt;
 	//uint8_t fbcnt;
 	int seqno;
-	uint64_t deltats;
 	uint64_t now;
 	uint64_t prevts;
 	struct list pktl;
@@ -397,6 +398,7 @@ struct call {
 			struct dep_desc *dd;
 			uint8_t fir_seq;
 			struct ssrc_stats stats;
+			uint64_t ts;
 		} hi;
 
 		struct {
@@ -427,6 +429,7 @@ struct call {
 	struct econn_props *props;
 
 	bool muted;
+	bool screenshare;
 	bool update;
 	bool dc_estab;
 	bool active;
@@ -1102,6 +1105,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	struct le *le;
 	uint16_t seqno;
 	uint32_t refcnt;
+	uint32_t refts;	
 	uint64_t prevts;
 
 	/*
@@ -1156,8 +1160,9 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
 	/* reference time is in multiples of 64ms */
-	//refcnt = (((uint32_t)(twcc->now - twcc->refts) >> 6) << 8) | (uint8_t)twcc->fbcnt;
-	refcnt = ((uint32_t)(twcc->fbcnt << 8)) | (uint8_t)twcc->fbcnt;
+	refts = ((uint32_t)twcc->refts & 0xffffffLL);
+	refcnt = ((refts/64) << 8) | (uint8_t)twcc->fbcnt;
+
 	mbuf_write_u32(mb, htonl(refcnt));
 
 	/* Use status chunk 
@@ -1171,15 +1176,28 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	*/
 	le = twcc->pktl.head;
 	while(le) {
+		//uint16_t p = 0x8000;
 		uint16_t p = 0xC000;
 		int i = 0;
 
-		while(i < 7 && le) {
+#if 0
+		while(i < 15 && le) {
 			struct transpkt *tp = le->data;
 
 			if (tp->ts) {
+				p = p | (0x1 << (14 - i));
+			}
+			++i;
+			le = le->next;
+		}
+#endif
+		while(i < 7 && le) {
+                        struct transpkt *tp = le->data;
+ 
+                        if (tp->ts) {
 				p = p | (0x2 << (13 - i*2 - 1));
 			}
+				
 			++i;
 			le = le->next;
 		}
@@ -1188,25 +1206,32 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	}
 
 	// Add delta
-	prevts = twcc->deltats;
+	prevts = twcc->refts;
 	LIST_FOREACH(&twcc->pktl, le) {
 		struct transpkt *tp = le->data;
 
 		if (tp->ts) {
 			int64_t delta = tp->ts - prevts;
+			//uint8_t delta8;
+			uint16_t delta16;
 
-#if 0
-			info("twcc(%u): S=%d refts=%llu ts=%llu D=%dms\n",
-			     twcc->rssrc, tp->seqno, twcc->refts, tp->ts, delta);
+#if DEBUG_TWCC
+			info("twcc(%u): S=%d refcnt=%llu ts=%llu D=%lldms\n",
+			     twcc->rssrc, tp->seqno, refcnt, tp->ts, delta);
 #endif
 			delta *= 4; /* small delta in 250us */
+
+			//delta8 = delta & 0xFF;
+			delta16 = delta & 0xFFFFLL;
 			
-			mbuf_write_u16(mb, htons((int16_t)delta));
+			mbuf_write_u16(mb, htons(delta16));
+			//mbuf_write_u8(mb, delta8);
+
 			prevts = tp->ts;
 		}
 	}
 
-	twcc->prevts = prevts;
+	twcc->refts = twcc->now;
 
 	return 0;
 }
@@ -1405,7 +1430,7 @@ static void twcc_handler(void *arg)
 	lock_write_get(twcc->lock);
 
 	if (list_count(&twcc->pktl) == 0) {
-		SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);
+		//SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);
 		goto out;
 	}
 	
@@ -1434,8 +1459,8 @@ static void twcc_handler(void *arg)
 		warning("twcc_handler(%p): no valid ssrc yet\n");
 		goto out;
 	}
-	
-	lssrc = mediaflow_get_ssrc(call->mf, "video", true);
+
+	lssrc = mediaflow_get_ssrc(call->mf, "audio", true);
 	twcc->now = tmr_jiffies();
 	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
 			  lssrc,
@@ -1455,7 +1480,6 @@ static void twcc_handler(void *arg)
 
  out:
 	list_flush(&twcc->pktl);
-	twcc->deltats = twcc->prevts;
 	twcc->fbcnt++;
 
 	mem_deref(mb);
@@ -1472,20 +1496,22 @@ static void update_twcc(struct twcc *twcc,
 	struct transpkt *tp;
 
 	lock_write_get(twcc->lock);
+	if (!twcc->running)
+		goto out;
+
 	if (twcc->refts == 0)
 		twcc->refts = ts;
 
 	if (twcc->seqno == -1)
 		twcc->seqno = wseq;
 
-	if (twcc->deltats == 0)
-		twcc->deltats = ts;
-
 	tp = mem_zalloc(sizeof(*tp), transpkt_destructor);
 	tp->seqno = wseq;
 	tp->ts = ts;
 
 	add_twcc_pkt(twcc, tp);
+
+ out:
 	lock_rel(twcc->lock);
 }
 
@@ -1740,8 +1766,7 @@ static void rtp_stream_update(struct rtp_stream *rs,
 		return;
 	}
 
-
-	if (rtp->ssrc == rs->current_ssrc) {
+	if (rs->current_ssrc && rtp->ssrc == rs->current_ssrc) {
 		int seqdiff = (int)rtp->seq - (int)rs->last_seq;
 		rs->seq = (int)rs->seq + seqdiff;
 		
@@ -2031,6 +2056,7 @@ static void process_rtp(struct call *call,
 	bool has_gfh = false;
 	struct dep_desc *dd = NULL;
 	bool update_ssrcv = false;
+	bool ispadding = false;
 	
 
 	group = call->group;
@@ -2184,6 +2210,16 @@ static void process_rtp(struct call *call,
 
 	
  process_rtp:
+
+	if (rtp->pad) {
+		size_t mbleft = mbuf_get_left(mb);
+		size_t padlen = (size_t)mb->buf[len - 1];
+		//info("call(%p): process_rtp_pad: len=%d pos=%d pad is %d bytes left=%d\n",
+		//     call, (int)len, (int)mb->pos, (int)padlen, (int)mbleft);
+		if (mbleft <= padlen)
+			ispadding = true;
+	}
+
 	if (call->audio.ssrc && rtp->ssrc == call->audio.ssrc) {
 		rst = RTP_STREAM_TYPE_AUDIO;
 
@@ -2193,7 +2229,7 @@ static void process_rtp(struct call *call,
 		if (0 == call->video.hi.ssrc ) {
 			//info("call(%p): no hi video current rid=%s\n", call, rid ? rid : "???");
 			if (rid && streq(rid, RID_HI)) {
-				info("call(%p): assigning ssrc=%u to rid-hi\n", call, rtp->ssrc);		
+				info("call(%p): assigning ssrc=%u to rid-hi\n", call, rtp->ssrc);
 				call->video.hi.ssrc = rtp->ssrc;
 				if (0 == call->twcc.rssrc)
 					call->twcc.rssrc = rtp->ssrc;
@@ -2221,6 +2257,8 @@ static void process_rtp(struct call *call,
 			call->video.started = true;
 			rst = RTP_STREAM_TYPE_VIDEO;
 			stats = &call->video.hi.stats;
+			if (!ispadding)
+				call->video.hi.ts = now;
 		} else if (call->video.lo.ssrc && rtp->ssrc == call->video.lo.ssrc) {
 			call->video.started = true;
 			rst = RTP_STREAM_TYPE_VIDEO;
@@ -2273,8 +2311,8 @@ static void process_rtp(struct call *call,
 	}
 #endif
 
-	/* Never forward padding packets */
-	if (rtp->pad) {
+	/* Don't forward packets that contain only padding */
+	if (ispadding) {
 		goto out;
 	}
 	
@@ -2456,6 +2494,8 @@ static void process_rtp(struct call *call,
 			uint32_t ssrcv;
 			uint32_t ssrcv_hi;
 			uint32_t ssrcv_lo;
+			bool has_hi = false;
+			uint64_t fdiff;
 
 			if (call->issft) {
 				bool ishost = group ? group->sft.ishost : false;
@@ -2473,6 +2513,9 @@ static void process_rtp(struct call *call,
 				ssrcv = call->video.ssrc;
 				ssrcv_hi = call->video.hi.ssrc;
 				ssrcv_lo = call->video.lo.ssrc;
+				fdiff = call->screenshare ? TIMEOUT_SCREENSHARE_HI_FRAME
+					                  : TIMEOUT_VIDEO_HI_FRAME;
+				has_hi = (now - call->video.hi.ts) < fdiff;
 			}
 
 			if (rst == RTP_STREAM_TYPE_VIDEO
@@ -2498,19 +2541,30 @@ static void process_rtp(struct call *call,
 
 					switch (q) {
 					case VIDEO_STREAM_Q_ANY:
-						if (ssrcv_hi && ssrc != ssrcv_hi)
-							skip = true;
+					case VIDEO_STREAM_Q_HI:
+						if (has_hi) {
+							if (ssrcv_hi && ssrc != ssrcv_hi)
+								skip = true;
+							else {
+								//info("process_rtp: rcall(%p) hi-res ssrc=%u\n", rcall, ssrc);
+							}
+						}
+						else {
+							if (ssrcv_lo && ssrc != ssrcv_lo)
+								skip = true;
+							else {
+								info("process_rtp: rcall(%p) reverting to lo-res fdiff=%llu ssrc=%u\n",
+								     rcall, fdiff, ssrc);
+							}
+
+						}
 						break;
-					
+
 					case VIDEO_STREAM_Q_LO:
 						if (ssrcv_lo && ssrc != ssrcv_lo)
 							skip = true;
 						break;
 
-					case VIDEO_STREAM_Q_HI:
-						if (ssrcv_hi && ssrc != ssrcv_hi)
-							skip = true;
-						break;
 					}
 
 					//info("process_rtp(%p): change=%d q=%d ssrc=%u skip=%d\n", call, rs->change, q, ssrc, skip);
@@ -2526,7 +2580,7 @@ static void process_rtp(struct call *call,
 				continue;
 			}
 
-			rtp_stream_update(rs, &rrtp, aulevel);
+			rtp_stream_update(rs, rtp, aulevel);
 					
 			/* Modify the RTP header with the
 			 * RTP stream info
@@ -2723,57 +2777,61 @@ static void reflow_rtcp_recv(struct mbuf *mb, void *arg)
 	int err;
 
 	err = rtcp_decode(&rtcp, mb);
-	if (err)
+	if (err) {
 		SFTLOG(LOG_LEVEL_WARN, "cannot decode RTCP packet\n", call);
-	else {
-		//SFTLOG(LOG_LEVEL_INFO, "RTCP %H\n", call, rtcp_msg_print, rtcp);
-
-		switch (rtcp->hdr.pt) {
-		case RTCP_RTPFB:
-			switch (rtcp->hdr.count) {
-				
-#if USE_RTX
-			case RTCP_RTPFB_GNACK: {
-				struct rtp_stream *rs;
-				uint32_t ssrc = rtcp->r.fb.ssrc_media;
-
-				rs = video_rtx_find(call, ssrc);
-				if (rs) {
-					gnack_handler(call, &rs->rtx, rtx_send_handler, rtcp);
-				}
-				else {
-					warning("rtcp(%p): gnack on unknown stream: ssrc=%u\n", call, ssrc);
-				}
-			}
-				break;
-#endif
-
-			default:
-				break;
-			}
-			break;
-			
-		case RTCP_SR: {
-			struct rtcp_rr *sr;
-			uint32_t srsrc = rtcp->r.sr.ssrc;
-			uint32_t last_ntp;
-
-			sr = rtcp->r.sr.rrv;
-#if 0
-			info("call(%p): RTCP-SR on ssrc: %u/%u ntp=%08x:%08x\n",
-			     call, rtcp->r.sr.ssrc, sr->ssrc, rtcp->r.sr.ntp_sec, rtcp->r.sr.ntp_frac);
-#endif
-			
-			last_ntp = ((rtcp->r.sr.ntp_sec & 0xffff) << 16)
-				| ((rtcp->r.sr.ntp_frac & 0xffff0000) >> 16);
-			
-			send_rtcp_rr(call, srsrc, last_ntp);
-		}
-			break;
-		}
-
-		mem_deref(rtcp);
+		goto out;
 	}
+
+#if DEBUG_PACKET
+	SFTLOG(LOG_LEVEL_INFO, "RTCP %H\n", call, rtcp_msg_print, rtcp);
+#endif
+
+	switch (rtcp->hdr.pt) {
+	case RTCP_RTPFB:
+		switch (rtcp->hdr.count) {				
+#if USE_RTX
+		case RTCP_RTPFB_GNACK: {
+			struct rtp_stream *rs;
+			uint32_t ssrc = rtcp->r.fb.ssrc_media;
+
+			rs = video_rtx_find(call, ssrc);
+			if (rs) {
+				gnack_handler(call, &rs->rtx, rtx_send_handler, rtcp);
+			}
+			else {
+				warning("rtcp(%p): gnack on unknown stream: ssrc=%u\n", call, ssrc);
+			}
+		}
+			break;
+#endif
+		default:
+			break;
+		}
+		break;
+
+	case RTCP_SR: {
+		struct rtcp_rr *sr;
+		uint32_t srsrc = rtcp->r.sr.ssrc;
+		uint32_t last_ntp;
+
+		sr = rtcp->r.sr.rrv;
+#if 0
+		info("call(%p): RTCP-SR on ssrc: %u/%u ntp=%08x:%08x\n",
+		     call, rtcp->r.sr.ssrc, sr->ssrc, rtcp->r.sr.ntp_sec, rtcp->r.sr.ntp_frac);
+#endif
+		last_ntp = ((rtcp->r.sr.ntp_sec & 0xffff) << 16)
+			| ((rtcp->r.sr.ntp_frac & 0xffff0000) >> 16);
+		
+		send_rtcp_rr(call, srsrc, last_ntp);
+	}
+		break;
+	}
+
+	mem_deref(rtcp);
+
+ out:
+	return;
+
 }
 
 
@@ -3857,14 +3915,14 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	call->video.hi.fir_seq = 0;
 	call->video.lo.fir_seq = 0;
 
+	lock_write_get(call->twcc.lock);
 	call->twcc.running = false;
-	tmr_cancel(&call->twcc.tmr);
+	tmr_cancel(&call->twcc.tmr);	
 	list_flush(&call->twcc.pktl);
 	call->twcc.seqno = -1;
 	call->twcc.refts = 0;
-	call->twcc.deltats = 0;
 	call->twcc.fbcnt = 0;
-	
+	lock_rel(call->twcc.lock);
 
 	lock_write_get(g_sft->lock);
 	/* If this is an SFT call, we need to move 
@@ -4345,6 +4403,7 @@ static int ecall_propsync_handler(struct ecall *ecall,
 	struct call *call = arg;
 	struct le *le;
 	const char *muted_str;
+	const char *ss_str;
 
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
 
@@ -4356,6 +4415,21 @@ static int ecall_propsync_handler(struct ecall *ecall,
 		call->muted = streq(muted_str, "true");
 	else
 		call->muted = false;
+	/* Mark screenshare */
+	ss_str = econn_props_get(call->props, "screensend");
+	if (ss_str) {
+		bool screenshare = streq(ss_str, "true");
+		if (screenshare != call->screenshare) {
+			info("call(%p): screenshare: %s -> %s\n",
+			     call,
+			     call->screenshare ? "YES" : "NO",
+			     screenshare ? "YES" : "NO");
+		}
+		call->screenshare = screenshare;
+	}
+	else {
+		call->screenshare = false;
+	}
 
 	// Send same packet to all members of this group
 	LIST_FOREACH(&call->partl, le) {
@@ -4530,8 +4604,12 @@ static void call_destructor(void *arg)
 	tmr_cancel(&call->tmr_conn);
 	tmr_cancel(&call->tmr_q);
 	tmr_cancel(&call->video.tmr_ssrcv);
-
+	lock_write_get(call->twcc.lock);
+	call->twcc.running = false;
 	tmr_cancel(&call->twcc.tmr);
+	list_flush(&call->twcc.pktl);
+	lock_rel(call->twcc.lock);
+	mem_deref(call->twcc.lock);
 
 	close_call(call);
 	list_flush(&call->partl);
@@ -4581,8 +4659,6 @@ static void call_destructor(void *arg)
 #endif
 	mem_deref(call->video.hi.dd);
 	mem_deref(call->video.lo.dd);
-	list_flush(&call->twcc.pktl);	
-	mem_deref(call->twcc.lock);
 	mem_deref(call->lock);
 }
 
@@ -4933,6 +5009,14 @@ static void select_video_streams(struct call *call,
 	tmr_start(&call->tmr_q, 5000, timeout_q_switch, call);
 #endif
 
+	/* If we have un-used RTP stream-slots, reset the ssrc */
+	if (ix < call->video.rtps.c) {
+		int i;
+		for(i = ix; i < call->video.rtps.c; ++i) {
+			struct rtp_stream *rs = &call->video.rtps.v[i];
+			rs->current_ssrc = 0;
+		}
+	}
 	lock_rel(call->lock);
 }
 

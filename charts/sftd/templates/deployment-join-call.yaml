@@ -30,7 +30,7 @@ spec:
           emptyDir: {}
       containers:
         - name: sftd-disco
-          image: quay.io/wire/sftd_disco:wip-2 # TODO configure + version
+          image: quay.io/wire/sftd_disco:1.1.1
           volumeMounts:
           - name: sftd-disco
             mountPath: /etc/wire/sftd-disco
@@ -47,7 +47,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 9000
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -76,5 +76,5 @@ spec:
             - "-c"
             - |
               export NAMESERVER=`cat /etc/resolv.conf | grep "nameserver" | awk '{print $2}' | tr '\n' ' '`
-              envsubst '$NAMESERVER $POD_NAMESPACE' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+              envsubst '$NAMESERVER $POD_NAMESPACE' < /etc/nginx/conf.d/default.conf.template > /opt/bitnami/nginx/conf/server_blocks/default.conf
               exec nginx -g 'daemon off;'

@@ -48,6 +48,7 @@ struct avs_service {
 
 	struct sa req_addr;
 	struct sa media_addr;
+	struct sa alt_media_addr;
 	struct sa mediaif_addr;
 	struct sa metrics_addr;
 	struct sa sft_req_addr;
@@ -132,8 +133,9 @@ struct shutdown_entry {
 static void usage(void)
 {
 	(void)re_fprintf(stderr,
-			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>]"
-			 "[-u <URL>] [-b <blacklist> [-d] [-n <nprocs>] [-l <prefix>] [-q] [-w <count>] -T -t <URL> -s <path> -x <addr:port>\n");
+			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] "
+			 "[-u <URL>] [-b <blacklist> [-d] [-n <nprocs>] [-l <prefix>] [-q] [-w <count>] "
+			 "[-B <addr>] -T -t <URL> -s <path> -x <addr:port>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
@@ -159,6 +161,7 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-n <nprocs>     Used together with -d and indicates # of processes to spawn "
 			 "(default: # of cores)\n");
 	(void)re_fprintf(stderr, "\t-x <addr:port>  Address tuple for listening to federation SFT requests\n");
+	(void)re_fprintf(stderr, "\t-B <addr>       Alternate media address\n");
 }
 
 static void signal_handler(int sig)
@@ -365,7 +368,7 @@ int main(int argc, char *argv[])
 
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:b:c:df:I:k:l:M:n:O:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:B:b:c:df:I:k:l:M:n:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -376,6 +379,10 @@ int main(int argc, char *argv[])
 			
 		case 'A':
 			sa_set_str(&avsd.media_addr, optarg, 0);
+			break;
+
+		case 'B':
+			sa_set_str(&avsd.alt_media_addr, optarg, 0);
 			break;
 
 		case 'b':
@@ -686,6 +693,12 @@ struct sa  *avs_service_media_addr(void)
 {
 	return sa_isset(&avsd.media_addr, SA_ADDR) ? &avsd.media_addr
 		                                   : NULL;
+}
+
+struct sa  *avs_service_alt_media_addr(void)
+{
+	return sa_isset(&avsd.alt_media_addr, SA_ADDR) ? &avsd.alt_media_addr
+		                                       : NULL;
 }
 
 struct list  *avs_service_iflist(void)

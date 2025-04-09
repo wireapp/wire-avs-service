@@ -63,6 +63,15 @@
 
 #define NUM_RTP_STREAMS 2
 
+/*
+#ifdef USE_TWCC
+#undef USE_TWCC
+#endif
+#define USE_TWCC 0
+*/
+
+#define USE_BANDWIDTH_LIMIT 1
+
 void *(* volatile memset_s)(void *s, int c, size_t n) = memset;
 
 enum {
@@ -80,7 +89,7 @@ enum {
 enum {
 	AUDIO_BANDWIDTH = 32,   /* kilobits/second */
 	AUDIO_PTIME     = 40,   /* ms */
-	VIDEO_BANDWIDTH = 800,  /* kilobits/second */
+	VIDEO_BANDWIDTH = 2500,  /* kilobits/second */
 };
 
 enum {
@@ -156,6 +165,7 @@ struct reflow {
 	char *userid_remote;
 	struct sa laddr_default;
 	struct sa media_laddr;	
+	struct sa alt_media_laddr;
 	char tag[32];
 	bool terminated;
 	bool closed;
@@ -887,8 +897,10 @@ static int send_packet(struct reflow *rf, size_t headroom,
 						  ICE_CAND_TYPE_HOST,
 						  AF_INET6);
 			if (lcand) {
+#if 0
 				info("reflow(%p): send_packet:"
 				     " using local IPv6 socket\n", rf);
+#endif
 				sock = lcand->us;
 			}
 		}
@@ -2444,6 +2456,10 @@ int reflow_alloc(struct iflow		**flowp,
 	if (maddr) {
 		sa_cpy(&rf->media_laddr, maddr);
 	}
+	maddr = avs_service_alt_media_addr();
+	if (maddr) {
+		sa_cpy(&rf->alt_media_laddr, maddr);
+	}
 	
 	/* RTP must listen on 0.0.0.0 so that we can send/recv
 	   packets on all interfaces */
@@ -2475,8 +2491,10 @@ int reflow_alloc(struct iflow		**flowp,
 	if (err)
 		goto out;
 
-	//sdp_media_set_lbandwidth(rf->audio.sdpm,
-	//			 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);
+#if USE_BANDWIDTH_LIMIT
+	sdp_media_set_lbandwidth(rf->audio.sdpm,
+				 SDP_BANDWIDTH_AS, AUDIO_BANDWIDTH);	
+#endif
 	sdp_media_set_lattr(rf->audio.sdpm, true, "ptime", "%u", AUDIO_PTIME);
 
 	/* needed for new versions of WebRTC */
@@ -2795,8 +2813,10 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 	if (err)
 		goto out;
 
-	//sdp_media_set_lbandwidth(rf->video.sdpm,
-	//			 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
+#if USE_BANDWIDTH_LIMIT
+	sdp_media_set_lbandwidth(rf->video.sdpm,
+				 SDP_BANDWIDTH_AS, VIDEO_BANDWIDTH);
+#endif
 
 	/* needed for new versions of WebRTC */
 	err = sdp_media_set_alt_protos(rf->video.sdpm, 2,
@@ -2972,9 +2992,15 @@ int reflow_add_video(struct reflow *rf, struct list *vidcodecl)
 		}
 
 		if (rf->ver.major != SFT_VERSION_MARK && (rf->ver.major == 0 || rf->ver.major >= 10)) {
+#if 1
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
+			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv l;h");
+#else
 			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "h recv");
 			sdp_media_set_lattr(rf->video.sdpm, false, "rid", "l recv");
 			sdp_media_set_lattr(rf->video.sdpm, false, "simulcast", "recv h;l");
+#endif
 		}
 	}
 
@@ -3574,7 +3600,9 @@ static void bundle_ssrc(struct reflow *rf,
 	}
 	
 	sdp_media_set_ldir(newm, disabled ? SDP_INACTIVE : SDP_SENDONLY);
-        //sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
+#if USE_BANDWIDTH_LIMIT
+        sdp_media_set_lbandwidth(newm, SDP_BANDWIDTH_AS, bw);
+#endif
 }
 
 
@@ -4509,7 +4537,6 @@ static void trice_estab_handler(struct ice_candpair *pair,
 {
 	struct reflow *rf = arg;
 	void *sock;
-	bool use_pair = false;
 	int err;
 
 	info("reflow(%p): ice pair established  %H\n",
@@ -4529,18 +4556,12 @@ static void trice_estab_handler(struct ice_candpair *pair,
 	}
 #endif
 
-	if (rf->sel_pair) {
-		use_pair = pair->rcand->attr.type < rf->sel_pair->rcand->attr.type;
-	}
-	
 	/* We use the first pair that is working */
-	if (use_pair || !rf->ice_ready) {
+	if (!rf->ice_ready) {
 		struct stun_attr *attr;
 		struct turn_conn *conn;
-		struct ice_candpair *p = rf->sel_pair;
 
-		rf->sel_pair = NULL;
-		mem_deref(p);
+		mem_deref(rf->sel_pair);
 		rf->sel_pair = mem_ref(pair);
 
 		rf->ice_ready = true;
@@ -6010,7 +6031,8 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		 */
 		udp_handler_set(lcand->us, trice_udp_recv_handler, rf);
 
-		if (sa_isset(&rf->media_laddr, SA_ADDR)) {
+		if (sa_isset(&rf->media_laddr, SA_ADDR)
+		    && sa_af(&rf->media_laddr) == sa_af(sa)) {
 			struct ice_cand_attr mcand =
 				*(struct ice_cand_attr *)lcand;
 			uint16_t port;
@@ -6023,6 +6045,15 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 						  "%H",
 						  ice_cand_attr_encode,
 						  &mcand);
+			if (sa_isset(&rf->alt_media_laddr, SA_ADDR)) {
+				sa_cpy(&mcand.addr, &rf->alt_media_laddr);
+				sa_set_port(&mcand.addr, port);
+				err = sdp_media_set_lattr(rf->audio.sdpm, false,
+							  "candidate",
+							  "%H",
+							  ice_cand_attr_encode,
+							  &mcand);
+			}
 		}
 		else {
 			err = sdp_media_set_lattr(rf->audio.sdpm, false,
