@@ -70,7 +70,7 @@
 #define USE_TWCC 0
 */
 
-#define USE_BANDWIDTH_LIMIT 1
+#define USE_BANDWIDTH_LIMIT 0
 
 void *(* volatile memset_s)(void *s, int c, size_t n) = memset;
 
