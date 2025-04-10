@@ -5992,6 +5992,11 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 		err =  EINVAL;
 		goto out;
 	}
+
+	if (AF_INET6 == sa_af(sa)) {
+		RFLOG(LOG_LEVEL_WARN, "skipping IPv6 interface\n", rf);
+		return false;
+	}
 	
 
 	RFLOG(LOG_LEVEL_INFO, 
@@ -6002,7 +6007,7 @@ static bool interface_handler(const char *ifname, const struct sa *sa,
 	if (ifc) {
 		RFLOG(LOG_LEVEL_INFO,
 		      "interface: %s already added\n", rf, ifc->ifname);
-		return 0;
+		return false;
 	}
 
 	//if (!rf->privacy_mode) {
