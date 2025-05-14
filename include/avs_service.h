@@ -66,7 +66,7 @@ struct list  *avs_service_iflist(void);
 
 struct sa  *avs_service_metrics_addr(void);
 struct sa  *avs_service_sft_req_addr(void);
-const char *avs_service_sft_req_url(void);
+const char *avs_service_sft_req_uri(void);
 const char *avs_service_url(void);
 
 const char *avs_service_blacklist(void);

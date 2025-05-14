@@ -2973,13 +2973,24 @@ static int send_provisional_http(struct call *call,
 	}
 
 	ctx->call = mem_ref(call);
-	if (call->federate.http.url) {
-		str_ncpy(url, call->federate.http.url, sizeof(url));
+
+	if (sa_isset(&call->sft_tuple, SA_ADDR)) {
+		if (sa_isset(&call->sft_tuple, SA_PORT)) {
+			re_snprintf(url, sizeof(url), "http://%J/sft/%s", &call->sft_tuple, call->group->id);
+		}
+		else {
+			re_snprintf(url, sizeof(url), "http://%j/sft/%s", &call->sft_tuple, call->group->id);
+		}
 	}
 	else {
-		base_url = call->sft_url ? call->sft_url
-			                 : avs_service_federation_url();
-		re_snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);
+		if (call->federate.http.url) {
+			str_ncpy(url, call->federate.http.url, sizeof(url));
+		}
+		else {
+			base_url = call->sft_url ? call->sft_url
+				: avs_service_federation_url();
+			re_snprintf(url, sizeof(url), "%s/sft/%s", base_url, call->group->id);
+		}
 	}
 
 	info("send_provisional_http: sending HTTP request to "
@@ -3298,7 +3309,7 @@ static int send_conf_conn(struct call *call, bool resp,
 	if (!group)
 		return EINVAL;
 
-	if (!call->dc_estab && !call->sft_cid)
+	if (!call->dc_estab)
 		return 0;
 	
 	msg = econn_message_alloc();
@@ -3310,16 +3321,15 @@ static int send_conf_conn(struct call *call, bool resp,
 	econn_message_init(msg, ECONN_CONF_CONN, sessid ? sessid : group->id);
 
 	msg->resp = resp;
+	if (srcid)
+		str_ncpy(msg->src_userid, srcid, sizeof(msg->src_userid));
+	if (dstid)
+		str_ncpy(msg->dest_userid, dstid, sizeof(msg->dest_userid));
 	if (0 == call->sft_cid) {
 		assign_task(call, send_dce_msg, msg, false);
 	}
 	else {
 		char *rstr = NULL;
-
-		if (srcid)
-			str_ncpy(msg->src_userid, srcid, sizeof(msg->src_userid));
-		if (dstid)
-			str_ncpy(msg->dest_userid, dstid, sizeof(msg->dest_userid));
 
 		err = econn_message_encode(&rstr, msg);
 		if (!err) {
@@ -3964,7 +3974,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 			}
 		}
 		else {
-			if (group) {
+			if (group && !group->sft.ishost) {
 				send_conf_conn(call, false,
 					       NULL, call->callid, NULL);
 			}
@@ -6721,7 +6731,7 @@ static void http_req_handler(struct http_conn *hc,
 				pturn = &turn;
 			}
 			else {
-				isfederated = str_isset(sft->fed.http.url);
+				isfederated = str_isset(sft->fed.http.uri);
 			}
 			err = alloc_group(sft, &group, convid, isfederated, pturn);
 			if (err)
@@ -6771,17 +6781,26 @@ static void http_req_handler(struct http_conn *hc,
 		if (cmsg->u.confconn.sft_tuple &&
 		    str_len(cmsg->u.confconn.sft_tuple) > 0) {
 			struct uri uri;
-			struct pl tpl = PL(cmsg->u.confconn.sft_tuple);
+			struct pl tpl;
+
+			pl_set_str(&tpl, cmsg->u.confconn.sft_tuple);
+			info("new_call: sft_tuple=%r\n", &tpl);
 
 			err = uri_decode(&uri, &tpl);
 			if (err) {
 				split_tuple(call, cmsg->u.confconn.sft_tuple);
-				info("new_call: tuple: %J(cid=%u)\n", &call->sft_tuple, call->sft_cid);
+				info("new_call: TURN federation to: %J(cid=%u)\n", &call->sft_tuple, call->sft_cid);
 				group->isfederated = true;
 			}
 			else {
+				info("new_call: federate with scheme: %r host=%r port=%d\n",
+				     &uri.scheme, &uri.host, uri.port);
+				group->isfederated = true;
 				group->federate.http = true;
-				str_dup(&call->federate.http.url, cmsg->u.confconn.sft_tuple);
+				//str_dup(&call->federate.http.url, cmsg->u.confconn.sft_tuple);
+				sa_init(&call->sft_tuple, uri.af);
+				sa_set(&call->sft_tuple, &uri.host, uri.port);
+				info("new_call: HTTP federattion to: %J\n", &call->sft_tuple);
 			}
 		}
 		
@@ -7053,15 +7072,21 @@ static int module_init(void)
 	}
 
 	laddr = avs_service_sft_req_addr();
-	info("sft: starting SFT-request server on: %J\n", &laddr);
-	err = httpd_alloc(&sft->httpd_sft_req, laddr, sft_req_handler, sft);
-	if (err) {
-		error("sft: could not alloc sft_req httpd: %m\n", err);
-		goto out;
+	if (laddr) {
+		info("sft: starting SFT-request server on: %J\n", laddr);
+		err = httpd_alloc(&sft->httpd_sft_req, laddr, sft_req_handler, sft);
+		if (err) {
+			error("sft: could not alloc sft_req httpd: %m\n", err);
+			goto out;
+		}
 	}
 
-	if (avs_service_sft_req_url()) {
-		str_ncpy(sft->fed.http.url, avs_service_sft_req_url(), sizeof(sft->fed.http.url));
+	{
+		const char *req_uri = avs_service_sft_req_uri();
+
+		if (req_uri) {
+			str_ncpy(sft->fed.http.uri, req_uri, sizeof(sft->fed.http.uri));
+		}
 	}
 
 	strcpy(sft->uuid, "_");

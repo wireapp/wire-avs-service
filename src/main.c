@@ -55,7 +55,7 @@ struct avs_service {
 
 	char url[256];
 	char federation_url[256];
-	char sft_req_url[256];
+	char sft_req_uri[256];
 	char blacklist[256];
 	bool direct_federation;
 
@@ -468,7 +468,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'x':
-			str_ncpy(avsd.sft_req_url, optarg, sizeof(avsd.sft_req_url));
+			str_ncpy(avsd.sft_req_uri, optarg, sizeof(avsd.sft_req_uri));
 			break;
 
 		default:
@@ -493,18 +493,6 @@ int main(int argc, char *argv[])
 	if (!sa_isset(&avsd.req_addr, SA_ADDR)) {
 		sa_set_str(&avsd.req_addr, DEFAULT_REQ_ADDR,
 			   sa_port(&avsd.req_addr));
-	}
-	if (str_isset(avsd.sft_req_url)) {
-		struct uri uri;
-		struct pl tpl = PL(avsd.sft_req_url);
-		
-		err = uri_decode(&uri, &tpl);
-		if (err) {
-			error("sft: cannot parse SFT-request URI: %s error=%m\n", avsd.sft_req_url, err);
-			goto out;
-		}
-		sa_init(&avsd.sft_req_addr, uri.af);
-		sa_set(&avsd.sft_req_addr, &uri.host, uri.port);
 	}
 
 	/* Media address */
@@ -557,6 +545,20 @@ int main(int argc, char *argv[])
 			    "%s_%s.log", avsd.log.prefix, buf);
 
 		avsd.log.fp = fopen(avsd.log.path, "a");
+	}
+
+	if (str_isset(avsd.sft_req_uri)) {
+		struct uri uri;
+		struct pl tpl;
+
+		pl_set_str(&tpl, avsd.sft_req_uri);
+		err = uri_decode(&uri, &tpl);
+		if (err) {
+			re_fprintf(stderr, "sft: cannot parse SFT-request URI: %s error=%m\n", avsd.sft_req_url, err);
+			goto out;
+		}
+		sa_init(&avsd.sft_req_addr, uri.af);
+		sa_set(&avsd.sft_req_addr, &uri.host, uri.port);
 	}
 
 	if (avsd.lb.enabled) {
@@ -725,9 +727,9 @@ struct sa  *avs_service_metrics_addr(void)
 }
 
 
-const char *avs_service_sft_req_url(void)
+const char *avs_service_sft_req_uri(void)
 {
-	return str_isset(avsd.sft_req_url) ? avsd.sft_req_url : NULL;
+	return str_isset(avsd.sft_req_uri) ? avsd.sft_req_uri : NULL;
 }
 
 struct sa *avs_service_sft_req_addr(void)
