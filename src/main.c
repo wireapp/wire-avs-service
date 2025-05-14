@@ -554,7 +554,7 @@ int main(int argc, char *argv[])
 		pl_set_str(&tpl, avsd.sft_req_uri);
 		err = uri_decode(&uri, &tpl);
 		if (err) {
-			re_fprintf(stderr, "sft: cannot parse SFT-request URI: %s error=%m\n", avsd.sft_req_url, err);
+			re_fprintf(stderr, "sft: cannot parse SFT-request URI: %s error=%m\n", avsd.sft_req_uri, err);
 			goto out;
 		}
 		sa_init(&avsd.sft_req_addr, uri.af);

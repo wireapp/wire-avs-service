@@ -144,7 +144,7 @@ struct sft {
 			char credential[256];
 		} turn;
 		struct {
-			char url[256];
+			char uri[256];
 		} http;
 	} fed;
 		
@@ -3147,7 +3147,7 @@ static int icall_send_handler(struct icall *icall,
 				if (call->federate.http.url) 
 					str_dup(&msg->u.setup.sft_tuple, call->federate.url);
 				else
-					str_dup(&msg->u.setup.sft_tuple, avs_service_sft_req_url()) ;
+					str_dup(&msg->u.setup.sft_tuple, avs_service_sft_req_uri()) ;
 			}
 			
 			info("call(%p): setting tuple: %s\n", call, msg->u.setup.sft_tuple);
