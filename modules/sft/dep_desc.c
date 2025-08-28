@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <re.h>
-#include "avs.h"
+//#include "avs.h"
+#include "avs_log.h"
 #include "bitstream.h"
 #include "dep_desc.h"
 

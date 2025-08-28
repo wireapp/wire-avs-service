@@ -219,7 +219,7 @@ struct ssrcv_update {
 };
 
 #define TIMEOUT_SETUP 10000
-#define TIMEOUT_CONN 20000
+#define TIMEOUT_CONN 45000
 #define TIMEOUT_RR 500
 #define TIMEOUT_TWCC 64
 #define TIMEOUT_PROVISIONAL 10000
