@@ -7,7 +7,7 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   # Allows sfts to start up and shut down in parallel when scaling up and down.
-  # However this does not affect upgrades.
+  # However this does not affect upgrades. 
   podManagementPolicy: Parallel
   serviceName: {{ include "sftd.fullname" . }}
   selector:
