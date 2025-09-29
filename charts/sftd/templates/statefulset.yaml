@@ -15,8 +15,14 @@ spec:
       {{- include "sftd.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-    {{- with .Values.podAnnotations }}
       annotations:
+        {{- if or .Values.sftTokenSecret .Values.multiSFT.secret }}
+        checksum/secret: {{ include (print .Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if or .Values.tls.issuerRef (and .Values.tls.key .Values.tls.crt) }}
+        checksum/secret-or-certificate: {{ include (print .Template.BasePath "/secret-or-certificate.yaml") . | sha256sum }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
     {{- end }}
       labels:
