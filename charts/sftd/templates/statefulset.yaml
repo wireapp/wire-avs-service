@@ -54,7 +54,7 @@ spec:
       {{- end }}
       initContainers:
         - name: get-external-ip
-          image: bitnamilegacy/kubectl:1.29.11
+          image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
           volumeMounts:
             - name: external-ip
               mountPath: /external-ip

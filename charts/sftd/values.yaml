@@ -120,3 +120,9 @@ coredumps:
 # string. Use it for development; established arguments should get their own
 # fields/options.
 additionalCmdArgs: ""
+
+# init container image to fetch the external IP address of the node
+initImage:
+  repository: bitnamilegacy/kubectl
+  pullPolicy: IfNotPresent
+  tag: "1.29.11"
