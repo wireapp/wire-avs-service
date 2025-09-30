@@ -55,6 +55,7 @@ spec:
       initContainers:
         - name: get-external-ip
           image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
           volumeMounts:
             - name: external-ip
               mountPath: /external-ip
