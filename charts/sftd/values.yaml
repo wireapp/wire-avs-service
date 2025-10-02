@@ -83,7 +83,7 @@ tls: {}
 joinCall:
   replicaCount: 3
   image:
-    repository: docker.io/bitnami/nginx
+    repository: docker.io/bitnamilegacy/nginx
     pullPolicy: IfNotPresent
     tag: "1.27.3-debian-12-r5@sha256:c02e18884badbd9482fd731668f75a3033124c748bc709651fb06062d0ab38c1"
 
@@ -120,3 +120,9 @@ coredumps:
 # string. Use it for development; established arguments should get their own
 # fields/options.
 additionalCmdArgs: ""
+
+# init container image to fetch the external IP address of the node
+initImage:
+  repository: bitnamilegacy/kubectl
+  pullPolicy: IfNotPresent
+  tag: "1.29.11"
