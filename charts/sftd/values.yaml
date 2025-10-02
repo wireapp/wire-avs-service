@@ -83,7 +83,7 @@ tls: {}
 joinCall:
   replicaCount: 3
   image:
-    repository: nginxinc/nginx-unprivileged
+    repository: docker.io/bitnamilegacy/nginx
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
     tag: "1.25.3"
@@ -117,3 +117,9 @@ coredumps:
 # string. Use it for development; established arguments should get their own
 # fields/options.
 additionalCmdArgs: ""
+
+# init container image to fetch the external IP address of the node
+initImage:
+  repository: bitnamilegacy/kubectl
+  pullPolicy: IfNotPresent
+  tag: "1.29.11"
