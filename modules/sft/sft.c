@@ -2540,7 +2540,7 @@ static void process_rtp(struct call *call,
 				rs = video_stream_find(call, rcall, ssrcv);
 
 				if (!rs) {
-				  // warning("process_rtp: call(%p): no video ssrc=%u\n", call, ssrc);
+				        warning("process_rtp: call(%p): no video ssrc=%u\n", call, ssrc);
 				}
 				else {
 					enum video_stream_q q = rs->q;
