@@ -113,6 +113,9 @@ sftdDisco:
 # DOCS: https://docs.wire.com/understand/sft.html#prerequisites
 turnDiscoveryEnabled: false
 
+# Turn on secondary IP listener (for internal IP) when using federation
+internalIpListener: false
+
 # Allow establishing calls involving remote SFT servers (e.g. for Federation)
 # Requires appVersion 3.1.10 or later
 # sftd must be directly configured with the authentication secret used by

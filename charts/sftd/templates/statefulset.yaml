@@ -198,6 +198,7 @@ spec:
               exec sftd \
                       -I "${POD_IP}" \
                       -M "${POD_IP}" \
+                      {{ if .Values.internalIpListener }}-B "${POD_IP}"{{ end }} \
                       ${ACCESS_ARGS} \
                       ${MULTI_SFT_ARGS} \
                       {{ if .Values.turnDiscoveryEnabled }}-T{{ end }} \
