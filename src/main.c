@@ -142,6 +142,54 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 }
 
+/*
+ * Draining and shutdown check
+ *
+ * When a SIGTERM is received while there are still active calls, the process
+ * switches to draining mode and should terminate automatically once shutdown
+ * handlers report it is safe. To avoid calling non-async-signal-safe code from
+ * the signal handler, we run a periodic check from the main loop.
+ */
+static struct tmr tmr_shutdown_check;
+static volatile sig_atomic_t shutdown_checks_request;
+
+static void shutdown_check_handler(void *arg)
+{
+	(void)arg;
+
+	if (avsd.is_draining) {
+		bool can_shutdown = true;
+		struct le *le;
+
+		for (le = avsd.shuthl.head; le && can_shutdown; le = le->next) {
+			struct shutdown_entry *se = le->data;
+			if (se->shuth)
+				can_shutdown = se->shuth(se->arg);
+		}
+
+		if (can_shutdown) {
+			warning("Terminating ...\n");
+			avs_service_terminate();
+			return;
+		}
+	}
+
+	/* Re-arm periodic check (~1s) */
+	tmr_start(&tmr_shutdown_check, 1000, shutdown_check_handler, NULL);
+}
+
+bool avs_service_drain_checks_requested(void)
+{
+	return shutdown_checks_request != 0;
+}
+
+void avs_service_start_shutdown_checks(void)
+{
+	/* Clear request and arm periodic check */
+	shutdown_checks_request = 0;
+	tmr_start(&tmr_shutdown_check, 1000, shutdown_check_handler, NULL);
+}
+
 static void signal_handler(int sig)
 {
 	static bool term = false;
@@ -157,6 +205,7 @@ static void signal_handler(int sig)
 		struct le *le;
 		
 		avsd.is_draining = true;
+		shutdown_checks_request = 1;
 
 		for(le = avsd.shuthl.head; le && can_shutdown; le = le->next) {
 			struct shutdown_entry *se = le->data;
@@ -165,10 +214,11 @@ static void signal_handler(int sig)
 				can_shutdown = se->shuth(se->arg);
 			}
 		}
-		if (!can_shutdown)
+		if (!can_shutdown) {
+			warning("Draining ... waiting for active calls to finish\n");
+			/* Periodic checks will start from main loop */
 			return;
-		
-	}
+		}
 		break;
 
 	default:

@@ -73,6 +73,8 @@ const struct pl *avs_service_secret(void);
 
 bool avs_service_is_draining(void);
 void avs_service_terminate(void);
+bool avs_service_drain_checks_requested(void);
+void avs_service_start_shutdown_checks(void);
 
 typedef bool (avs_service_shutdown_h) (void *arg);
 void avs_service_register_shutdown_handler(avs_service_shutdown_h *shuth, void *arg);
@@ -234,4 +236,3 @@ struct ver_elem {
 
 	struct le le;
 };
-

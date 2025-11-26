@@ -123,9 +123,11 @@ static void task_handler(int id, void *data, void *arg)
 
 static void worker_timeout_handler(void *arg)
 {
-	struct worker *w = arg;
-	struct le *le = NULL;
-	bool running = true;
+    struct worker *w = arg;
+    struct le *le = NULL;
+    bool running = true;
+    if (avs_service_drain_checks_requested())
+      avs_service_start_shutdown_checks();
 
 	//info("worker_timeout: w(%p): %d\n", w, w->id);
 	
