@@ -97,10 +97,20 @@ turnDiscoveryEnabled: false
 # Requires appVersion 3.1.10 or later
 # sftd must be directly configured with the authentication secret used by
 # the TURN server and the URI for the TURN server.
+# You can specify either a single turnServerURI (all replicas use the same)
+# or a list of turnServerURIs (each replica gets a different one, with round-robin).
 multiSFT:
   enabled: false
   secret:
+  # Single URI (all replicas use this):
+  # turnServerURI: "turn:turn.example.com:3478"
+  # Or multiple URIs (replicas distributed across these):
+  # turnServerURIs:
+  #   - "turn:turn1.example.com:3478"
+  #   - "turn:turn2.example.com:3478"
+  #   - "turn:turn3.example.com:3478"
   turnServerURI:
+  turnServerURIs: []
 
 # This is the secret used for authentication when the multiSFT feature is disabled
 # Do not use this when multiSFT is enabled, and instead use the `multiSFT.secret` field

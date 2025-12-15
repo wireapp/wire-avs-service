@@ -114,8 +114,26 @@ spec:
               MULTI_SFT_ARGS=""
 
               {{- if .Values.multiSFT.enabled }}
-              MULTI_SFT_ARGS="-t {{ required "must specify TURN server URI" .Values.multiSFT.turnServerURI }} \
+              {{- if .Values.multiSFT.turnServerURIs }}
+              # Extract ordinal index from POD_NAME (e.g., sftd-0 -> 0)
+              ORDINAL=${POD_NAME##*-}
+
+              # Build turnServerURIs array
+              TURN_URIS="{{- range $index, $uri := .Values.multiSFT.turnServerURIs }}{{ if $index }} {{ end }}{{ $uri }}{{- end }}"
+
+              # Convert space-separated string to array and select URI based on ordinal (with modulo for wrap-around)
+              set -- $TURN_URIS
+              URI_COUNT=$#
+              URI_INDEX=$((ORDINAL % URI_COUNT))
+              shift $URI_INDEX
+              TURN_URI="$1"
+
+              MULTI_SFT_ARGS="-t ${TURN_URI} \
               -s /secrets/zrest_secret.txt"
+              {{- else }}
+              MULTI_SFT_ARGS="-t {{ required "must specify TURN server URI (turnServerURI or turnServerURIs)" .Values.multiSFT.turnServerURI }} \
+              -s /secrets/zrest_secret.txt"
+              {{- end }}
               {{- end }}
 
               AUTH_SFT_ARGS=""
