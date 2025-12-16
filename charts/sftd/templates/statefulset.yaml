@@ -100,7 +100,7 @@ spec:
             {{- end }}
 
           command:
-            - /bin/sh
+            - /bin/bash
             - -c
             - |
               set -e
@@ -119,14 +119,12 @@ spec:
               ORDINAL=${POD_NAME##*-}
 
               # Build turnServerURIs array
-              TURN_URIS="{{- range $index, $uri := .Values.multiSFT.turnServerURIs }}{{ if $index }} {{ end }}{{ $uri }}{{- end }}"
+              TURN_URIS=({{- range $index, $uri := .Values.multiSFT.turnServerURIs }}{{ if $index }} {{ end }}"{{ $uri }}"{{- end }})
 
-              # Convert space-separated string to array and select URI based on ordinal (with modulo for wrap-around)
-              set -- $TURN_URIS
-              URI_COUNT=$#
+              # Select URI based on ordinal (with modulo for wrap-around)
+              URI_COUNT=${#TURN_URIS[@]}
               URI_INDEX=$((ORDINAL % URI_COUNT))
-              shift $URI_INDEX
-              TURN_URI="$1"
+              TURN_URI="${TURN_URIS[URI_INDEX]}"
 
               MULTI_SFT_ARGS="-t ${TURN_URI} \
               -s /secrets/zrest_secret.txt"
