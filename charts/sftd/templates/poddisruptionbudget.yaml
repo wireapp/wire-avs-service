@@ -1,0 +1,13 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "sftd.fullname" . }}
+  labels:
+    {{- include "sftd.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ sub (int .Values.replicaCount) 1 }}
+  selector:
+    matchLabels:
+      {{- include "sftd.selectorLabels" . | nindent 6 }}
+{{- end }}

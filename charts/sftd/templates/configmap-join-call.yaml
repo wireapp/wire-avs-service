@@ -8,7 +8,7 @@ metadata:
 data:
   default.conf.template: |
     server {
-      listen 8080;
+      listen 9000;
       resolver ${NAMESERVER};
 
       location /healthz { return 204; }
