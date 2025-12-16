@@ -1,0 +1,12 @@
+tls:
+  issuerRef: fake-secret-for-testing
+
+host: wire.example
+allowOrigin:  https://webapp.wire.example
+
+multiSFT:
+  enabled: true
+  secret: sft-secret
+  turnServerURIs:
+    - turn1.turn.wire.example
+    - turn2.turn.wire.example
