@@ -2133,6 +2133,7 @@ static void process_rtp(struct call *call,
 	bool update_ssrcv = false;
 	bool ispadding = false;
 	size_t plpos;
+	uint16_t wseq = 0;
 	
 
 	group = call->group;
