@@ -516,6 +516,8 @@ static int remove_participant(struct call *call, void *arg);
 static int send_dce_msg(struct call *call, void *arg);
 static int send_sft_msg(struct call *call, struct econn_message *msg,
 			int status);
+static int send_propsync(struct call *call, struct econn_props *props,
+			 const char *userid, const char *clientid, bool resp);
 static void sft_send_conf_part(struct group *group,
 			       uint8_t *entropy, size_t entropylen,
 			       bool ishost, bool resp);
@@ -1984,6 +1986,23 @@ static void append_stream(struct econn_message *msg, struct call *call)
 	sinfo->ssrcv.lo = call->video.lo.ssrc;
 
 	list_append(&msg->u.confstreams.streaml, &sinfo->le, sinfo);
+}
+
+static void sft_send_propsyncs(struct call *call)
+{
+	struct le *le;
+
+	if (!call || !call->group)
+		return;
+
+	LIST_FOREACH(&call->group->calll, le) {
+		struct call *gc = le->data;
+
+		if (!gc->issft) {
+			send_propsync(call, gc->props,
+				      gc->userid, gc->clientid, true);
+		}
+	}
 }
 
 static void sft_send_conf_streams(struct call *call)
@@ -4889,6 +4908,7 @@ static void sft_confpart_handler(const struct econn_message *msg,
 
 			mem_deref(entropy);
 		}
+		sft_send_propsyncs(call);
 	}
 }
 
@@ -5892,8 +5912,9 @@ static struct call *federate_request(struct group *group,
 			goto out;
 		}
 		ecall_confmsg_handler(NULL, cmsg, call);
-		if (new_sft)
+		if (new_sft) {
 			sft_send_conf_streams(call);
+		}
 		break;
 
 	case ECONN_CONF_PART:
