@@ -4909,6 +4909,7 @@ static void sft_confpart_handler(const struct econn_message *msg,
 			mem_deref(entropy);
 		}
 		sft_send_propsyncs(call);
+		sft_send_conf_streams(call);
 	}
 }
 
@@ -5843,7 +5844,6 @@ static struct call *federate_request(struct group *group,
 	struct call *call = NULL;
 	char *srcid;
 	char *dstid;
-	bool new_sft = false;
 	int err = 0;
 
 	if (!group)
@@ -5904,7 +5904,6 @@ static struct call *federate_request(struct group *group,
 				append_group(group, call);
 			}
 			lock_rel(g_sft->lock);
-			new_sft = true;
 		}
 		if (!call) {
 			warning("federate_request: no call found\n");
@@ -5912,9 +5911,6 @@ static struct call *federate_request(struct group *group,
 			goto out;
 		}
 		ecall_confmsg_handler(NULL, cmsg, call);
-		if (new_sft) {
-			sft_send_conf_streams(call);
-		}
 		break;
 
 	case ECONN_CONF_PART:
