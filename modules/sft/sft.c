@@ -1966,11 +1966,87 @@ static void process_dd(struct call *call,
 	}
 }
 
+static void append_stream(struct econn_message *msg, struct call *call)
+{
+	struct econn_stream_info *sinfo;
+
+	sinfo = mem_zalloc(sizeof(*sinfo), NULL);
+	if (!sinfo) {
+		warning("append_stream: call(%p): cannot allocate sinfo\n",
+			call);
+		return;
+	}
+	str_ncpy(sinfo->userid, call->userid,
+		 ARRAY_SIZE(sinfo->userid));
+	sinfo->quality = 0;
+	str_ncpy(sinfo->ssrcv.clientid, call->clientid,
+		 sizeof(sinfo->ssrcv.clientid));
+	sinfo->ssrcv.hi = call->video.hi.ssrc;
+	sinfo->ssrcv.lo = call->video.lo.ssrc;
+
+	list_append(&msg->u.confstreams.streaml, &sinfo->le, sinfo);
+}
+
+static void sft_send_conf_streams(struct call *call)
+{
+	struct econn_message *msg = NULL;
+	struct group *group = NULL;
+	char *mstr = NULL;
+	struct le *le;
+	int err = 0;
+
+	if (!call)
+		return;
+
+	group = call->group;
+	if (!group) {
+		warning("sft_send_confstreams(%p): no group for call\n", call);
+		return;
+	}
+
+	if (!call->sft_cid) {
+		warning("sft_send_confstreams(%p): no cid for call\n", call);
+		return;
+	}
+
+	msg = econn_message_alloc();
+	if (!msg) {
+		warning("sft_send_confstreams(%p): no message\n", call);
+		goto out;
+	}
+	econn_message_init(msg, ECONN_CONF_STREAMS, group->id);
+	str_ncpy(msg->dest_userid, call->federate.dstid,
+		 ARRAY_SIZE(msg->dest_userid));
+	msg->resp = true;
+
+	LIST_FOREACH(&group->calll, le) {
+		struct call *gc = le->data;
+
+		if (!gc->issft)
+			append_stream(msg, gc);
+	}
+
+	err = econn_message_encode(&mstr, msg);
+	if (err) {
+		warning("sft_send_confstreams(%p): ssrcv_timeout: failed to "
+			"encode message: %m\n", call, err);
+		goto out;
+	}
+	else {
+		tc_send(call->federate.tc,
+			&call->sft_tuple, call->sft_cid,
+			(uint8_t *)mstr, str_len(mstr));
+	}
+
+ out:
+	mem_deref(mstr);
+	mem_deref(msg);
+}
+
 static void ssrcv_timeout_handler(void *arg)
 {
 	struct ssrcv_update *ssu = arg;
 	struct econn_message *msg = NULL;
-	struct econn_stream_info *sinfo = NULL;
 	struct call *call = ssu->call;
 	struct call *rcall = ssu->rcall;
 	int err = 0;
@@ -1985,20 +2061,8 @@ static void ssrcv_timeout_handler(void *arg)
 	str_ncpy(msg->dest_userid, rcall->federate.dstid,
 		 ARRAY_SIZE(msg->dest_userid));
 	msg->resp = true;
-	sinfo = mem_zalloc(sizeof(*sinfo), NULL);
-	if (!sinfo) {
-		warning("call(%p): ssrcv_timeout: cannot allocate sinfo\n",
-			call);
-		goto out;
-	}
-	str_ncpy(sinfo->userid, call->userid,
-		 ARRAY_SIZE(sinfo->userid));
-	sinfo->quality = 0;
-	str_ncpy(sinfo->ssrcv.clientid, call->clientid,
-		 sizeof(sinfo->ssrcv.clientid));
-	sinfo->ssrcv.hi = call->video.hi.ssrc;
-	sinfo->ssrcv.lo = call->video.lo.ssrc;
-	list_append(&msg->u.confstreams.streaml, &sinfo->le, sinfo);
+
+	append_stream(msg, call);
 
 	info("call(%p): ssrcv_timeout: hi:%u lo:%u\n", call, sinfo->ssrcv.hi, sinfo->ssrcv.lo);
 
@@ -5760,6 +5824,7 @@ static struct call *federate_request(struct group *group,
 	struct call *call = NULL;
 	char *srcid;
 	char *dstid;
+	bool new_sft = false;
 	int err = 0;
 
 	if (!group)
@@ -5819,7 +5884,8 @@ static struct call *federate_request(struct group *group,
 				call->group = mem_ref(group);
 				append_group(group, call);
 			}
-			lock_rel(g_sft->lock);			
+			lock_rel(g_sft->lock);
+			new_sft = true;
 		}
 		if (!call) {
 			warning("federate_request: no call found\n");
@@ -5827,6 +5893,8 @@ static struct call *federate_request(struct group *group,
 			goto out;
 		}
 		ecall_confmsg_handler(NULL, cmsg, call);
+		if (new_sft)
+			sft_send_conf_streams(call);
 		break;
 
 	case ECONN_CONF_PART:
