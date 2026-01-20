@@ -1306,7 +1306,6 @@ static void rr_handler(void *arg)
 static void send_rtcp_rr(struct call *call, uint32_t ssrc, uint32_t last_ntp)
 {
 	struct mbuf *mb;
-	int err;
 	uint32_t lssrc;
 	struct ssrc_stats *stats = NULL;
 	struct rtcp_rr rr;
@@ -1351,7 +1350,7 @@ static void send_rtcp_rr(struct call *call, uint32_t ssrc, uint32_t last_ntp)
 	     last_ntp, rr.last_seq, rr.fraction, rr.lost, rr.jitter);
 #endif
 	
-	err = rtcp_encode(mb,
+	(void)rtcp_encode(mb,
 			  RTCP_RR,
 			  1,
 			  lssrc,
@@ -2064,8 +2063,6 @@ static void ssrcv_timeout_handler(void *arg)
 
 	append_stream(msg, call);
 
-	info("call(%p): ssrcv_timeout: hi:%u lo:%u\n", call, sinfo->ssrcv.hi, sinfo->ssrcv.lo);
-
 	if (rcall->dc_estab) {
 		err = send_dce_msg(rcall, msg);
 		if (err) {
@@ -2113,7 +2110,6 @@ static void process_rtp(struct call *call,
 	struct le *le = NULL;
 	struct rtp_header rrtp;
 	size_t pos;
-	size_t plpos;
 	int rtpxlen;
 	size_t hdrlen;
 	struct ssrc_stats *stats = NULL;
@@ -2130,13 +2126,13 @@ static void process_rtp(struct call *call,
 	bool have_parts = true;
 	struct dep_desc_frame *dd_frame = NULL;
 	char *rid = NULL;
-	uint16_t wseq = 0;
 	int err = 0;
 	bool is_keyframe = false;
 	bool has_gfh = false;
 	struct dep_desc *dd = NULL;
 	bool update_ssrcv = false;
 	bool ispadding = false;
+	size_t plpos;
 	
 
 	group = call->group;
@@ -2713,6 +2709,8 @@ static void process_rtp(struct call *call,
 #if USE_RTX
 					gnack_add_payload(rcall, &rs->rtx, rtp,
 							  rdata, rlen, plpos - pos);
+#else
+					(void)plpos;
 #endif
 				}
 
@@ -2890,12 +2888,12 @@ static void reflow_rtcp_recv(struct mbuf *mb, void *arg)
 		break;
 
 	case RTCP_SR: {
-		struct rtcp_rr *sr;
 		uint32_t srsrc = rtcp->r.sr.ssrc;
 		uint32_t last_ntp;
+#if 0
+		struct rtcp_rr *sr;
 
 		sr = rtcp->r.sr.rrv;
-#if 0
 		info("call(%p): RTCP-SR on ssrc: %u/%u ntp=%08x:%08x\n",
 		     call, rtcp->r.sr.ssrc, sr->ssrc, rtcp->r.sr.ntp_sec, rtcp->r.sr.ntp_frac);
 #endif
@@ -2987,6 +2985,7 @@ static int sft_http_data_handler(const uint8_t *buf, size_t size,
 
 	chunked = http_msg_hdr_has_value(msg, HTTP_HDR_TRANSFER_ENCODING,
 					 "chunked");
+	(void)chunked;
 	if (!ctx->mb_body) {
 		ctx->mb_body = mbuf_alloc(1024);
 		if (!ctx->mb_body) {
@@ -3078,7 +3077,6 @@ static int send_provisional_http(struct call *call,
 static int send_provisional(struct call *call,
 			    struct econn_message *msg)
 {
-	struct group *group;
 	char *data;
 	int err;
 
@@ -3095,7 +3093,6 @@ static int send_provisional(struct call *call,
 	if (err)
 		return err;
 
-	group = call->group;
 	if (call->isprov) {
 		if (sa_isset(&call->sft_tuple, SA_ADDR)) {
 			tc_send(call->federate.tc,
@@ -5219,6 +5216,7 @@ static void ecall_confmsg_handler(struct ecall *ecall,
 	}
 
  out:
+	(void)err;
 	return;
 }
 
