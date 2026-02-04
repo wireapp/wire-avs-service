@@ -77,6 +77,18 @@ spec:
                 addr=$(kubectl get node $NODE_NAME -ojsonpath='{.metadata.annotations.wire\.com/external-ip}')
               fi
               echo -n "$addr" | tee /dev/stderr > /external-ip/ip
+        {{- if .Values.coredumps.enabled }}
+        - name: coredumps-enable
+          image: busybox:latest
+          securityContext:
+            privileged: true
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              sysctl -w kernel.core_pattern=/var/coredumps/core.%e.%p.%t
+        {{- end }}
 
         {{- if and .Values.multiSFT.enabled .Values.multiSFT.discoveryRequired }}
         - name: get-multi-sft-config
