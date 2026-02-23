@@ -9,4 +9,10 @@ To build:
 - Clone this repository using git clone --recursive
 - Run docker build ./
 
+## tools/sft_disco
+This is the SFT discovery service. It is used to discover the SFT service on the network and to register the SFT service with the AVS service registry.
 
+To build, run the following command in the tools/sft_disco directory:
+```
+docker build -t sft_disco .
+```
