@@ -56,6 +56,15 @@ resources: {}
   #   cpu: 100m
   #   memory: 128Mi
 
+externalIpHelper:
+  # The image used for the initContainer that determines the external IP address of the node.
+  # This is a very small image that just contains kubectl, and is only used during startup.
+  # We chose the `compat` flavor of the image since we need a shell to run the command that determines the external IP address, and the `compat` image includes a shell.
+  image:
+    repository: docker.io/alpine/kubectl
+    pullPolicy: IfNotPresent
+    tag: 1.35.1
+
 # If you have multiple deployments of sftd running in one cluster, it is
 # important that they run on disjoint sets of nodes, you can use nodeSelector to enforce this
 nodeSelector: {}
