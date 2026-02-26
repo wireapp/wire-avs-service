@@ -80,22 +80,21 @@ tls: {}
   # key:
   # crt:
   # issuerRef:
-    # The name of the issuer (e.g. letsencrypr-prod)
-    # name: ca-issuer
-    # We can reference ClusterIssuers by changing the kind here.
-    # The default value is Issuer (i.e. a locally namespaced Issuer)
-    # kind: Issuer
-    # This is optional since cert-manager will default to this value however
-    # if you are using an external issuer, change this to that issuer group.
-    # group: cert-manager.io
+  # The name of the issuer (e.g. letsencrypr-prod)
+  # name: ca-issuer
+  # We can reference ClusterIssuers by changing the kind here.
+  # The default value is Issuer (i.e. a locally namespaced Issuer)
+  # kind: Issuer
+  # This is optional since cert-manager will default to this value however
+  # if you are using an external issuer, change this to that issuer group.
+  # group: cert-manager.io
 
 joinCall:
   replicaCount: 3
   image:
     repository: nginxinc/nginx-unprivileged
     pullPolicy: IfNotPresent
-    # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.25.3"
+    tag: "1.29.5-alpine3.23-perl"
 sftdDisco:
   image:
     repository: quay.io/wire/sftd_disco
