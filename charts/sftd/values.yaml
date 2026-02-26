@@ -87,6 +87,11 @@ joinCall:
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
     tag: "1.25.3"
+sftdDisco:
+  image:
+    repository: quay.io/wire/sftd_disco
+    pullPolicy: IfNotPresent
+    tag: "1.1.1" # sftd_disco is released separately from sftd, so it doesn't share the same version number
 
 # Allow SFT instances to choose/consider using a TURN server for themselves as a proxy when
 # trying to establish a connection to clients
