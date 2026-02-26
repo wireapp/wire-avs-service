@@ -35,11 +35,12 @@ spec:
           - name: sftd-disco
             mountPath: /etc/wire/sftd-disco
             readOnly: false
-          command:
-            - "/bin/sh"
-            - "-c"
-            - |
-              /usr/bin/sftd_disco.sh _sft._tcp.{{ include "sftd.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+          args:
+            - _sft._tcp.{{ include "sftd.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsRoot: false
+            runAsUser: 65534 # non-root user in alpine
         - name: nginx
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
