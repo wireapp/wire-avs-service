@@ -30,7 +30,10 @@ spec:
           emptyDir: {}
       containers:
         - name: sftd-disco
-          image: quay.io/wire/sftd_disco:wip-2 # TODO configure + version
+          {{- with .Values.sftdDisco.image }}
+          image: {{ .repository }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
           volumeMounts:
           - name: sftd-disco
             mountPath: /etc/wire/sftd-disco

@@ -54,7 +54,10 @@ spec:
       {{- end }}
       initContainers:
         - name: get-external-ip
-          image: bitnami/kubectl:1.24.12
+          {{- with .Values.externalIpHelper.image }}
+          image: {{ .repository }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
           volumeMounts:
             - name: external-ip
               mountPath: /external-ip
@@ -63,8 +66,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-          command:
-            - /bin/sh
+          command: [/bin/sh]
+          args:
             - -c
             - |
               set -e
@@ -77,7 +80,10 @@ spec:
                 addr=$(kubectl get node $NODE_NAME -ojsonpath='{.metadata.annotations.wire\.com/external-ip}')
               fi
               echo -n "$addr" | tee /dev/stderr > /external-ip/ip
-
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsRoot: false
+            runAsUser: 65534 # nobody user in the kubectl image
         {{- if and .Values.multiSFT.enabled .Values.multiSFT.discoveryRequired }}
         - name: get-multi-sft-config
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
