@@ -56,6 +56,15 @@ resources: {}
   #   cpu: 100m
   #   memory: 128Mi
 
+externalIpHelper:
+  # The image used for the initContainer that determines the external IP address of the node.
+  # This is a very small image that just contains kubectl, and is only used during startup.
+  # We chose the `compat` flavor of the image since we need a shell to run the command that determines the external IP address, and the `compat` image includes a shell.
+  image:
+    repository: docker.io/alpine/kubectl
+    pullPolicy: IfNotPresent
+    tag: 1.35.1
+
 # If you have multiple deployments of sftd running in one cluster, it is
 # important that they run on disjoint sets of nodes, you can use nodeSelector to enforce this
 nodeSelector: {}
@@ -71,21 +80,26 @@ tls: {}
   # key:
   # crt:
   # issuerRef:
-    # The name of the issuer (e.g. letsencrypr-prod)
-    # name: ca-issuer
-    # We can reference ClusterIssuers by changing the kind here.
-    # The default value is Issuer (i.e. a locally namespaced Issuer)
-    # kind: Issuer
-    # This is optional since cert-manager will default to this value however
-    # if you are using an external issuer, change this to that issuer group.
-    # group: cert-manager.io
+  # The name of the issuer (e.g. letsencrypr-prod)
+  # name: ca-issuer
+  # We can reference ClusterIssuers by changing the kind here.
+  # The default value is Issuer (i.e. a locally namespaced Issuer)
+  # kind: Issuer
+  # This is optional since cert-manager will default to this value however
+  # if you are using an external issuer, change this to that issuer group.
+  # group: cert-manager.io
 
 joinCall:
   replicaCount: 3
   image:
-    repository: docker.io/bitnamilegacy/nginx
+    repository: nginxinc/nginx-unprivileged
     pullPolicy: IfNotPresent
-    tag: "1.27.3-debian-12-r5@sha256:c02e18884badbd9482fd731668f75a3033124c748bc709651fb06062d0ab38c1"
+    tag: "1.29.5-alpine3.23-perl"
+sftdDisco:
+  image:
+    repository: quay.io/wire/sftd_disco
+    pullPolicy: IfNotPresent
+    tag: "1.1.1" # sftd_disco is released separately from sftd, so it doesn't share the same version number
 
 # Allow SFT instances to choose/consider using a TURN server for themselves as a proxy when
 # trying to establish a connection to clients

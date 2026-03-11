@@ -48,8 +48,10 @@ spec:
           emptyDir: {}
       initContainers:
         - name: get-external-ip
-          image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
-          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          {{- with .Values.externalIpHelper.image }}
+          image: {{ .repository }}:{{ .tag }}
+          imagePullPolicy: {{ .pullPolicy }}
+          {{- end }}
           volumeMounts:
             - name: external-ip
               mountPath: /external-ip
@@ -58,8 +60,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-          command:
-            - /bin/sh
+          command: [/bin/sh]
+          args:
             - -c
             - |
               set -e
@@ -69,7 +71,7 @@ spec:
               while [ "$count" -lt "$max_tries" ]; do
                 # In the cloud, this setting is available to indicate the true IP address
                 addr=$(kubectl get node $NODE_NAME -ojsonpath='{.status.addresses[?(@.type=="ExternalIP")].address}')
-                
+
                 # On on-prem we allow people to set "wire.com/external-ip" to be used if no ExternalIP is detected
                 if [ -z "$addr" ]; then
                   addr=$(kubectl get node $NODE_NAME -ojsonpath='{.metadata.annotations.wire\.com/external-ip}')
@@ -87,6 +89,37 @@ spec:
 
               if [ -z "$addr" ]; then
                 echo "Error: No external IP found after $max_tries attempts." >&2
+                exit 1
+              fi
+              echo -n "$addr" | tee /dev/stderr > /external-ip/ip
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsRoot: false
+            runAsUser: 65534 # nobody user in the kubectl image
+        {{- if and .Values.multiSFT.enabled .Values.multiSFT.discoveryRequired }}
+        - name: get-multi-sft-config
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+
+          volumeMounts:
+            - name: multi-sft-config
+              mountPath: /multi-sft-config
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+
+              response=$(curl "{{ .Values.multiSFT.turnDiscoveryURL }}")
+              if [ -z "$response" ]; then
+                 echo "No response from restund server."
+                 exit 1
+              fi
+
+              echo "$response" | jq -r '.username' > /multi-sft-config/username
+              if [ ! -s /multi-sft-config/username ]; then
+                echo "Response does not contain a username"
                 exit 1
               fi
 
