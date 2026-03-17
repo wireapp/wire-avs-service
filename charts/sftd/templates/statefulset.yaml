@@ -82,7 +82,7 @@ spec:
               echo -n "$addr" | tee /dev/stderr > /external-ip/ip
           securityContext:
             allowPrivilegeEscalation: false
-            runAsRoot: false
+            runAsNonRoot: true
             runAsUser: 65534 # nobody user in the kubectl image
         {{- if and .Values.multiSFT.enabled .Values.multiSFT.discoveryRequired }}
         - name: get-multi-sft-config
