@@ -1,5 +1,8 @@
 tls:
-  issuerRef: fake-secret-for-testing
+  issuerRef:
+    kind: Issuer
+    group: cert-manager.io
+    name: fake-issuer-for-testing
 
 host: wire.example
 allowOrigin:  https://webapp.wire.example
