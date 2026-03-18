@@ -9,14 +9,19 @@ jobs:
   helm-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Setup Helm
-        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
-      - name: Setup Kubeconform
-        uses: bmuschko/setup-kubeconform@5ccaecbbf012bcb1eeeab66e649db64a477ade8f # v1.0.0
-      - name: Render and test Helm chart
-        run: >
-          helm template sftd charts/sftd --values ${TEST_VALUES} | kubeconform -summary -verbose -schema-location default -schema-location ${CRD_SCHEMA_LOCATION}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+      - name: Render and validate Helm chart
+        run: |
+          nix shell \
+            "github:NixOS/nixpkgs/${NIXPKGS_CHANNEL}#kubernetes-helm" \
+            "github:NixOS/nixpkgs/${NIXPKGS_CHANNEL}#kubeconform" \
+            --command sh -c \
+              'helm template sftd charts/sftd --values "$TEST_VALUES" \
+               | kubeconform -summary -verbose \
+                   -schema-location default \
+                   -schema-location "$CRD_SCHEMA_LOCATION"'
         env:
+          NIXPKGS_CHANNEL: nixos-25.11
           TEST_VALUES: charts/sftd/values.test.yaml
           CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
