@@ -16,4 +16,7 @@ jobs:
         uses: bmuschko/setup-kubeconform@5ccaecbbf012bcb1eeeab66e649db64a477ade8f # v1.0.0
       - name: Render and test Helm chart
         run: >
-          helm template sftd charts/sftd --set host=localhost,tls.key=foo,tls.crt=bar,allowOrigin=localhost | kubeconform --verbose
+          helm template sftd charts/sftd --values ${TEST_VALUES} | kubeconform -summary -verbose -schema-location default -schema-location ${CRD_SCHEMA_LOCATION}
+        env:
+          TEST_VALUES: charts/sftd/values.test.yaml
+          CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
