@@ -7,6 +7,12 @@ on:
     branches: ["master", "release-**"]
 jobs:
   helm-test:
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      NIXPKGS_CHANNEL: nixos-25.11
+      TEST_VALUES: charts/sftd/values.test.yaml
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -22,6 +28,25 @@ jobs:
                    -schema-location default \
                    -schema-location "$CRD_SCHEMA_LOCATION"'
         env:
-          NIXPKGS_CHANNEL: nixos-25.11
-          TEST_VALUES: charts/sftd/values.test.yaml
           CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+      - name: Setup kind cluster and install Helm chart
+        run: |
+          nix shell \
+            "github:NixOS/nixpkgs/${NIXPKGS_CHANNEL}#kind" \
+            "github:NixOS/nixpkgs/${NIXPKGS_CHANNEL}#kubernetes-helm" \
+            --command sh -c \
+              'kind create cluster
+              helm install \
+                cert-manager oci://quay.io/jetstack/charts/cert-manager \
+                --version v1.20.0 \
+                --namespace cert-manager \
+                --create-namespace \
+                --set crds.enabled=true
+              helm install \
+                sftd charts/sftd \
+                --values "$TEST_VALUES"
+              helm test sftd
+              helm uninstall sftd
+              '
+        env:
+          KUBE_CONTEXT: kind-kind

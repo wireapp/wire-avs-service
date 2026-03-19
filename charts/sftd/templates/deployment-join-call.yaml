@@ -50,7 +50,7 @@ spec:
             - _sft._tcp.{{ include "sftd.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
           securityContext:
             allowPrivilegeEscalation: false
-            runAsRoot: false
+            runAsNonRoot: true
             runAsUser: 65534 # non-root user in alpine
         - name: nginx
           securityContext:
