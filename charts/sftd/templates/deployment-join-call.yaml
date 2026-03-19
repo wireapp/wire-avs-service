@@ -54,7 +54,7 @@ spec:
             runAsUser: 65534 # non-root user in alpine
         - name: nginx
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- toYaml .Values.joinCall.securityContext | nindent 12 }}
           image: "{{ .Values.joinCall.image.repository }}:{{ .Values.joinCall.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:

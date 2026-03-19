@@ -91,6 +91,9 @@ tls: {}
 
 joinCall:
   replicaCount: 3
+  # nginxinc/nginx-unprivileged expects UID 101
+  securityContext:
+    runAsUser: 101
   image:
     repository: nginxinc/nginx-unprivileged
     pullPolicy: IfNotPresent
