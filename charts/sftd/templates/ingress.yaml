@@ -1,3 +1,4 @@
+{{- if .Values.ingress.enabled }}
 {{- $apiIsStable := eq (include "ingress.isStable" .) "true" -}}
 {{- $ingressFieldNotAnnotation := eq (include "ingress.FieldNotAnnotation" .) "true" -}}
 {{- $ingressSupportsPathType := eq (include "ingress.supportsPathType" .) "true" -}}
@@ -67,3 +68,4 @@ spec:
               serviceName: "{{ include "sftd.fullname" . }}-join-call"
               servicePort: http
               {{- end }}
+{{- end }}

@@ -147,3 +147,28 @@ initImage:
   repository: bitnamilegacy/kubectl
   pullPolicy: IfNotPresent
   tag: "1.29.11"
+
+# Set to false when migrating to Gateway API (gateway.enabled: true) and the
+# nginx Ingress is no longer needed.
+ingress:
+  enabled: true
+
+# Gateway API ingress (Envoy Gateway). Can run alongside the nginx Ingress
+# during migration; disable ingress.enabled in a follow-up apply once verified.
+gateway:
+  enabled: false
+  # When true, a Gateway resource is created by this chart.
+  # Set to false when referencing an existing shared Gateway
+  # (e.g. one managed by the cluster operator with mergeGateways: true).
+  create: true
+  # Name of the Gateway resource. Defaults to <release-name>-gateway when empty.
+  name: ""
+  # GatewayClass name. Required when create: true.
+  # Use "envoy-shared" for the shared Envoy proxy (mergeGateways: true).
+  className: ""
+  # Namespace of the Gateway. Defaults to release namespace when empty.
+  # Only set this when referencing an existing Gateway in another namespace.
+  namespace: ""
+  listeners:
+    https:
+      port: 443

@@ -89,3 +89,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "ingress.FieldNotAnnotation" -}}
   {{- (semverCompare ">= 1.27-0" (include "kubeVersion" .)) -}}
 {{- end -}}
+
+{{/*
+Name of the Gateway resource. Uses gateway.name if set, otherwise derives one from the release name.
+*/}}
+{{- define "sftd.gatewayName" -}}
+{{- if .Values.gateway.name -}}
+{{ .Values.gateway.name }}
+{{- else -}}
+{{ include "sftd.fullname" . }}-gateway
+{{- end -}}
+{{- end -}}
