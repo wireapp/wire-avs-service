@@ -164,7 +164,6 @@ gateway:
   # Name of the Gateway resource. Defaults to <release-name>-gateway when empty.
   name: ""
   # GatewayClass name. Required when create: true.
-  # Use "envoy-shared" for the shared Envoy proxy (mergeGateways: true).
   className: ""
   # Namespace of the Gateway. Defaults to release namespace when empty.
   # Only set this when referencing an existing Gateway in another namespace.
