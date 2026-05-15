@@ -1,0 +1,24 @@
+{{- if and .Values.gateway.enabled .Values.gateway.create }}
+{{- if not .Values.gateway.className }}
+{{- fail "gateway.className must be set when gateway.create is true" }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "sftd.gatewayName" . | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sftd.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ .Values.gateway.className | quote }}
+  listeners:
+    - name: https
+      port: {{ .Values.gateway.listeners.https.port }}
+      protocol: HTTPS
+      hostname: {{ required "host must be set" .Values.host | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ include "sftd.fullname" . | quote }}
+            kind: Secret
+{{- end }}

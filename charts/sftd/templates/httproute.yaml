@@ -1,0 +1,42 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "sftd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sftd.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "sftd.gatewayName" . | quote }}
+      namespace: {{ .Values.gateway.namespace | default .Release.Namespace | quote }}
+      kind: Gateway
+      sectionName: https
+  hostnames:
+    - {{ required "host must be set" .Values.host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /sft/
+      backendRefs:
+        - name: {{ include "sftd.fullname" . }}
+          port: 8585
+          kind: Service
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /sfts/
+      backendRefs:
+        - name: {{ include "sftd.fullname" . }}-join-call
+          port: 80
+          kind: Service
+    - matches:
+        - path:
+            type: Exact
+            value: /sft_servers_all.json
+      backendRefs:
+        - name: {{ include "sftd.fullname" . }}-join-call
+          port: 80
+          kind: Service
+{{- end }}
