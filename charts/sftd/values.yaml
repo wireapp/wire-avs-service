@@ -171,3 +171,9 @@ gateway:
   listeners:
     https:
       port: 443
+  # ClientTrafficPolicy configuration for handling overlapping hostnames
+  clientTrafficPolicy:
+    enabled: false
+    alpnProtocols:
+      - h2
+      - http/1.1

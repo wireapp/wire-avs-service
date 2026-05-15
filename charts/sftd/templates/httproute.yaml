@@ -19,12 +19,6 @@ spec:
         - path:
             type: PathPrefix
             value: /sft/
-      filters:
-        - type: ResponseHeaderModifier
-          responseHeaderModifier:
-            set:
-              - name: Access-Control-Allow-Origin
-                value: {{ required "Must specify allowOrigin" .Values.allowOrigin | quote }}
       backendRefs:
         - name: {{ include "sftd.fullname" . }}
           port: 8585
@@ -33,12 +27,6 @@ spec:
         - path:
             type: PathPrefix
             value: /sfts/
-      filters:
-        - type: ResponseHeaderModifier
-          responseHeaderModifier:
-            set:
-              - name: Access-Control-Allow-Origin
-                value: {{ required "Must specify allowOrigin" .Values.allowOrigin | quote }}
       backendRefs:
         - name: {{ include "sftd.fullname" . }}-join-call
           port: 80
@@ -47,12 +35,6 @@ spec:
         - path:
             type: Exact
             value: /sft_servers_all.json
-      filters:
-        - type: ResponseHeaderModifier
-          responseHeaderModifier:
-            set:
-              - name: Access-Control-Allow-Origin
-                value: {{ required "Must specify allowOrigin" .Values.allowOrigin | quote }}
       backendRefs:
         - name: {{ include "sftd.fullname" . }}-join-call
           port: 80
