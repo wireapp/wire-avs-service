@@ -50,7 +50,7 @@ usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] [-u
 
 | Parameter                       | Default | Description                                                                                                                                                                           |
 |---------------------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `terminationGracePeriodSeconds` | `10`    | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating |
+| `terminationGracePeriodSeconds` | `0`     | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating |
 | `replicaCount`                  | `1`     | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                                   |
 | `nodeSelector`, `affinity`      | `{}`    | Used to constraint SFT servers to only run on specific nodes                                                                                                                          |
 | `coredeumps.enabled`            | `false` | Enable recording of coredumps for testing and debugging.                                                                                                                              |
