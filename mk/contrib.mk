@@ -104,7 +104,8 @@ CONTRIB_AVS_BUILD_PATH := $(AVS_PATH)
 CONTRIB_AVS_TARGET := $(AVS_PATH)/lib/libavscore.a
 
 $(CONTRIB_AVS_TARGET): $(TOOLCHAIN_MASTER)
-	@make -C $(AVS_DIR) HAVE_WEBRTC= NO_OPENSSL=1 contrib_protobuf dist_host
+	@DO_NOT_UPDATE_CONFIG_SCRIPTS=1 \
+	make -C $(AVS_DIR) HAVE_WEBRTC= NO_OPENSSL=1 contrib_protobuf dist_host
 
 .PHONY: contrib_avs
 contrib_avs: $(CONTRIB_AVS_TARGET)
