@@ -16,8 +16,8 @@ annotations:
   # must conform to https://github.com/helm/community/blob/main/hips/hip-0015.md
   # The sftd tag below is a placeholder, rewritten to the published appVersion
   # when the chart is packaged (see the sed in the Jenkinsfile). Do not write a
-  # real tag here, and do not repeat the placeholder string in a comment - the
-  # substitution is a global sed.
+  # real tag here, and do not repeat the placeholder string in a comment.
+  # The substitution is a global sed.
   helm.sh/images: |
     - name: sftd
       image: quay.io/wire/sftd:do-not-use

@@ -270,8 +270,8 @@ pipeline {
 
                     # The HIP-0015 helm.sh/images annotation cannot know the image
                     # tag, which is only decided here. The chart commits the
-                    # placeholder :do-not-use and we substitute it, matching the
-                    # webapp, team-settings and account-pages pipelines.
+                    # placeholder :do-not-use and we substitute it, matching other
+                    # pipelines.
                     sed -i "s/:do-not-use/:$app_version/g" ./charts/sftd/Chart.yaml
 
                     # just in case the workdir was not cleaned
