@@ -50,6 +50,24 @@ pipeline {
             agent {
                 dockerfile true
             }
+
+            environment {
+                // contrib/avs/contrib/sodium/autogen.sh re-downloads config.guess
+                // and config.sub over the copies `automake --add-missing` just
+                // installed, and breaks them two ways:
+                //
+                //   * `curl -o` creates the file 0644 and `mv -f` keeps that, so
+                //     the replacements are not executable and configure fails with
+                //     "cannot run .../config.sub" even on a successful download.
+                //   * `curl -sL` has no -f, so an HTTP error exits 0 and the error
+                //     body is installed as the script. git.savannah.gnu.org has
+                //     been serving errors for that gitweb blob_plain URL.
+                //
+                // This variable is autogen.sh's own opt-out for the download. The
+                // automake-installed copies are correct and executable.
+                DO_NOT_UPDATE_CONFIG_SCRIPTS = '1'
+            }
+
             steps {
                 script {
                     def vcs = checkout([
