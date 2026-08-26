@@ -95,7 +95,7 @@ joinCall:
   securityContext:
     runAsUser: 101
   image:
-    repository: nginxinc/nginx-unprivileged
+    repository: docker.io/nginxinc/nginx-unprivileged
     pullPolicy: IfNotPresent
     tag: "1.29.5-alpine3.23-perl"
 sftdDisco:
@@ -142,11 +142,6 @@ coredumps:
 # fields/options.
 additionalCmdArgs: ""
 
-# init container image to fetch the external IP address of the node
-initImage:
-  repository: bitnamilegacy/kubectl
-  pullPolicy: IfNotPresent
-  tag: "1.29.11"
 
 # Set to false when migrating to Gateway API (gateway.enabled: true) and the
 # nginx Ingress is no longer needed.
