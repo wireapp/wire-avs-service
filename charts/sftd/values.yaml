@@ -92,7 +92,7 @@ tls: {}
 joinCall:
   replicaCount: 3
   image:
-    repository: nginxinc/nginx-unprivileged
+    repository: docker.io/nginxinc/nginx-unprivileged
     pullPolicy: IfNotPresent
     tag: "1.29.5-alpine3.23-perl"
 sftdDisco:
