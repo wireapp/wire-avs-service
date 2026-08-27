@@ -189,10 +189,7 @@ spec:
               {{- else }}
               EXTERNAL_IP=""
               {{- end }}
-              MEDIA_IP=$(echo '{{ include "sftd.mediaIp" . }}' \
-                | sed -e "s;__SFT_EXT_IP__;${EXTERNAL_IP};g" \
-                      -e "s;__SFT_POD_IP__;${POD_IP};g" \
-                      -e "s;__SFT_HOST_IP__;${HOST_IP};g")
+              MEDIA_IP="{{ include "sftd.mediaIpShell" . }}"
 
               if [ -z "${MEDIA_IP}" ]; then
                 ACCESS_ARGS=

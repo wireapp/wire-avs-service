@@ -126,8 +126,12 @@ expect 'mediaIP=__SFT_HOST_IP__ keeps initContainers for multiSFT discovery' pre
 	--set mediaIP=__SFT_HOST_IP__ \
 	--set multiSFT.discoveryRequired=true \
 	--set multiSFT.turnDiscoveryURL=https://turn.wire.example/discovery
-expect 'mediaIP literal is substituted verbatim' present "MEDIA_IP=\$(echo '203.0.113.7'" \
+expect 'mediaIP literal is substituted verbatim' present 'MEDIA_IP="203.0.113.7"' \
 	--set mediaIP=203.0.113.7
+expect 'mediaIP unset resolves to the helper variable' present 'MEDIA_IP="${EXTERNAL_IP}"'
+expect 'mediaIP=__SFT_HOST_IP__ resolves to HOST_IP' present 'MEDIA_IP="${HOST_IP}"' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'no sed runs on the discovered address' absent 's;__SFT_EXT_IP__;'
 
 # advertiseInternalIp would duplicate the -A candidate when mediaIP is the pod address
 expect_error 'advertiseInternalIp with mediaIP=__SFT_HOST_IP__ is rejected' 'advertiseInternalIp is redundant' \

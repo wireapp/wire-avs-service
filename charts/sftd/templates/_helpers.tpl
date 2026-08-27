@@ -123,6 +123,21 @@ eq so an embedded form still counts. Returns "true" or "".
 {{- end -}}
 
 {{/*
+The effective mediaIP with each placeholder replaced by the shell variable that
+holds it, for use inside the container command. The substitution happens here at
+render time rather than with sed in the container, so a discovered address is
+only ever expanded inside a quoted shell variable and can never be parsed as
+part of a sed expression.
+*/}}
+{{- define "sftd.mediaIpShell" -}}
+{{- $ip := include "sftd.mediaIp" . -}}
+{{- $ip = replace "__SFT_EXT_IP__" "${EXTERNAL_IP}" $ip -}}
+{{- $ip = replace "__SFT_HOST_IP__" "${HOST_IP}" $ip -}}
+{{- $ip = replace "__SFT_POD_IP__" "${POD_IP}" $ip -}}
+{{- $ip -}}
+{{- end -}}
+
+{{/*
 Whether mediaIP resolves to the pod's own address. Under hostNetwork the pod and
 host addresses are the same, so both placeholders are equivalent for sftd.
 advertiseInternalIp already advertises that address via -B, so combining the two
