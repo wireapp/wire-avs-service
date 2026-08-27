@@ -158,8 +158,14 @@ spec:
               EXTERNAL_IP=$(cat /external-ip/ip)
               if [ -z "${EXTERNAL_IP}" ]; then
                 ACCESS_ARGS=
+              {{- if .Values.advertiseInternalIp }}
+                echo "sftd: advertiseInternalIp is set but no external IP is available; ignoring" >&2
+              {{- end }}
               else
                 ACCESS_ARGS="-A ${EXTERNAL_IP}"
+              {{- if .Values.advertiseInternalIp }}
+                ACCESS_ARGS="${ACCESS_ARGS} -B ${POD_IP}"
+              {{- end }}
               fi
 
               MULTI_SFT_ARGS=""
@@ -198,7 +204,6 @@ spec:
               exec sftd \
                       -I "${POD_IP}" \
                       -M "${POD_IP}" \
-                      {{ if .Values.internalIpListener }}-B "${POD_IP}"{{ end }} \
                       ${ACCESS_ARGS} \
                       ${MULTI_SFT_ARGS} \
                       {{ if .Values.turnDiscoveryEnabled }}-T{{ end }} \

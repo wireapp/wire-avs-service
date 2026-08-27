@@ -116,7 +116,7 @@ struct shutdown_entry {
 static void usage(void)
 {
 	(void)re_fprintf(stderr,
-			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] "
+			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-B <addr>] [-M <addr>] [-r <port>] "
 			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] "
 			 "[-q] [-w <count>] -T -t <URL> -s <path> -w <count>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
@@ -125,6 +125,8 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-p <port>       Port for HTTP requests (default: %d)\n",
 			 DEFAULT_REQ_PORT);
 	(void)re_fprintf(stderr, "\t-A <addr>       Address for media (default: same as request address)\n");
+	(void)re_fprintf(stderr, "\t-B <addr>       Additional address to advertise for media\n"
+			         "\t\t\t Only used when -A is set\n");
 	(void)re_fprintf(stderr, "\t-M <addr>       Address for metrics requests (default: %s)\n",
 			 DEFAULT_METRICS_ADDR);
 	(void)re_fprintf(stderr, "\t-r <port>       Port for metrics requests (default: %d)\n",
