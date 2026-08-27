@@ -67,6 +67,11 @@ spec:
               set -e
               max_tries=30
               count=0
+              addr=
+
+              # The main container reads this file unconditionally under `set -e`,
+              # so it has to exist even when no external IP is found.
+              : > /external-ip/ip
 
               while [ "$count" -lt "$max_tries" ]; do
                 # In the cloud, this setting is available to indicate the true IP address
@@ -78,7 +83,6 @@ spec:
                 fi
 
                 if [ -n "$addr" ]; then
-                  echo -n "$addr" | tee /dev/stderr > /external-ip/ip
                   break
                 fi
 
@@ -87,10 +91,17 @@ spec:
                 sleep 10
               done
 
+              # No external IP is a legitimate configuration: on a directly
+              # reachable node sftd can advertise its own host interfaces, which
+              # under hostNetwork are the node addresses. Leave the file empty and
+              # let sftd start without -A rather than CrashLooping the pod.
               if [ -z "$addr" ]; then
-                echo "Error: No external IP found after $max_tries attempts." >&2
-                exit 1
+                echo "WARNING: no external IP found for node $NODE_NAME after $max_tries attempts." >&2
+                echo "WARNING: sftd will start without -A and advertise its host interface addresses." >&2
+                echo "WARNING: if this node is behind NAT, clients will not be able to reach it." >&2
+                exit 0
               fi
+
               echo -n "$addr" | tee /dev/stderr > /external-ip/ip
           securityContext:
             allowPrivilegeEscalation: false
