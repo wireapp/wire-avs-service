@@ -97,12 +97,16 @@ expect_error 'sftTokenSecret with multiSFT is rejected' 'please set the secret a
 expect 'additionalCmdArgs is passed through' present '-x 42' \
 	--set additionalCmdArgs='-x 42'
 
-# NOTE: once PR #34 (advertiseInternalIp) merges and forward-merges to this
-# branch, add the two cases it needs here:
-#   expect 'advertiseInternalIp=false omits -B' absent '-B ${POD_IP}' \
-#   	--set advertiseInternalIp=false
-#   expect 'advertiseInternalIp=true adds -B to the -A branch' present \
-#   	'ACCESS_ARGS="${ACCESS_ARGS} -B ${POD_IP}"' --set advertiseInternalIp=true
+# advertiseInternalIp adds -B, but only in the branch that also sets -A, since
+# sftd only advertises the alt candidate when the primary media address is set
+expect 'advertiseInternalIp=false omits -B' absent '-B ${POD_IP}' \
+	--set advertiseInternalIp=false
+expect 'advertiseInternalIp=true adds -B alongside -A' present 'ACCESS_ARGS="${ACCESS_ARGS} -B ${POD_IP}"' \
+	--set advertiseInternalIp=true
+expect 'advertiseInternalIp=true warns when no external IP is available' present 'no external IP is available' \
+	--set advertiseInternalIp=true
+expect 'advertiseInternalIp=false does not warn' absent 'no external IP is available' \
+	--set advertiseInternalIp=false
 
 # coredumps raise the core limit before exec
 expect 'coredumps.enabled raises the core limit' present 'ulimit -c unlimited' \
