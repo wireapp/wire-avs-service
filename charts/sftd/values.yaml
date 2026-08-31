@@ -17,6 +17,10 @@ image:
 config:
   ingressClass: "nginx"
 
+# The cluster's DNS domain apex. Only change this if target cluster was
+# bootstrapped with a non-default domain.
+clusterDomain: cluster.local
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
