@@ -100,11 +100,3 @@ Name of the Gateway resource. Uses gateway.name if set, otherwise derives one fr
 {{ include "sftd.fullname" . }}-gateway
 {{- end -}}
 {{- end -}}
-
-{{/*
-Cluster DNS domain apex (e.g. cluster.local). Override via clusterDomain for
-clusters that were bootstrapped with a non-default domain.
-*/}}
-{{- define "sftd.clusterDomain" -}}
-{{ default "cluster.local" .Values.clusterDomain }}
-{{- end -}}
