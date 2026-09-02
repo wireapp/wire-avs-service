@@ -113,6 +113,13 @@ sftdDisco:
 # DOCS: https://docs.wire.com/understand/sft.html#prerequisites
 turnDiscoveryEnabled: false
 
+# Additionally advertise the pod's internal IP as an ICE candidate, alongside the
+# external IP. Needed when the SFT is reachable on both an internal and an external
+# address: a TURN server in front of it must be given permission for both.
+# This does not open another listener; sftd always binds media on 0.0.0.0.
+# Has no effect unless an external IP is available (see externalIP settings).
+advertiseInternalIp: false
+
 # Allow establishing calls involving remote SFT servers (e.g. for Federation)
 # Requires appVersion 3.1.10 or later
 # sftd must be directly configured with the authentication secret used by
