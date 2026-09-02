@@ -17,10 +17,12 @@ VALUES="${CHART}/values.test.yaml"
 failures=0
 
 # render <helm --set args...> -> rendered statefulset command block on stdout
+TEMPLATE="templates/statefulset.yaml"
+
 render() {
 	helm template sftd "${CHART}" \
 		--values "${VALUES}" \
-		--show-only templates/statefulset.yaml \
+		--show-only "${TEMPLATE}" \
 		"$@"
 }
 
@@ -103,10 +105,48 @@ expect 'advertiseInternalIp=false omits -B' absent '-B ${POD_IP}' \
 	--set advertiseInternalIp=false
 expect 'advertiseInternalIp=true adds -B alongside -A' present 'ACCESS_ARGS="${ACCESS_ARGS} -B ${POD_IP}"' \
 	--set advertiseInternalIp=true
-expect 'advertiseInternalIp=true warns when no external IP is available' present 'no external IP is available' \
+expect 'advertiseInternalIp=true warns when no media address is available' present 'no media address is available' \
 	--set advertiseInternalIp=true
-expect 'advertiseInternalIp=false does not warn' absent 'no external IP is available' \
+expect 'advertiseInternalIp=false does not warn' absent 'no media address is available' \
 	--set advertiseInternalIp=false
+
+# mediaIP selects the advertised media address and decides whether the
+# get-external-ip helper runs at all
+expect 'mediaIP unset keeps the external-ip helper' present '- name: get-external-ip'
+expect 'mediaIP unset reads the helper output' present 'EXTERNAL_IP=$(cat /external-ip/ip)'
+expect 'mediaIP=__SFT_HOST_IP__ drops the helper' absent '- name: get-external-ip' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'mediaIP=__SFT_HOST_IP__ does not read the helper output' absent 'cat /external-ip/ip' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'mediaIP=__SFT_HOST_IP__ empties EXTERNAL_IP at render time' present 'EXTERNAL_IP=""' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'mediaIP=__SFT_HOST_IP__ drops the initContainers key' absent 'initContainers:' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'mediaIP=__SFT_HOST_IP__ keeps initContainers for multiSFT discovery' present 'initContainers:' \
+	--set mediaIP=__SFT_HOST_IP__ \
+	--set multiSFT.discoveryRequired=true \
+	--set multiSFT.turnDiscoveryURL=https://turn.wire.example/discovery
+expect 'mediaIP literal is substituted verbatim' present 'MEDIA_IP="203.0.113.7"' \
+	--set mediaIP=203.0.113.7
+expect 'mediaIP unset resolves to the helper variable' present 'MEDIA_IP="${EXTERNAL_IP}"'
+expect 'mediaIP=__SFT_HOST_IP__ resolves to HOST_IP' present 'MEDIA_IP="${HOST_IP}"' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'no sed runs on the discovered address' absent 's;__SFT_EXT_IP__;'
+
+# advertiseInternalIp would duplicate the -A candidate when mediaIP is the pod address
+expect_error 'advertiseInternalIp with mediaIP=__SFT_HOST_IP__ is rejected' 'advertiseInternalIp is redundant' \
+	--set mediaIP=__SFT_HOST_IP__ --set advertiseInternalIp=true
+expect_error 'advertiseInternalIp with mediaIP=__SFT_POD_IP__ is rejected' 'advertiseInternalIp is redundant' \
+	--set mediaIP=__SFT_POD_IP__ --set advertiseInternalIp=true
+
+# the node-read RBAC exists only for the helper, so it follows the same gate
+TEMPLATE="templates/service-account.yaml"
+expect 'mediaIP unset grants node-read RBAC' present 'kind: ClusterRoleBinding'
+expect 'mediaIP=__SFT_HOST_IP__ drops node-read RBAC' absent 'kind: ClusterRoleBinding' \
+	--set mediaIP=__SFT_HOST_IP__
+expect 'mediaIP=__SFT_HOST_IP__ keeps the ServiceAccount' present 'kind: ServiceAccount' \
+	--set mediaIP=__SFT_HOST_IP__
+TEMPLATE="templates/statefulset.yaml"
 
 # coredumps raise the core limit before exec
 expect 'coredumps.enabled raises the core limit' present 'ulimit -c unlimited' \

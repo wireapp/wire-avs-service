@@ -100,3 +100,50 @@ Name of the Gateway resource. Uses gateway.name if set, otherwise derives one fr
 {{ include "sftd.fullname" . }}-gateway
 {{- end -}}
 {{- end -}}
+
+{{/*
+The address sftd advertises to clients for media, i.e. the argument to -A.
+Unset defaults to __SFT_EXT_IP__, which keeps the get-external-ip helper on and
+preserves the behaviour of charts that never set mediaIP. Used by both the
+rendered command and the placeholder detection below, so the two cannot drift.
+*/}}
+{{- define "sftd.mediaIp" -}}
+{{- default "__SFT_EXT_IP__" .Values.mediaIP -}}
+{{- end -}}
+
+{{/*
+Whether the rendered command depends on the node's discovered external IP. This
+drives whether the get-external-ip init container and its node-read RBAC are
+included. True when mediaIP falls back to __SFT_EXT_IP__ because it is unset, or
+when it is set to a value embedding the placeholder. Uses contains rather than
+eq so an embedded form still counts. Returns "true" or "".
+*/}}
+{{- define "sftd.usesExternalIp" -}}
+{{- if contains "__SFT_EXT_IP__" (include "sftd.mediaIp" .) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The effective mediaIP with each placeholder replaced by the shell variable that
+holds it, for use inside the container command. The substitution happens here at
+render time rather than with sed in the container, so a discovered address is
+only ever expanded inside a quoted shell variable and can never be parsed as
+part of a sed expression.
+*/}}
+{{- define "sftd.mediaIpShell" -}}
+{{- $ip := include "sftd.mediaIp" . -}}
+{{- $ip = replace "__SFT_EXT_IP__" "${EXTERNAL_IP}" $ip -}}
+{{- $ip = replace "__SFT_HOST_IP__" "${HOST_IP}" $ip -}}
+{{- $ip = replace "__SFT_POD_IP__" "${POD_IP}" $ip -}}
+{{- $ip -}}
+{{- end -}}
+
+{{/*
+Whether mediaIP resolves to the pod's own address. Under hostNetwork the pod and
+host addresses are the same, so both placeholders are equivalent for sftd.
+advertiseInternalIp already advertises that address via -B, so combining the two
+would advertise one address twice.
+*/}}
+{{- define "sftd.mediaIpIsPodAddress" -}}
+{{- $ip := include "sftd.mediaIp" . -}}
+{{- if or (contains "__SFT_POD_IP__" $ip) (contains "__SFT_HOST_IP__" $ip) -}}true{{- end -}}
+{{- end -}}

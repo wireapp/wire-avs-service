@@ -60,7 +60,30 @@ resources: {}
   #   cpu: 100m
   #   memory: 128Mi
 
+# The address sftd advertises to clients for media, i.e. the argument to -A.
+# sftd always binds media on 0.0.0.0, so this address is advertised only and does
+# not have to exist on a node interface.
+#
+# Accepted values:
+#   __SFT_EXT_IP__   the node external IP, discovered by the get-external-ip
+#                    init container. This is the default when mediaIP is unset.
+#   __SFT_HOST_IP__  the node address, from status.hostIP.
+#   __SFT_POD_IP__   the pod address, from status.podIP. sftd runs with
+#                    hostNetwork, so this is the same address as __SFT_HOST_IP__.
+#   a literal        for example 203.0.113.7.
+#
+# Set this to a host or literal address if clients reach sftd directly. The
+# get-external-ip init container, its node-read RBAC, and its startup delay of
+# up to 5 minutes are then all omitted.
+#
+# Leave this unset if the node is behind NAT. Clients cannot reach the node
+# address in that case, so sftd must advertise the discovered external IP.
+# mediaIP: __SFT_HOST_IP__
+
 externalIpHelper:
+  # This helper runs only when mediaIP references __SFT_EXT_IP__, which is the
+  # default. A host or literal mediaIP removes the helper and its RBAC.
+  #
   # The image used for the initContainer that determines the external IP address of the node.
   # This is a very small image that just contains kubectl, and is only used during startup.
   # We chose the `compat` flavor of the image since we need a shell to run the command that determines the external IP address, and the `compat` image includes a shell.
