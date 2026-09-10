@@ -118,8 +118,8 @@ coredumps:
 # fields/options.
 additionalCmdArgs: ""
 
-# init container image to fetch the external IP address of the node
+# init container image to fetch the external IP address of the node.
 initImage:
-  repository: bitnamilegacy/kubectl
+  repository: docker.io/alpine/kubectl
   pullPolicy: IfNotPresent
-  tag: "1.29.11"
+  tag: "1.35.1"
