@@ -1699,6 +1699,7 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 	struct rtp_stream *rtpsv = NULL;
 	int rtpsc = 0;
 	struct rtp_stream *rs;
+	struct rtp_stream *free_rs = NULL;
 	enum select_mode mode;
 	bool found = false;
 	bool uses_kg = true;
@@ -1738,8 +1739,11 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 
 	for(i = uses_kg ? 1 : 0; !found && i < rtpsc; i++) {
 		rs = &rtpsv[i];
-		
+
 		found = ssrc == rs->current_ssrc;
+		if (0 == rs->current_ssrc && !free_rs) {
+			free_rs = rs;
+		}
 	}
 	if (found)
 		return rs;
@@ -1761,7 +1765,45 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 		break;
 	}
 
-	return found ? rs : NULL;
+	if (!found) {
+		return free_rs ? free_rs : NULL;
+	}
+	else {
+		return rs;
+	}
+}
+
+static void rtp_stream_reset(struct call *call,
+			     uint32_t ssrc,
+			     enum rtp_stream_type rst)
+{
+	struct rtp_stream *rtpsv = NULL;
+	int rtpsc = 0;
+	struct rtp_stream *rs;
+	bool found = false;
+	int i;
+
+	switch (rst) {
+	case RTP_STREAM_TYPE_AUDIO:
+		rtpsv = call->audio.rtps.v;
+		rtpsc = call->audio.rtps.c;
+		break;
+
+	case RTP_STREAM_TYPE_VIDEO:
+		rtpsv = call->video.rtps.v;
+		rtpsc = call->video.rtps.c;
+		break;
+
+	default:
+		break;
+	}
+
+	for (i = 0; i < rtpsc && !found; ++i) {
+		rs = &rtpsv[i];
+		found = rs->current_ssrc == ssrc;
+	}
+	if (found)
+		rs->current_ssrc = 0;
 }
 
 static void rtp_stream_update(struct rtp_stream *rs,
@@ -2509,6 +2551,12 @@ static void process_rtp(struct call *call,
 			}
 		}
 
+		/* Clamp to absoulte silence */
+		if (aulevel >= AUDIO_LEVEL_SILENCE) {
+			aulevel = AUDIO_LEVEL_ABS_SILENCE;
+		}
+
+#if 0
 		if (is_selective) {
 			if ((rst == RTP_STREAM_TYPE_AUDIO && !kg)
 			 || (rst == RTP_STREAM_TYPE_VIDEO
@@ -2532,6 +2580,7 @@ static void process_rtp(struct call *call,
 				}
 			}
 		}
+#endif
 
 		if (!call->issft && !rcall->issft) {
 			/* Lookup this participant in remote list,
@@ -2938,7 +2987,7 @@ static void sft_http_resp_handler(int err, const struct http_msg *msg,
 {
 	struct sft_req_ctx *ctx = arg;
 	const uint8_t *buf = NULL;
-	int sz = 0;
+	size_t sz = 0;
 
 	info("sft_resp: done err %d, %d bytes to send\n",
 	     err, ctx->mb_body ? (int)ctx->mb_body->end : 0);
@@ -2961,7 +3010,7 @@ static void sft_http_resp_handler(int err, const struct http_msg *msg,
 
 			if (c) {
 				c += 7;
-				while (c - buf < sz && *c >= '0' && *c <= '9') {
+				while ((size_t)(c - buf ) < sz && *c >= '0' && *c <= '9') {
 					errcode *= 10;
 					errcode += *c - '0';
 					c++;
@@ -4607,6 +4656,8 @@ static int remove_participant(struct call *call, void *arg)
 		return 0;
 
 	lock_write_get(g_sft->lock);
+	rtp_stream_reset(other, call->audio.ssrc, RTP_STREAM_TYPE_AUDIO);
+
 	le = call->partl.head;
 	while(le && !found) {
 		struct participant *part = le->data;
@@ -4623,6 +4674,7 @@ static int remove_participant(struct call *call, void *arg)
 			}
 			info("remove_part: part=%p(refs=%d)\n",
 			     part, (int)mem_nrefs(part));
+
 			mem_deref(part);
 			found = true;
 		}
