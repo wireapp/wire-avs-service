@@ -82,23 +82,21 @@ tls:
     kind: ClusterIssuer
 ```
 
-Gateway mode always creates a `gateway.networking.k8s.io/v1` ListenerSet and
-attaches the HTTPRoute to its HTTPS listener. Install Gateway API CRDs and an
-Envoy Gateway version that supports v1 ListenerSet and ListenerSet policy targets
-(tested with Envoy Gateway 1.9.2). The Gateway has a separate placeholder listener
-on port 65535 that denies all routes. `gateway.listeners.placeholder.port` must
-differ from the HTTPS port. TLS certificates stay in the release namespace.
+Gateway mode uses a `gateway.networking.k8s.io/v1` ListenerSet for HTTPS and
+HTTPRoute attachment (tested with Envoy Gateway 1.9.2). Install CRDs and a
+controller supporting v1 ListenerSet and its policy targets. Certificates stay
+in the release namespace. The required Gateway placeholder listener denies all
+routes; its port (`gateway.listeners.placeholder.port`, default 65535) must
+differ from HTTPS.
 
-To attach to an existing Gateway, set `gateway.create: false`, `gateway.name`,
-and optionally `gateway.namespace`. That Gateway's `allowedListeners` must allow
-the release namespace. The chart's TLS/ALPN and optional zone-aware backend
-policies target its own ListenerSet. It does not manage the existing Gateway's
-proxy fleet. Both ingress toggles may be enabled during migration; ensure DNS
-points to the intended controller.
+For an existing Gateway, set `gateway.create: false`, `gateway.name`, and
+optionally `gateway.namespace`. Its `allowedListeners` must permit the release
+namespace. The chart manages its own ListenerSet and policies, not the existing
+proxy fleet. Both ingress toggles can be enabled during migration; point DNS at
+the intended controller.
 
-Gateway TLS defaults to TLS 1.3, with the same `gateway.tls`, `gateway.alpn`, and
-`gateway.proxyProtocol` settings as wire-ingress. To select Envoy's FIPS_202205
-TLS profile instead:
+TLS defaults to 1.3, using wire-ingress's `gateway.tls`, `gateway.alpn`, and
+`gateway.proxyProtocol` settings. For Envoy's FIPS_202205 TLS profile:
 
 ```yaml
 FIPS_202205_tls_profile: true
@@ -107,37 +105,31 @@ gateway:
     xdsNameSchemeV2: false
 ```
 
-Set `xdsNameSchemeV2` to match the controller's runtime flag: false is the default
-before Envoy Gateway 1.10, true from 1.10. The controller must enable
-`extensionApis.enableEnvoyPatchPolicy`. This profile overrides the other TLS
-settings with TLS 1.2/1.3, AES-GCM, and P-256/P-384 key agreement. Use an ECDSA
-P-256/P-384 certificate; this chart's cert-manager Certificate uses P-384.
-This selects a TLS profile, not a FIPS-certified Envoy binary.
+Match `xdsNameSchemeV2` to the controller runtime flag (default false before
+Envoy Gateway 1.10, true from 1.10), and enable the controller's
+`extensionApis.enableEnvoyPatchPolicy`. FIPS mode overrides TLS settings with
+TLS 1.2/1.3, AES-GCM, and P-256/P-384 key agreement. Use an ECDSA P-256/P-384
+certificate; cert-manager defaults to P-384 in this chart. This is a TLS profile,
+not a FIPS-certified Envoy binary.
 
-FIPS mode requires a dedicated, non-merged Gateway in the release namespace.
-The patch affects every TLS filter chain on its HTTPS socket. With an externally
-managed Gateway, verify it does not merge Gateways and that the ClientTrafficPolicy
-and EnvoyPatchPolicy are accepted. For the legacy xDS naming scheme, override
-`gateway.patchPolicies.xdsListenerName` if another listener is first on that port.
-The unpatched baseline intentionally permits only TLS 1.2 with restricted
-ciphers, curves, and signatures; verify a successful TLS 1.3 handshake and the
-applied compliance policy before considering FIPS deployment complete.
+FIPS requires a dedicated, non-merged Gateway in the release namespace; its
+patch affects every TLS filter chain on the HTTPS socket. With an existing
+Gateway, check that ClientTrafficPolicy is accepted and EnvoyPatchPolicy is
+programmed. For legacy xDS names, set `gateway.patchPolicies.xdsListenerName`
+if another listener is first on that port. An unapplied patch leaves a restricted
+TLS 1.2 baseline, so also verify a successful TLS 1.3 handshake.
 
-The chart-created Envoy proxy defaults to two replicas, a PDB with
-`minAvailable: 1`, and advisory spread across nodes and availability zones.
-Configure `gateway.envoyProxy.replicas` and `gateway.envoyProxy.topologySpreadKeys`
-to adjust these. `gateway.envoyProxy.spec` overrides defaults; the PDB is omitted
-when the final replica count is one. These settings affect Envoy, independently
-of the existing SFT replica count and PDB. Spreading is advisory and needs enough
-eligible nodes/zones. Optional `gateway.zoneAwareRouting.enabled` prefers local
-backend endpoints and requires Envoy Gateway's topology injector and node zone
-labels.
+Envoy defaults to two replicas, a PDB with `minAvailable: 1`, and advisory
+node/AZ spread. Adjust `gateway.envoyProxy.replicas` and `.topologySpreadKeys`,
+or override defaults through `.spec`. A final replica count of one omits the
+PDB. SFT replicas and their PDB remain independent. Spread needs eligible nodes
+in multiple zones; optional `gateway.zoneAwareRouting.enabled` prefers local
+backends and requires the topology injector and node zone labels.
 
-Use `gateway.annotations` for Gateway annotations and
-`gateway.infrastructure.annotations`/`labels` for generated infrastructure
-(for example, load-balancer annotations). `gateway.serviceType` defaults to
-`LoadBalancer`; set `gateway.manageServiceType: false` to manage it through the
-free-form EnvoyProxy spec instead.
+Use `gateway.annotations` for the Gateway and
+`gateway.infrastructure.annotations`/`labels` for generated resources (including
+load-balancer annotations). `gateway.serviceType` defaults to `LoadBalancer`;
+set `gateway.manageServiceType: false` to control it through the EnvoyProxy spec.
 
 #### Standalone
 

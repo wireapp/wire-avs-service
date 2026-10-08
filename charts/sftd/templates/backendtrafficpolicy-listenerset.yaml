@@ -1,6 +1,4 @@
-{{- if .Values.gateway.enabled }}
-{{- if .Values.gateway.zoneAwareRouting.enabled }}
-{{/* The CRD requires an explicit load balancer type alongside zoneAware. */}}
+{{- if and .Values.gateway.enabled .Values.gateway.zoneAwareRouting.enabled }}
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
@@ -18,5 +16,4 @@ spec:
     zoneAware:
       preferLocal:
         minEndpointsThreshold: {{ .Values.gateway.zoneAwareRouting.minEndpointsThreshold }}
-{{- end }}
 {{- end }}

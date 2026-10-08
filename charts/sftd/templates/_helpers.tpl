@@ -148,7 +148,7 @@ would advertise one address twice.
 {{- if or (contains "__SFT_POD_IP__" $ip) (contains "__SFT_HOST_IP__" $ip) -}}true{{- end -}}
 {{- end -}}
 
-{{/* Shared TLS/ALPN settings for the ListenerSet and federation policies. */}}
+{{/* ListenerSet TLS/ALPN settings. */}}
 {{- define "sftd.downstreamTls" -}}
 {{- $tls := .Values.gateway.tls -}}
 {{- if .Values.gateway.alpn.enabled }}
@@ -182,7 +182,7 @@ minVersion: {{ $minVersion | quote }}
 {{- if $tls.maxVersion }}
 maxVersion: {{ $tls.maxVersion | toString | quote }}
 {{- end }}
-{{- /* EG rejects ciphers alongside minVersion 1.3; suites only affect TLS <=1.2. */}}
+{{- /* Envoy Gateway rejects ciphers with minVersion 1.3. */}}
 {{- if and $tls.ciphers (ne $minVersion "1.3") }}
 ciphers: {{ toJson $tls.ciphers }}
 {{- end }}

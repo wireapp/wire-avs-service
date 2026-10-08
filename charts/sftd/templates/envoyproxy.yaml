@@ -1,15 +1,6 @@
-{{- if .Values.gateway.enabled }}
-{{- if (and .Values.gateway.create .Values.gateway.envoyProxy.create) }}
+{{- if and .Values.gateway.enabled .Values.gateway.create .Values.gateway.envoyProxy.create }}
 {{- $name := .Values.gateway.envoyProxy.name | default (include "sftd.gatewayName" .) }}
-{{- /*
-  Envoy Gateway access logs include the request path by default, including the
-  query string. We intentionally strip it here because browser-only flows may
-  need to send access_token as a query parameter, and that must never end up in
-  access logs.
-
-  Envoy Gateway requires an explicit sink when accessLog settings are set, so we
-  send the redacted format to /dev/stdout through a File sink.
-*/ -}}
+{{/* Strip query strings from access logs to avoid leaking tokens. */}}
 {{- $accessLogJSON := dict
   "start_time" "%START_TIME%"
   "method" "%REQ(:METHOD)%"
@@ -54,18 +45,17 @@
 {{- $spec := dict
     "telemetry" (dict "accessLog" (dict "settings" (list $accessLogSetting)))
     "provider" (dict "type" "Kubernetes" "kubernetes" $kubernetes) -}}
-{{- /* Merge deployment and telemetry overrides before deriving the PDB. */ -}}
 {{- with $ep.spec }}
 {{- $spec = mergeOverwrite $spec (deepCopy .) }}
 {{- end }}
 {{- $k8s := $spec.provider.kubernetes }}
-{{- /* Derive the PDB from the final replica count, including spec overrides. */ -}}
+{{/* Use the final replica count, including spec overrides. */}}
 {{- if eq (int $k8s.envoyDeployment.replicas) 1 }}
 {{- $_ := unset $k8s "envoyPDB" }}
 {{- else }}
 {{- $_ := set $k8s "envoyPDB" (dict "minAvailable" 1) }}
 {{- end }}
-{{- /* Shorthand for one leaf, so it must not replace the whole provider stanza. */ -}}
+{{/* Preserve other envoyService overrides. */}}
 {{- if .Values.gateway.manageServiceType }}
 {{- $_ := set $k8s "envoyService" (merge (dict "type" .Values.gateway.serviceType) ($k8s.envoyService | default dict)) }}
 {{- end }}
@@ -78,5 +68,4 @@ metadata:
     {{- include "sftd.labels" . | nindent 4 }}
 spec:
 {{- toYaml $spec | nindent 2 }}
-{{- end }}
 {{- end }}

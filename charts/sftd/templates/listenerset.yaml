@@ -1,5 +1,5 @@
 {{- if .Values.gateway.enabled }}
-{{- if and .Values.gateway.create (and .Values.gateway.namespace (ne .Values.gateway.namespace .Release.Namespace)) }}
+{{- if and .Values.gateway.create .Values.gateway.namespace (ne .Values.gateway.namespace .Release.Namespace) }}
 {{- fail "gateway.namespace must match the release namespace when gateway.create is true" }}
 {{- end }}
 apiVersion: gateway.networking.k8s.io/v1

@@ -186,16 +186,13 @@ ingress:
 # during migration; disable ingress.enabled in a follow-up apply once verified.
 gateway:
   enabled: false
-  # When true, a Gateway resource is created by this chart.
-  # Set to false when attaching a ListenerSet to an existing Gateway.
-  # Its allowedListeners must permit this namespace.
+  # Create a Gateway, or attach to an existing one whose allowedListeners permits this namespace.
   create: true
-  # Name of the Gateway resource. Defaults to <fullname>-gateway when empty.
+  # Defaults to <fullname>-gateway.
   name: ""
   # GatewayClass name. Required when create: true.
   className: ""
-  # Namespace of the Gateway. Defaults to release namespace when empty.
-  # Only set this when referencing an existing Gateway in another namespace.
+  # Existing Gateway namespace; defaults to the release namespace.
   namespace: ""
   listeners:
     https:
@@ -243,7 +240,7 @@ gateway:
     protocols: [h2, http/1.1]
   patchPolicies:
     enabled: true
-    # Required explicitly for FIPS mode; must match the controller runtime flag.
+    # FIPS requires this to match the controller runtime flag.
     # Envoy Gateway < 1.10 defaults to false, >= 1.10 to true.
     xdsNameSchemeV2: null
     # Legacy scheme: override if another listener is first on the HTTPS port.

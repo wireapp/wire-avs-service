@@ -20,7 +20,7 @@ spec:
   {{- if .Values.gateway.envoyProxy.create }}
   {{- $envoyProxyName = $envoyProxyName | default (include "sftd.gatewayName" .) }}
   {{- end }}
-  {{- if (or .Values.gateway.infrastructure.annotations .Values.gateway.infrastructure.labels $envoyProxyName) }}
+  {{- if or .Values.gateway.infrastructure.annotations .Values.gateway.infrastructure.labels $envoyProxyName }}
   infrastructure:
     {{- with .Values.gateway.infrastructure.annotations }}
     annotations:
