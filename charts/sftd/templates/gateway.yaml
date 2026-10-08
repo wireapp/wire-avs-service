@@ -1,24 +1,55 @@
 {{- if and .Values.gateway.enabled .Values.gateway.create }}
-{{- if not .Values.gateway.className }}
-{{- fail "gateway.className must be set when gateway.create is true" }}
+{{- $placeholderPort := int .Values.gateway.listeners.placeholder.port }}
+{{- if eq (int .Values.gateway.listeners.https.port) $placeholderPort }}
+{{- fail "gateway.listeners.placeholder.port must differ from the HTTPS listener port" }}
 {{- end }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: {{ include "sftd.gatewayName" . | quote }}
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.gateway.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "sftd.labels" . | nindent 4 }}
 spec:
-  gatewayClassName: {{ .Values.gateway.className | quote }}
+  gatewayClassName: {{ required "gateway.className is required when gateway.create is true" .Values.gateway.className | quote }}
+  {{- $envoyProxyName := .Values.gateway.envoyProxy.name }}
+  {{- if .Values.gateway.envoyProxy.create }}
+  {{- $envoyProxyName = $envoyProxyName | default (include "sftd.gatewayName" .) }}
+  {{- end }}
+  {{- if (or .Values.gateway.infrastructure.annotations .Values.gateway.infrastructure.labels $envoyProxyName) }}
+  infrastructure:
+    {{- with .Values.gateway.infrastructure.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.gateway.infrastructure.labels }}
+    labels:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if $envoyProxyName }}
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: {{ $envoyProxyName | quote }}
+    {{- end }}
+  {{- end }}
+  allowedListeners:
+    namespaces:
+      from: Same
   listeners:
-    - name: https
-      port: {{ .Values.gateway.listeners.https.port }}
-      protocol: HTTPS
-      hostname: {{ required "host must be set" .Values.host | quote }}
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: {{ include "sftd.fullname" . | quote }}
-            kind: Secret
+    # Required placeholder; a separate port avoids plaintext policy conflicts.
+    - name: placeholder
+      port: {{ .Values.gateway.listeners.placeholder.port }}
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: DoesNotExist
 {{- end }}

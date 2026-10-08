@@ -187,10 +187,10 @@ ingress:
 gateway:
   enabled: false
   # When true, a Gateway resource is created by this chart.
-  # Set to false when referencing an existing shared Gateway
-  # (e.g. one managed by the cluster operator with mergeGateways: true).
+  # Set to false when attaching a ListenerSet to an existing Gateway.
+  # Its allowedListeners must permit this namespace.
   create: true
-  # Name of the Gateway resource. Defaults to <release-name>-gateway when empty.
+  # Name of the Gateway resource. Defaults to <fullname>-gateway when empty.
   name: ""
   # GatewayClass name. Required when create: true.
   className: ""
@@ -200,3 +200,57 @@ gateway:
   listeners:
     https:
       port: 443
+    # Required Gateway-owned listener; denies all routes on a separate port.
+    placeholder:
+      port: 65535
+  annotations: {}
+  infrastructure:
+    annotations: {}
+    labels: {}
+  envoyProxy:
+    create: true
+    # Empty uses the Gateway name; with create: false, references an existing proxy.
+    name: ""
+    # Free-form EnvoyProxy spec overrides these defaults.
+    spec: {}
+    replicas: 2
+    # Advisory spread; set [] to disable. PDB minAvailable: 1 unless replicas is 1.
+    topologySpreadKeys:
+      - kubernetes.io/hostname
+      - topology.kubernetes.io/zone
+  manageServiceType: true
+  serviceType: LoadBalancer
+  zoneAwareRouting:
+    enabled: false
+    minEndpointsThreshold: 3
+  proxyProtocol:
+    enabled: false
+    optional: false
+  tls:
+    enabled: true
+    minVersion: "1.3"
+    maxVersion: "1.3"
+    ecdhCurves: ["X25519MLKEM768", "X25519", "P-256", "P-384", "P-521"]
+    # TLS <= 1.2 only; omitted when minVersion is 1.3.
+    ciphers:
+      - ECDHE-ECDSA-AES128-GCM-SHA256
+      - ECDHE-ECDSA-AES256-GCM-SHA384
+      - ECDHE-RSA-AES128-GCM-SHA256
+      - ECDHE-RSA-AES256-GCM-SHA384
+    signatureAlgorithms: []
+  alpn:
+    enabled: true
+    protocols: [h2, http/1.1]
+  patchPolicies:
+    enabled: true
+    # Required explicitly for FIPS mode; must match the controller runtime flag.
+    # Envoy Gateway < 1.10 defaults to false, >= 1.10 to true.
+    xdsNameSchemeV2: null
+    # Legacy scheme: override if another listener is first on the HTTPS port.
+    xdsListenerName: ""
+    targetGatewayClass: false
+
+# Overrides gateway.tls with Envoy's FIPS_202205 compliance profile.
+# Requires EnvoyPatchPolicy support and a dedicated, non-merged Gateway.
+# Use an ECDSA P-256/P-384 certificate (cert-manager above uses P-384).
+FIPS_202205_tls_profile: false
