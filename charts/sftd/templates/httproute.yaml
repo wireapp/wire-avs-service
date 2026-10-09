@@ -8,9 +8,10 @@ metadata:
     {{- include "sftd.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ include "sftd.gatewayName" . | quote }}
-      namespace: {{ .Values.gateway.namespace | default .Release.Namespace | quote }}
-      kind: Gateway
+    - name: {{ include "sftd.fullname" . | quote }}
+      namespace: {{ .Release.Namespace | quote }}
+      group: gateway.networking.k8s.io
+      kind: ListenerSet
       sectionName: https
   hostnames:
     - {{ required "host must be set" .Values.host | quote }}

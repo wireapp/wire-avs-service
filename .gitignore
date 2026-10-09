@@ -1,3 +1,4 @@
 build*
 src/static.c
 avsd
+tmp
