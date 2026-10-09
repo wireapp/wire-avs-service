@@ -10,9 +10,6 @@
 {{- if or (not .Values.gateway.tls.enabled) (not .Values.gateway.patchPolicies.enabled) }}
 {{- fail "FIPS_202205_tls_profile requires gateway.tls.enabled and gateway.patchPolicies.enabled" }}
 {{- end }}
-{{- if and .Values.gateway.namespace (ne .Values.gateway.namespace .Release.Namespace) }}
-{{- fail "FIPS_202205_tls_profile requires the Gateway in the release namespace" }}
-{{- end }}
 {{/* A wrong xDS name leaves the patch unapplied and the TLS 1.2 baseline active. */}}
 {{- if not (kindIs "bool" .Values.gateway.patchPolicies.xdsNameSchemeV2) }}
 {{- fail "gateway.patchPolicies.xdsNameSchemeV2 must be set explicitly to match the controller runtime flag in FIPS mode (default: false before Envoy Gateway 1.10, true from 1.10)" }}

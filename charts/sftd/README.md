@@ -73,7 +73,6 @@ ingress:
   enabled: false
 gateway:
   enabled: true
-  className: envoy
 host: calling.example.com
 allowOrigin: https://webapp.example.com
 tls:
@@ -89,11 +88,11 @@ in the release namespace. The required Gateway placeholder listener denies all
 routes; its port (`gateway.listeners.placeholder.port`, default 65535) must
 differ from HTTPS.
 
-For an existing Gateway, set `gateway.create: false`, `gateway.name`, and
-optionally `gateway.namespace`. Its `allowedListeners` must permit the release
-namespace. The chart manages its own ListenerSet and policies, not the existing
-proxy fleet. Both ingress toggles can be enabled during migration; point DNS at
-the intended controller.
+The GatewayClass defaults to `envoy`; override `gateway.className` if needed.
+For an existing Gateway in the release namespace, set `gateway.create: false`
+and `gateway.name`; its `allowedListeners` must permit local ListenerSets. The
+chart manages its own ListenerSet and policies, not the existing proxy fleet. Both ingress toggles can be enabled during migration;
+point DNS at the intended controller.
 
 TLS defaults to 1.3, using wire-ingress's `gateway.tls`, `gateway.alpn`, and
 `gateway.proxyProtocol` settings. For Envoy's FIPS_202205 TLS profile:
@@ -130,6 +129,18 @@ Use `gateway.annotations` for the Gateway and
 `gateway.infrastructure.annotations`/`labels` for generated resources (including
 load-balancer annotations). `gateway.serviceType` defaults to `LoadBalancer`;
 set `gateway.manageServiceType: false` to control it through the EnvoyProxy spec.
+
+Envoy Gateway's [default JSON access logs](https://gateway.envoyproxy.io/docs/tasks/observability/proxy-accesslog/#default-access-log)
+are used unchanged. Override them through `gateway.envoyProxy.spec.telemetry.accessLog`.
+
+For a smaller test environment, keep the TLS defaults and reduce infrastructure:
+
+```yaml
+gateway:
+  envoyProxy:
+    replicas: 1
+  serviceType: ClusterIP
+```
 
 #### Standalone
 

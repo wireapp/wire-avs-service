@@ -1,34 +1,5 @@
 {{- if and .Values.gateway.enabled .Values.gateway.create .Values.gateway.envoyProxy.create }}
 {{- $name := .Values.gateway.envoyProxy.name | default (include "sftd.gatewayName" .) }}
-{{/* Strip query strings from access logs to avoid leaking tokens. */}}
-{{- $accessLogJSON := dict
-  "start_time" "%START_TIME%"
-  "method" "%REQ(:METHOD)%"
-  "x-envoy-origin-path" "%PATH(NQ:ORIG_OR_PATH)%"
-  "protocol" "%PROTOCOL%"
-  "response_code" "%RESPONSE_CODE%"
-  "response_flags" "%RESPONSE_FLAGS%"
-  "response_code_details" "%RESPONSE_CODE_DETAILS%"
-  "connection_termination_details" "%CONNECTION_TERMINATION_DETAILS%"
-  "upstream_transport_failure_reason" "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
-  "bytes_received" "%BYTES_RECEIVED%"
-  "bytes_sent" "%BYTES_SENT%"
-  "duration" "%DURATION%"
-  "x-envoy-upstream-service-time" "%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%"
-  "x-forwarded-for" "%REQ(X-FORWARDED-FOR)%"
-  "user-agent" "%REQ(USER-AGENT)%"
-  "x-request-id" "%REQ(X-REQUEST-ID)%"
-  ":authority" "%REQ(:AUTHORITY)%"
-  "upstream_host" "%UPSTREAM_HOST%"
-  "upstream_cluster" "%UPSTREAM_CLUSTER%"
-  "upstream_local_address" "%UPSTREAM_LOCAL_ADDRESS%"
-  "downstream_local_address" "%DOWNSTREAM_LOCAL_ADDRESS%"
-  "downstream_remote_address" "%DOWNSTREAM_REMOTE_ADDRESS%"
-  "requested_server_name" "%REQUESTED_SERVER_NAME%"
-  "route_name" "%ROUTE_NAME%"
--}}
-{{- $accessLogSink := dict "type" "File" "file" (dict "path" "/dev/stdout") -}}
-{{- $accessLogSetting := dict "format" (dict "type" "JSON" "json" $accessLogJSON) "sinks" (list $accessLogSink) -}}
 {{- $ep := .Values.gateway.envoyProxy -}}
 {{- $deployment := dict "replicas" $ep.replicas -}}
 {{- with $ep.topologySpreadKeys -}}
@@ -41,10 +12,7 @@
 {{- end -}}
 {{- $_ := set $deployment "pod" (dict "topologySpreadConstraints" $spread) -}}
 {{- end -}}
-{{- $kubernetes := dict "envoyDeployment" $deployment -}}
-{{- $spec := dict
-    "telemetry" (dict "accessLog" (dict "settings" (list $accessLogSetting)))
-    "provider" (dict "type" "Kubernetes" "kubernetes" $kubernetes) -}}
+{{- $spec := dict "provider" (dict "type" "Kubernetes" "kubernetes" (dict "envoyDeployment" $deployment)) -}}
 {{- with $ep.spec }}
 {{- $spec = mergeOverwrite $spec (deepCopy .) }}
 {{- end }}

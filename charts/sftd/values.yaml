@@ -186,14 +186,11 @@ ingress:
 # during migration; disable ingress.enabled in a follow-up apply once verified.
 gateway:
   enabled: false
-  # Create a Gateway, or attach to an existing one whose allowedListeners permits this namespace.
+  # Create a Gateway, or use gateway.name for an existing one in this namespace.
   create: true
   # Defaults to <fullname>-gateway.
   name: ""
-  # GatewayClass name. Required when create: true.
-  className: ""
-  # Existing Gateway namespace; defaults to the release namespace.
-  namespace: ""
+  className: envoy
   listeners:
     https:
       port: 443
@@ -208,7 +205,7 @@ gateway:
     create: true
     # Empty uses the Gateway name; with create: false, references an existing proxy.
     name: ""
-    # Free-form EnvoyProxy spec overrides these defaults.
+    # Override EnvoyProxy defaults, including telemetry.accessLog.
     spec: {}
     replicas: 2
     # Advisory spread; set [] to disable. PDB minAvailable: 1 unless replicas is 1.

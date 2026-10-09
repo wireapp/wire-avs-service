@@ -15,7 +15,7 @@ metadata:
   labels:
     {{- include "sftd.labels" . | nindent 4 }}
 spec:
-  gatewayClassName: {{ required "gateway.className is required when gateway.create is true" .Values.gateway.className | quote }}
+  gatewayClassName: {{ required "gateway.className must not be empty" .Values.gateway.className | quote }}
   {{- $envoyProxyName := .Values.gateway.envoyProxy.name }}
   {{- if .Values.gateway.envoyProxy.create }}
   {{- $envoyProxyName = $envoyProxyName | default (include "sftd.gatewayName" .) }}
