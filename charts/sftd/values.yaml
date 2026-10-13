@@ -202,6 +202,8 @@ gateway:
     annotations: {}
     labels: {}
   envoyProxy:
+    # Set to false for a GatewayClass with mergeGateways: such a Gateway must
+    # not reference an EnvoyProxy and is otherwise not Accepted.
     create: true
     # Empty uses the Gateway name; with create: false, references an existing proxy.
     name: ""

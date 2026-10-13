@@ -86,9 +86,12 @@ HTTPRoute attachment (tested with Envoy Gateway 1.9.2). Install CRDs and a
 controller supporting v1 ListenerSet and its policy targets. Certificates stay
 in the release namespace. The required Gateway placeholder listener denies all
 routes; its port (`gateway.listeners.placeholder.port`, default 65535) must
-differ from HTTPS.
+differ from HTTPS. Its hostname, `<hash>.placeholder.invalid`, is unique per
+Gateway, so Gateways merged by `mergeGateways` can share the port.
 
 The GatewayClass defaults to `envoy`; override `gateway.className` if needed.
+For a GatewayClass with `mergeGateways`, set `gateway.envoyProxy.create: false`;
+Envoy Gateway rejects merged Gateways that reference an EnvoyProxy.
 For an existing Gateway in the release namespace, set `gateway.create: false`
 and `gateway.name`; its `allowedListeners` must permit local ListenerSets. The
 chart manages its own ListenerSet and policies, not the existing proxy fleet. Both ingress toggles can be enabled during migration;

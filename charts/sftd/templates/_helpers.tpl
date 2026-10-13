@@ -102,6 +102,16 @@ Name of the Gateway resource. Uses gateway.name if set, otherwise derives one fr
 {{- end -}}
 
 {{/*
+Hostname of the Gateway's placeholder listener. Unique per Gateway: merged
+Gateways conflict on equal port/protocol/hostname, which marks all but the
+first Gateway not Accepted. Hashed to fit the 63-character DNS label limit.
+*/}}
+{{- define "sftd.placeholderHostname" -}}
+{{- printf "%s/%s" .Release.Namespace (include "sftd.gatewayName" .) | sha256sum | trunc 32 -}}
+.placeholder.invalid
+{{- end -}}
+
+{{/*
 The address sftd advertises to clients for media, i.e. the argument to -A.
 Unset defaults to __SFT_EXT_IP__, which keeps the get-external-ip helper on and
 preserves the behaviour of charts that never set mediaIP. Used by both the

@@ -45,6 +45,7 @@ spec:
     - name: placeholder
       port: {{ .Values.gateway.listeners.placeholder.port }}
       protocol: HTTP
+      hostname: {{ include "sftd.placeholderHostname" . | quote }}
       allowedRoutes:
         namespaces:
           from: Selector
