@@ -1,0 +1,39 @@
+{{- if and .Values.gateway.enabled .Values.gateway.create .Values.gateway.envoyProxy.create }}
+{{- $name := .Values.gateway.envoyProxy.name | default (include "sftd.gatewayName" .) }}
+{{- $ep := .Values.gateway.envoyProxy -}}
+{{- $deployment := dict "replicas" $ep.replicas -}}
+{{- with $ep.topologySpreadKeys -}}
+{{- $selector := dict "matchLabels" (dict
+    "gateway.envoyproxy.io/owning-gateway-name" (include "sftd.gatewayName" $)
+    "gateway.envoyproxy.io/owning-gateway-namespace" $.Release.Namespace) -}}
+{{- $spread := list -}}
+{{- range . -}}
+{{- $spread = append $spread (dict "maxSkew" 1 "topologyKey" . "whenUnsatisfiable" "ScheduleAnyway" "labelSelector" $selector) -}}
+{{- end -}}
+{{- $_ := set $deployment "pod" (dict "topologySpreadConstraints" $spread) -}}
+{{- end -}}
+{{- $spec := dict "provider" (dict "type" "Kubernetes" "kubernetes" (dict "envoyDeployment" $deployment)) -}}
+{{- with $ep.spec }}
+{{- $spec = mergeOverwrite $spec (deepCopy .) }}
+{{- end }}
+{{- $k8s := $spec.provider.kubernetes }}
+{{/* Use the final replica count, including spec overrides. */}}
+{{- if eq (int $k8s.envoyDeployment.replicas) 1 }}
+{{- $_ := unset $k8s "envoyPDB" }}
+{{- else }}
+{{- $_ := set $k8s "envoyPDB" (dict "minAvailable" 1) }}
+{{- end }}
+{{/* Preserve other envoyService overrides. */}}
+{{- if .Values.gateway.manageServiceType }}
+{{- $_ := set $k8s "envoyService" (merge (dict "type" .Values.gateway.serviceType) ($k8s.envoyService | default dict)) }}
+{{- end }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sftd.labels" . | nindent 4 }}
+spec:
+{{- toYaml $spec | nindent 2 }}
+{{- end }}

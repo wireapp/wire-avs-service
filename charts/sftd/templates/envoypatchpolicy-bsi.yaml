@@ -1,0 +1,45 @@
+{{- if .Values.gateway.enabled }}
+{{- if not (kindIs "bool" .Values.FIPS_202205_tls_profile) }}
+{{- fail "FIPS_202205_tls_profile must be a boolean" }}
+{{- end }}
+{{- if .Values.FIPS_202205_tls_profile }}
+{{- if or .Values.gateway.patchPolicies.targetGatewayClass .Values.gateway.envoyProxy.spec.mergeGateways }}
+{{- fail "FIPS_202205_tls_profile requires a dedicated Gateway: disable mergeGateways and targetGatewayClass" }}
+{{- end }}
+{{/* The patch needs tls_params from an accepted ClientTrafficPolicy. */}}
+{{- if or (not .Values.gateway.tls.enabled) (not .Values.gateway.patchPolicies.enabled) }}
+{{- fail "FIPS_202205_tls_profile requires gateway.tls.enabled and gateway.patchPolicies.enabled" }}
+{{- end }}
+{{/* A wrong xDS name leaves the patch unapplied and the TLS 1.2 baseline active. */}}
+{{- if not (kindIs "bool" .Values.gateway.patchPolicies.xdsNameSchemeV2) }}
+{{- fail "gateway.patchPolicies.xdsNameSchemeV2 must be set explicitly to match the controller runtime flag in FIPS mode (default: false before Envoy Gateway 1.10, true from 1.10)" }}
+{{- end }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyPatchPolicy
+metadata:
+  name: {{ include "sftd.gatewayName" . }}-bsi
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ include "sftd.gatewayName" . | quote }}
+  type: JSONPatch
+  jsonPatches:
+    - type: type.googleapis.com/envoy.config.listener.v3.Listener
+      {{- if .Values.gateway.patchPolicies.xdsNameSchemeV2 }}
+      name: {{ printf "tcp-%v" .Values.gateway.listeners.https.port | quote }}
+      {{- else if .Values.gateway.patchPolicies.xdsListenerName }}
+      name: {{ .Values.gateway.patchPolicies.xdsListenerName | quote }}
+      {{- else }}
+      {{/* Legacy names use the first listener on the HTTPS port. */}}
+      name: {{ printf "%s/%s/%s/%s/https" .Release.Namespace (include "sftd.gatewayName" .) .Release.Namespace (include "sftd.fullname" .) | quote }}
+      {{- end }}
+      operation:
+        op: add
+        # Apply to every TLS filter chain on this socket.
+        jsonPath: "$.filter_chains[*].transport_socket.typed_config.common_tls_context.tls_params"
+        path: compliance_policies
+        value: [FIPS_202205]
+{{- end }}
+{{- end }}
