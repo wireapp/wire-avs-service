@@ -186,10 +186,14 @@ ingress:
 # during migration; disable ingress.enabled in a follow-up apply once verified.
 gateway:
   enabled: false
-  # Create a Gateway, or use gateway.name for an existing one in this namespace.
+  # Create a Gateway, or use gateway.name for an existing one.
   create: true
   # Defaults to <fullname>-gateway.
   name: ""
+  # Namespace of an existing Gateway (create: false); defaults to the release
+  # namespace. That Gateway must admit ListenerSets from this namespace, e.g.
+  # wire-ingress' gateway.allowedListenerNamespaces.
+  namespace: ""
   className: envoy
   listeners:
     https:
@@ -240,7 +244,8 @@ gateway:
   patchPolicies:
     enabled: true
     # FIPS requires this to match the controller runtime flag.
-    # Envoy Gateway < 1.10 defaults to false, >= 1.10 to true.
+    # Envoy Gateway < 1.10 defaults to false, >= 1.10 to true. Prefer true (with
+    # the flag on 1.9): legacy names depend on ListenerSet creation order.
     xdsNameSchemeV2: null
     # Legacy scheme: override if another listener is first on the HTTPS port.
     xdsListenerName: ""

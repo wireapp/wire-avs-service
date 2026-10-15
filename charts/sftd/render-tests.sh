@@ -157,6 +157,32 @@ expect_error 'coredumps.enabled without a storage class is rejected' 'coredumps.
 expect 'coredumps disabled does not raise the core limit' absent 'ulimit -c unlimited' \
 	--set coredumps.enabled=false
 
+# the ListenerSet attaches to a Gateway in the release namespace unless an
+# existing Gateway elsewhere is named
+TEMPLATE="templates/listenerset.yaml"
+expect 'ListenerSet parent defaults to the release namespace' present 'namespace: "default"' \
+	--set gateway.enabled=true
+expect 'gateway.namespace sets the ListenerSet parent namespace' present 'namespace: "wire"' \
+	--set gateway.enabled=true --set gateway.create=false \
+	--set gateway.name=gw --set gateway.namespace=wire
+expect_error 'gateway.namespace with a created Gateway is rejected' 'gateway.namespace only applies with gateway.create: false' \
+	--set gateway.enabled=true --set gateway.namespace=wire
+
+# the FIPS patch replaces tls_params on every chain, so listeners without a
+# ClientTrafficPolicy are covered too
+TEMPLATE="templates/envoypatchpolicy-bsi.yaml"
+expect 'FIPS patch sets tls_params whole' present 'path: tls_params' \
+	--set gateway.enabled=true --set FIPS_202205_tls_profile=true \
+	--set gateway.patchPolicies.xdsNameSchemeV2=true
+expect 'FIPS patch targets tcp-443 with xdsNameSchemeV2' present 'name: "tcp-443"' \
+	--set gateway.enabled=true --set FIPS_202205_tls_profile=true \
+	--set gateway.patchPolicies.xdsNameSchemeV2=true
+expect_error 'FIPS on a Gateway in another namespace is rejected' 'cannot patch a Gateway in another namespace' \
+	--set gateway.enabled=true --set gateway.create=false \
+	--set gateway.name=gw --set gateway.namespace=wire \
+	--set FIPS_202205_tls_profile=true --set gateway.patchPolicies.xdsNameSchemeV2=true
+TEMPLATE="templates/statefulset.yaml"
+
 if [ "${failures}" -ne 0 ]; then
 	printf '\n%d assertion(s) failed\n' "${failures}"
 	exit 1
