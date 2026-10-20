@@ -102,6 +102,17 @@ Name of the Gateway resource. Uses gateway.name if set, otherwise derives one fr
 {{- end -}}
 
 {{/*
+Namespace of the Gateway the ListenerSet attaches to. A created Gateway always
+lives in the release namespace.
+*/}}
+{{- define "sftd.gatewayNamespace" -}}
+{{- if and .Values.gateway.create .Values.gateway.namespace (ne .Values.gateway.namespace .Release.Namespace) -}}
+{{- fail "gateway.namespace only applies with gateway.create: false" -}}
+{{- end -}}
+{{- .Values.gateway.namespace | default .Release.Namespace -}}
+{{- end -}}
+
+{{/*
 Hostname of the Gateway's placeholder listener. Unique per Gateway: merged
 Gateways conflict on equal port/protocol/hostname, which marks all but the
 first Gateway not Accepted. Hashed to fit the 63-character DNS label limit.

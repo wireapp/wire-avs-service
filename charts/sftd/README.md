@@ -92,10 +92,28 @@ Gateway, so Gateways merged by `mergeGateways` can share the port.
 The GatewayClass defaults to `envoy`; override `gateway.className` if needed.
 For a GatewayClass with `mergeGateways`, set `gateway.envoyProxy.create: false`;
 Envoy Gateway rejects merged Gateways that reference an EnvoyProxy.
-For an existing Gateway in the release namespace, set `gateway.create: false`
-and `gateway.name`; its `allowedListeners` must permit local ListenerSets. The
-chart manages its own ListenerSet and policies, not the existing proxy fleet. Both ingress toggles can be enabled during migration;
-point DNS at the intended controller.
+For an existing Gateway, set `gateway.create: false` and `gateway.name`, plus
+`gateway.namespace` if it lives in another namespace; its `allowedListeners`
+must admit this release's namespace. The chart manages its own ListenerSet and
+policies, not the existing proxy fleet. Both ingress toggles can be enabled
+during migration; point DNS at the intended controller.
+
+To share the wire-ingress Gateway (one proxy, IP and TLS profile for all hosts):
+
+```yaml
+gateway:
+  enabled: true
+  create: false
+  name: wire-ingress-wire-ingress-gateway  # <wire-ingress release>-wire-ingress-gateway
+  # namespace: wire                        # if not in the wire-ingress namespace
+  envoyProxy:
+    create: false
+```
+
+From another namespace, wire-ingress must list it in
+`gateway.allowedListenerNamespaces`. Leave `FIPS_202205_tls_profile` off here:
+wire-ingress' FIPS patch covers this listener, and a second patch from this
+chart would target a listener name that only matches by accident.
 
 TLS defaults to 1.3, using wire-ingress's `gateway.tls`, `gateway.alpn`, and
 `gateway.proxyProtocol` settings. For Envoy's FIPS_202205 TLS profile:
@@ -104,18 +122,22 @@ TLS defaults to 1.3, using wire-ingress's `gateway.tls`, `gateway.alpn`, and
 FIPS_202205_tls_profile: true
 gateway:
   patchPolicies:
-    xdsNameSchemeV2: false
+    xdsNameSchemeV2: true
 ```
 
 Match `xdsNameSchemeV2` to the controller runtime flag (default false before
 Envoy Gateway 1.10, true from 1.10), and enable the controller's
-`extensionApis.enableEnvoyPatchPolicy`. FIPS mode overrides TLS settings with
+`extensionApis.enableEnvoyPatchPolicy`. On Envoy Gateway 1.9, prefer enabling
+the flag (`config.envoyGateway.runtimeFlags.enabled: [XDSNameSchemeV2]`) and
+setting `true`: legacy listener names follow ListenerSet creation order, so
+another ListenerSet on the Gateway can void the patch. FIPS mode overrides TLS settings with
 TLS 1.2/1.3, AES-GCM, and P-256/P-384 key agreement. Use an ECDSA P-256/P-384
 certificate; cert-manager defaults to P-384 in this chart. This is a TLS profile,
 not a FIPS-certified Envoy binary.
 
 FIPS requires a dedicated, non-merged Gateway in the release namespace; its
-patch affects every TLS filter chain on the HTTPS socket. With an existing
+patch affects every TLS filter chain on the HTTPS socket, including listeners
+without a ClientTrafficPolicy of their own. With an existing
 Gateway, check that ClientTrafficPolicy is accepted and EnvoyPatchPolicy is
 programmed. For legacy xDS names, set `gateway.patchPolicies.xdsListenerName`
 if another listener is first on that port. An unapplied patch leaves a restricted

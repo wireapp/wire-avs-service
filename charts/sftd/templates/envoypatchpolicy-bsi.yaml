@@ -6,7 +6,14 @@
 {{- if or .Values.gateway.patchPolicies.targetGatewayClass .Values.gateway.envoyProxy.spec.mergeGateways }}
 {{- fail "FIPS_202205_tls_profile requires a dedicated Gateway: disable mergeGateways and targetGatewayClass" }}
 {{- end }}
-{{/* The patch needs tls_params from an accepted ClientTrafficPolicy. */}}
+{{/* The patch policy must live in the Gateway's namespace. On a Gateway owned
+     by another release (e.g. wire-ingress), enable the profile there instead:
+     its patch covers this chart's listener too. */}}
+{{- if ne (include "sftd.gatewayNamespace" .) .Release.Namespace }}
+{{- fail "FIPS_202205_tls_profile cannot patch a Gateway in another namespace; enable the profile on the Gateway's owner, e.g. wire-ingress, whose patch covers this listener" }}
+{{- end }}
+{{/* If the patch matches nothing, this chart's ClientTrafficPolicy keeps the
+     listener on the restrictive TLS 1.2-only baseline. */}}
 {{- if or (not .Values.gateway.tls.enabled) (not .Values.gateway.patchPolicies.enabled) }}
 {{- fail "FIPS_202205_tls_profile requires gateway.tls.enabled and gateway.patchPolicies.enabled" }}
 {{- end }}
@@ -37,9 +44,12 @@ spec:
       {{- end }}
       operation:
         op: add
-        # Apply to every TLS filter chain on this socket.
-        jsonPath: "$.filter_chains[*].transport_socket.typed_config.common_tls_context.tls_params"
-        path: compliance_policies
-        value: [FIPS_202205]
+        # Every TLS filter chain on this socket. Replaces tls_params whole, so
+        # chains without a ClientTrafficPolicy are covered too; FIPS_202205
+        # overrides their versions, ciphers, groups and signature algorithms.
+        jsonPath: "$.filter_chains[*].transport_socket.typed_config.common_tls_context"
+        path: tls_params
+        value:
+          compliance_policies: [FIPS_202205]
 {{- end }}
 {{- end }}
