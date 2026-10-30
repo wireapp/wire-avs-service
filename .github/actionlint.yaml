@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+paths:
+  .github/workflows/helm_validate.yml:
+    ignore:
+      - 'SC2016:'

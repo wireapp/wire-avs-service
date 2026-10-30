@@ -4,7 +4,7 @@ on:
     paths:
       - "charts/**"
       - ".github/workflows/helm_validate.yml"
-    branches: ["master", "release-**"]
+    branches: ["dev", "release/**"]
   pull_request:
     paths:
       - "charts/**"
@@ -17,9 +17,11 @@ jobs:
     env:
       NIXPKGS_CHANNEL: nixos-25.11
       TEST_VALUES: charts/sftd/values.test.yaml
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
       - name: Render and validate Helm chart
         run: |
