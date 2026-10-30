@@ -1,0 +1,362 @@
+name: Publish release
+
+run-name: Publish v${{ inputs.version }} (by @${{ github.actor }})
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Target version to publish, as computed by prepare-release'
+        type: string
+        required: true
+      release_id:
+        description: 'Numeric id of the draft GitHub Release created by prepare-release'
+        type: string
+        required: true
+    secrets:
+      CHARTS_AVS_AWS_ACCESS_KEY_ID:
+        description: 'Publishes the exact Helm package to the S3 chart repository charts-avs'
+        required: true
+      CHARTS_AVS_AWS_SECRET_ACCESS_KEY:
+        description: 'Publishes the exact Helm package to the S3 chart repository charts-avs'
+        required: true
+      WIRE_BUILDS_WRITE_ACCESS_GH_TOKEN:
+        description: 'Commits the published chart to wireapp/wire-builds build.json (dev-sourced releases only)'
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Target version to publish (X.Y.Z or X.Y.Z-<channel>.N): recovery path, resolves the draft release by tag'
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish
+    environment:
+      name: release-publication
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Resolve the draft release and download the candidate
+        id: draft
+        uses: wireapp/wire-rm-actions/draft-release@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          mode: resolve
+          version: ${{ inputs.version }}
+          release-id: ${{ inputs.release_id }}
+          download: manifest-files
+          asset-dir: ${{ runner.temp }}/candidate
+
+      - name: Verify the candidate against its release manifest
+        id: verify
+        uses: wireapp/wire-rm-actions/release-manifest@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          mode: verify
+          manifest: ${{ steps.draft.outputs.manifest }}
+          asset-dir: ${{ steps.draft.outputs.asset-dir }}
+          version: ${{ inputs.version }}
+          source-commit: ${{ steps.draft.outputs.target-commitish }}
+
+      - name: Verify the documents
+        env:
+          MANIFEST: ${{ steps.draft.outputs.manifest }}
+          ASSET_DIR: ${{ steps.draft.outputs.asset-dir }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r doc_file doc_sha256; do
+            [[ -z "$doc_file" ]] && continue
+            actual=$(sha256sum "${ASSET_DIR}/${doc_file}" | awk '{print $1}')
+            if [[ "$actual" != "$doc_sha256" ]]; then
+              echo "error: downloaded ${doc_file} sha256 $actual does not match manifest $doc_sha256, refusing to publish" >&2
+              exit 1
+            fi
+            echo "Verified ${doc_file} (sha256 ${doc_sha256})"
+          done < <(jq -r '(.documents // {})[] | [.file, .sha256] | @tsv' "$MANIFEST")
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.verify.outputs.source-ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify source is not stale
+        env:
+          SOURCE_COMMIT: ${{ steps.verify.outputs.source-commit }}
+          SOURCE_BRANCH: ${{ steps.verify.outputs.source-ref }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" "origin/${SOURCE_BRANCH}"; then
+            echo "error: prepared source commit $SOURCE_COMMIT is no longer an ancestor of origin/${SOURCE_BRANCH}: the candidate is stale and must be prepared again" >&2
+            exit 1
+          fi
+
+      - name: Login to quay.io with the OIDC token of the job
+        id: quay
+        uses: wireapp/wire-rm-actions/quay-login@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          robot: wire+gha_wire-avs-service
+
+      - name: Promote the image (no rebuild)
+        uses: wireapp/wire-rm-actions/promote-image@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          repository: ${{ steps.verify.outputs.image-repository }}
+          digest: ${{ steps.verify.outputs.image-digest }}
+          tag: ${{ steps.verify.outputs.version }}
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.19.0
+
+      - name: Chart channel of the candidate
+        id: channel
+        env:
+          CHART_REPOSITORY: ${{ steps.verify.outputs.chart-repository }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CHART_REPOSITORY" =~ ^oci://quay\.io/wire/charts/(dev|stable)/sftd$ ]]; then
+            echo "error: manifest chart repository '${CHART_REPOSITORY}' is not oci://quay.io/wire/charts/(dev|stable)/sftd" >&2
+            exit 1
+          fi
+          echo "value=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the chart to the OCI registry
+        id: oci_chart
+        uses: wireapp/wire-rm-actions/publish-chart@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          chart-file: ${{ steps.verify.outputs.chart-path }}
+          chart-name: sftd
+          version: ${{ steps.verify.outputs.version }}
+          channel: ${{ steps.channel.outputs.value }}
+          attempts: '3'
+          username: ${{ steps.quay.outputs.username }}
+          password: ${{ steps.quay.outputs.token }}
+
+      - name: Create or verify release/X.Y for the first GA of a minor
+        if: steps.verify.outputs.type == 'ga'
+        env:
+          TARGET: ${{ steps.verify.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.verify.outputs.source-commit }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TARGET" =~ ^([0-9]+)\.([0-9]+)\.0$ ]]; then
+            echo "Not the first GA of a minor: no release branch to create."
+            exit 0
+          fi
+          line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          existing=$(git ls-remote --heads origin "release/${line}" | awk 'NR==1 {print $1}')
+          if [[ -z "$existing" ]]; then
+            git push origin "${SOURCE_COMMIT}:refs/heads/release/${line}"
+            echo "Created release/${line} at $SOURCE_COMMIT"
+          elif [[ "$existing" == "$SOURCE_COMMIT" ]] || git merge-base --is-ancestor "$SOURCE_COMMIT" "$existing" 2>/dev/null; then
+            echo "release/${line} already contains $SOURCE_COMMIT."
+          else
+            echo "error: release/${line} exists at $existing, which does not contain $SOURCE_COMMIT: refusing to move it" >&2
+            exit 1
+          fi
+
+      - name: Final verification before publishing
+        env:
+          IMAGE_REPOSITORY: ${{ steps.verify.outputs.image-repository }}
+          IMAGE_DIGEST: ${{ steps.verify.outputs.image-digest }}
+          RELEASE_TAG: ${{ steps.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          final_digest=$(docker buildx imagetools inspect "${IMAGE_REPOSITORY}:${RELEASE_TAG}" --format '{{.Manifest.Digest}}')
+          if [[ "$final_digest" != "$IMAGE_DIGEST" ]]; then
+            echo "error: ${IMAGE_REPOSITORY}:${RELEASE_TAG} resolves to $final_digest, expected $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+
+      - name: Docker logout
+        if: always()
+        run: docker logout quay.io
+
+      - name: Complete the release manifest
+        id: completed
+        uses: wireapp/wire-rm-actions/release-manifest@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          mode: complete
+          manifest: ${{ steps.draft.outputs.manifest }}
+          out: ${{ steps.draft.outputs.asset-dir }}/release-manifest.completed.json
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          digests-json: ${{ format('{{"{0}:{1}":"{2}"}}', steps.oci_chart.outputs.repository, steps.verify.outputs.version, steps.oci_chart.outputs.digest) }}
+
+      - name: Publish the GitHub Release
+        id: publish_release
+        uses: wireapp/wire-rm-actions/draft-release@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          mode: publish
+          version: ${{ steps.verify.outputs.version }}
+          release-id: ${{ steps.draft.outputs.id }}
+          expected-commit: ${{ steps.verify.outputs.source-commit }}
+          replace-assets: release-manifest.json=${{ steps.completed.outputs.manifest }}
+          source-ref: ${{ steps.verify.outputs.source-ref }}
+          latest-branches: ^dev$
+
+      - name: Release date
+        id: released_at
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Release note body
+        id: note
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
+        env:
+          BODY_FILE: ${{ steps.draft.outputs.body-file }}
+        run: |
+          set -euo pipefail
+          delimiter="note_$(openssl rand -hex 8)"
+          {
+            echo "body<<${delimiter}"
+            cat "$BODY_FILE"
+            echo
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Register the release with the release managers
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
+        uses: wireapp/wire-rm-actions/notify-rm@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          rm-staging-url: ${{ vars.RM_STAGING_URL }}
+          rm-staging-audience: wire-release-manager-staging
+          rm-prod-url: ${{ vars.RM_PROD_URL }}
+          rm-prod-audience: wire-release-manager-prod
+          component: sftd
+          version: ${{ steps.verify.outputs.version }}
+          kind: ${{ steps.verify.outputs.type == 'ga' && 'ga' || 'prerelease' }}
+          repository: ${{ steps.oci_chart.outputs.repository }}
+          digest: ${{ steps.oci_chart.outputs.digest }}
+          released-at: ${{ steps.released_at.outputs.date }}
+          release-url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.verify.outputs.version }}
+          release-note-title: v${{ steps.verify.outputs.version }}
+          release-note-description: ${{ steps.note.outputs.body }}
+          meta: |
+            team=avs
+          release-declaration-file: ${{ steps.verify.outputs.declaration-file != '' && format('{0}/{1}', steps.draft.outputs.asset-dir, steps.verify.outputs.declaration-file) || '' }}
+          release-manifest-file: ${{ steps.completed.outputs.manifest }}
+
+      - name: Publish the chart to the S3 repository charts-avs (no rebuild)
+        id: s3_chart
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
+        uses: wireapp/wire-rm-actions/publish-chart-s3@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          chart-file: ${{ steps.verify.outputs.chart-path }}
+          s3-repository: charts-avs
+          aws-access-key-id: ${{ secrets.CHARTS_AVS_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CHARTS_AVS_AWS_SECRET_ACCESS_KEY }}
+
+      - name: Bump sftd in wire-builds
+        id: wire_builds
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' && steps.s3_chart.outcome == 'success' && steps.verify.outputs.source-ref == 'dev' }}
+        env:
+          WIRE_BUILDS_TOKEN: ${{ secrets.WIRE_BUILDS_WRITE_ACCESS_GH_TOKEN }}
+          VERSION: ${{ steps.verify.outputs.version }}
+          RELEASE_TYPE: ${{ steps.verify.outputs.type }}
+          SOURCE_COMMIT: ${{ steps.verify.outputs.source-commit }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${WIRE_BUILDS_TOKEN:-}" ]]; then
+            echo "error: WIRE_BUILDS_WRITE_ACCESS_GH_TOKEN is not set: cannot update wire-builds." >&2
+            exit 1
+          fi
+          targets=(dev)
+          if [[ "$RELEASE_TYPE" == "ga" ]]; then
+            targets+=(main)
+          fi
+          workdir=$(mktemp -d)
+          git clone --depth 1 --no-single-branch \
+            "https://x-access-token:${WIRE_BUILDS_TOKEN}@github.com/wireapp/wire-builds.git" \
+            "$workdir/wire-builds" >/dev/null 2>&1
+          cd "$workdir/wire-builds"
+          git config user.email "zebot@users.noreply.github.com"
+          git config user.name "Zebot"
+          updated=()
+          skipped=()
+          for branch in "${targets[@]}"; do
+            pushed=false
+            for attempt in 1 2 3; do
+              git fetch --depth 1 origin "$branch" >/dev/null
+              git checkout -q "$branch" 2>/dev/null || git checkout -q -b "$branch" "origin/${branch}"
+              git reset --hard -q "origin/${branch}"
+              current=$(jq -r '.helmCharts["sftd"].version // ""' ./build.json)
+              if [[ "$current" == "$VERSION" ]]; then
+                echo "wire-builds:${branch} already pins sftd ${VERSION}."
+                skipped+=("$branch")
+                pushed=true
+                break
+              fi
+              build_json=$(
+                ./bin/set-chart-fields sftd \
+                  "version=${VERSION}" \
+                  "repo=https://s3-eu-west-1.amazonaws.com/public.wire.com/charts-avs" \
+                  "meta.appVersion=${VERSION}" \
+                  "meta.commitURL=${SERVER_URL}/${REPOSITORY}/commit/${SOURCE_COMMIT}" \
+                  "meta.commit=${SOURCE_COMMIT}" \
+                  < ./build.json \
+                | ./bin/bump-prerelease
+              )
+              printf '%s\n' "$build_json" > ./build.json
+              git add build.json
+              git commit -q -m "chore: bump sftd to ${VERSION}"
+              if git push -q origin "$branch" 2>/dev/null; then
+                echo "wire-builds:${branch} bumped to ${VERSION} (attempt ${attempt})."
+                updated+=("$branch")
+                pushed=true
+                break
+              fi
+              echo "push to wire-builds:${branch} failed (attempt ${attempt}), replaying on the new tip."
+            done
+            if [[ "$pushed" != "true" ]]; then
+              echo "error: could not push sftd ${VERSION} to wire-builds:${branch} after 3 attempts." >&2
+              exit 1
+            fi
+          done
+          {
+            echo "updated=$(IFS=,; echo "${updated[*]-}")"
+            echo "skipped=$(IFS=,; echo "${skipped[*]-}")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report the S3 chart and the wire-builds bump
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
+        env:
+          S3_OUTCOME: ${{ steps.s3_chart.outcome }}
+          OUTCOME: ${{ steps.wire_builds.outcome }}
+          UPDATED: ${{ steps.wire_builds.outputs.updated }}
+          SKIPPED: ${{ steps.wire_builds.outputs.skipped }}
+          SOURCE_BRANCH: ${{ steps.verify.outputs.source-ref }}
+          VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo
+            if [[ "$S3_OUTCOME" != "success" ]]; then
+              echo "> :x: The chart of v${VERSION} was **not** pushed to the S3 repository \`charts-avs\` (${S3_OUTCOME}). The release is published; run the publication again to push it. \`wire-builds\` is not bumped before the chart is there."
+            fi
+            case "$OUTCOME" in
+              success)
+                if [[ -n "${UPDATED:-}" ]]; then
+                  echo "> :arrow_up: \`wire-builds\` bumped to sftd \`${VERSION}\` on: \`${UPDATED}\`."
+                fi
+                if [[ -n "${SKIPPED:-}" ]]; then
+                  echo "> :information_source: \`wire-builds\` already pinned \`${VERSION}\` on: \`${SKIPPED}\`."
+                fi
+                ;;
+              skipped)
+                if [[ "$S3_OUTCOME" == "success" ]]; then
+                  echo "> :information_source: \`wire-builds\` not updated: this release was prepared from \`${SOURCE_BRANCH}\`, only \`dev\`-sourced releases bump it."
+                fi
+                ;;
+              *)
+                echo "> :x: \`wire-builds\` bump **${OUTCOME}** for v${VERSION}. The release is published; commit \`build.json\` by hand or run the publication again."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
