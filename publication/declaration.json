@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "wire.component-release/v1alpha2",
+  "component": "sftd",
+  "version": "5.1.0",
+  "summary": "First release of sftd under the Wire release standard: SemVer versions, the image and the Helm chart at the same version, published by the release pipeline of this repository instead of Jenkins.",
+  "upgrade_from": ">=5.0.80",
+  "changes": [
+    {
+      "kind": "changed",
+      "description": "Versioning: releases are now picked as SemVer versions instead of 5.0.<build number>. The image quay.io/wire/sftd and the Helm chart share that version, so the chart goes from 0.152.0 to 5.1.0. The chart is still published to the charts-avs Helm repository and also to oci://quay.io/wire/charts/stable/sftd. Pin sftd 5.1.0.",
+      "breaking": false,
+      "links": []
+    }
+  ],
+  "migrations": [],
+  "configuration": []
+}

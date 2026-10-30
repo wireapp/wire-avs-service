@@ -1,0 +1,47 @@
+providesApis:
+  - api: sftd/sft-api
+    versions: ["1.0.0"]
+    reason: Selective forwarding for conference calls; clients get the SFT list from brig.
+  - api: sftd/sft-federation
+    versions: ["0.1.0"]
+    reason: Calls involving a remote SFT (federation).
+
+consumesApis:
+  - api: coturn/turn
+    versions: "^1"
+    class: optional
+    reason: The SFT uses a TURN server as its proxy when turnDiscoveryEnabled or multiSFT.turnServerURI(s) is set.
+  - api: sftd/sft-federation
+    versions: "^0"
+    class: optional
+    reason: Remote SFT servers in federated calls when multiSFT.enabled.
+
+dependsOn:
+  - component: wire-server
+    range: ">=5.0.0"
+    class: mandatory
+    reason: brig hands clients the SFT URLs and shares the zrest secret.
+  - resource: public-ip
+    range: "*"
+    class: mandatory
+    reason: One routable address per replica through hostNetwork, unless advertiseInternalIp.
+  - platform: kubernetes
+    range: ">=1.21.0"
+  - platform: ingress-nginx
+    range: "*"
+    class: alternative
+    reason: Default path when ingress.enabled.
+  - platform: gateway-api
+    range: "*"
+    class: alternative
+    reason: gateway.enabled replaces the ingress with an Envoy gateway.
+  - platform: cert-manager
+    range: "*"
+    class: optional
+    reason: Certificate resource when tls has no secretRef.
+  - platform: prometheus-operator
+    range: "*"
+    class: optional
+    reason: ServiceMonitor when metrics.serviceMonitor.enabled.
+
+includes: []
