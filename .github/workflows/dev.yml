@@ -84,7 +84,7 @@ jobs:
         id: chart
         uses: wireapp/wire-rm-actions/publish-chart@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
         with:
-          chart-file: ${{ steps.package.outputs.file }}
+          chart-path: ${{ steps.package.outputs.dir }}
           version: ${{ steps.version.outputs.version }}
           channel: dev
           expires-after: 90d
