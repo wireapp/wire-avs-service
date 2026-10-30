@@ -11,6 +11,56 @@ concurrency:
 permissions: {}
 
 jobs:
+  image:
+    name: Image
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Fetch the submodules of wire-avs
+        run: git -C contrib/avs submodule update --init --depth 1
+
+      - name: Build the image
+        run: docker build --file docker/Dockerfile --build-arg SFT_VERSION=0.0.0-pr --tag sftd:pr .
+
+      - name: Test the image
+        env:
+          IMAGE: sftd:pr
+          VERSION: 0.0.0-pr
+        run: .github/scripts/test-image.sh
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.19.0
+
+      - name: Package and lint the chart
+        env:
+          VERSION: 0.0.0-pr
+          OUT_DIR: ${{ runner.temp }}/chart
+        run: |
+          set -euo pipefail
+          file=$(.github/scripts/package-chart.sh | sed -n 's/^file=//p')
+          helm lint "$file" --values charts/sftd/values.test.yaml
+
   release-files:
     name: Release files
     runs-on: ubuntu-26.04
