@@ -60,6 +60,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl jq dumb-init \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --system --gid 31337 sftd \
+    && useradd --system --uid 31337 --gid sftd --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sftd
+
 COPY --from=build --chmod=555 /src/sftd /usr/local/bin/sftd
+
+USER 31337:31337
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "sftd"]
