@@ -1,0 +1,126 @@
+name: Dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: dev-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  dev-build:
+    name: Dev build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: true
+          persist-credentials: false
+
+      - name: Fetch the submodules of wire-avs
+        run: git -C contrib/avs submodule update --init --depth 1
+
+      - name: Compute the version
+        id: version
+        uses: wireapp/wire-rm-actions/version@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+
+      - name: Build the image locally
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: docker build --file docker/Dockerfile --build-arg SFT_VERSION="$VERSION" --tag sftd:test .
+
+      - name: Test the image
+        env:
+          IMAGE: sftd:test
+          VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/test-image.sh
+
+      - name: Login to quay.io with the OIDC token of the job
+        id: quay
+        uses: wireapp/wire-rm-actions/quay-login@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          robot: wire+gha_wire-avs-service
+
+      - name: Build and push the image
+        id: image
+        uses: wireapp/wire-rm-actions/build-image@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          dockerfile: docker/Dockerfile
+          image: quay.io/wire/sftd
+          version: ${{ steps.version.outputs.version }}
+          provenance: 'false'
+          sbom: 'false'
+          expires-after: 90d
+          build-args: |
+            SFT_VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=sftd
+            org.opencontainers.image.description=Wire's SFT server for conference calls
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.19.0
+
+      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1.2.4
+
+      - name: Package the chart
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          OUT_DIR: ${{ runner.temp }}/chart
+        run: .github/scripts/package-chart.sh
+
+      - name: Publish the chart to oci://quay.io/wire/charts/dev/sftd
+        id: chart
+        uses: wireapp/wire-rm-actions/publish-chart@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          chart-file: ${{ steps.package.outputs.file }}
+          version: ${{ steps.version.outputs.version }}
+          channel: dev
+          expires-after: 90d
+          username: ${{ steps.quay.outputs.username }}
+          password: ${{ steps.quay.outputs.token }}
+
+      - name: Write the dev release manifest
+        id: manifest
+        continue-on-error: true
+        uses: wireapp/wire-rm-actions/release-manifest@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          mode: write
+          manifest: ${{ runner.temp }}/release-manifest.json
+          component: sftd
+          release-type: dev
+          version: ${{ steps.version.outputs.version }}
+          source-repository: ${{ github.server_url }}/${{ github.repository }}
+          source-ref: ${{ github.ref_name }}
+          source-commit: ${{ github.sha }}
+          image-repository: quay.io/wire/sftd
+          image-digest: ${{ steps.image.outputs.digest }}
+          chart-repository: ${{ steps.chart.outputs.repository }}
+          chart-digest: ${{ steps.chart.outputs.digest }}
+          expires-after: 90d
+
+      - name: Declare the dev build to the release managers
+        if: github.ref == 'refs/heads/dev'
+        uses: wireapp/wire-rm-actions/notify-rm@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
+        with:
+          rm-staging-url: ${{ vars.RM_STAGING_URL }}
+          rm-staging-audience: wire-release-manager-staging
+          rm-prod-url: ${{ vars.RM_PROD_URL }}
+          rm-prod-audience: wire-release-manager-prod
+          component: sftd
+          version: ${{ steps.version.outputs.version }}
+          kind: ${{ steps.version.outputs.kind }}
+          repository: ${{ steps.chart.outputs.repository }}
+          digest: ${{ steps.chart.outputs.digest }}
+          release-manifest-file: ${{ steps.manifest.outcome == 'success' && steps.manifest.outputs.manifest || '' }}

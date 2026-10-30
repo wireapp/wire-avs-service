@@ -10,3 +10,9 @@ updates:
       major-updates:
         update-types:
           - major
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
