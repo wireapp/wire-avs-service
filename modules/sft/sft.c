@@ -484,6 +484,11 @@ struct participant {
 		uint32_t ssrcv_lo;
 	} simulcast;
 
+	/* Smoothed audio level of a federated participant, since
+	 * packets from all remote participants share the same SFT call
+	 */
+	uint8_t level;
+
 	struct le le;
 };
 
@@ -2222,6 +2227,9 @@ static void process_rtp(struct call *call,
 	bool ispadding = false;
 	size_t plpos;
 	uint16_t wseq = 0;
+	uint8_t pkt_level = AUDIO_LEVEL_ABS_SILENCE;
+	bool has_level = false;
+	struct participant *sft_part = NULL;
 	
 
 	group = call->group;
@@ -2284,12 +2292,20 @@ static void process_rtp(struct call *call,
 		case EXTMAP_AULEVEL:
 			if (xlen == 1) {
 				uint8_t a = mbuf_read_u8(mb);
-				
-				call->audio.level =
-					audio_level_smoothen_withk(
-						call->audio.level,
-						(int)(a & 0x7f),
-						RTP_LEVELK);
+
+				pkt_level = a & 0x7f;
+				has_level = true;
+
+				/* For SFT calls the level is smoothed
+				 * per participant, see below
+				 */
+				if (!call->issft) {
+					call->audio.level =
+						audio_level_smoothen_withk(
+							call->audio.level,
+							(int)pkt_level,
+							RTP_LEVELK);
+				}
 			}
 			else
 				mb->pos += xlen;
@@ -2490,7 +2506,29 @@ static void process_rtp(struct call *call,
 		/* continue forwarding */
 	}
 
-	aulevel = call->audio.level;
+	if (call->issft) {
+		bool ishost = group ? group->sft.ishost : false;
+		struct list *partl = ishost ? &call->partl : &call->sft_partl;
+
+		sft_part = ssrc2part(partl, call->issft, ssrc);
+		if (sft_part) {
+			if (rst == RTP_STREAM_TYPE_AUDIO && has_level) {
+				sft_part->level =
+					audio_level_smoothen_withk(
+						sft_part->level,
+						pkt_level,
+						RTP_LEVELK);
+			}
+			aulevel = sft_part->level;
+		}
+		else {
+			aulevel = rst == RTP_STREAM_TYPE_AUDIO
+				? pkt_level : AUDIO_LEVEL_ABS_SILENCE;
+		}
+	}
+	else {
+		aulevel = call->audio.level;
+	}
 
 	/* make buffer that will have 1 CSRC */
 	rlen = len + sizeof(uint32_t);	 		
@@ -2670,15 +2708,10 @@ static void process_rtp(struct call *call,
 			uint64_t fdiff;
 
 			if (call->issft) {
-				bool ishost = group ? group->sft.ishost : false;
-				struct list *partl = ishost ? &call->partl : &call->sft_partl;
-				struct participant *p;
-
-				p = ssrc2part(partl, call->issft, ssrc);
-				if (p) {
-					ssrcv = p->ssrcv;
-					ssrcv_hi = p->simulcast.ssrcv_hi;
-					ssrcv_lo = p->simulcast.ssrcv_lo;
+				if (sft_part) {
+					ssrcv = sft_part->ssrcv;
+					ssrcv_hi = sft_part->simulcast.ssrcv_hi;
+					ssrcv_lo = sft_part->simulcast.ssrcv_lo;
 				}
 			}
 			else {
@@ -4964,8 +4997,10 @@ static void sft_confpart_handler(const struct econn_message *msg,
 		str_dup(&rpart->clientid, part->clientid);
 		rpart->ssrca = part->ssrca;
 		rpart->ssrcv = part->ssrcv;
+		rpart->level = AUDIO_LEVEL_ABS_SILENCE;
 		if (tpart) {
 			rpart->simulcast = tpart->simulcast;
+			rpart->level = tpart->level;
 		}
 		//rpart->ts = call->join_ts + part->ts;
 		rpart->ix = group ? group->part_ix++ : 0;
@@ -6981,6 +7016,7 @@ static int append_participant(struct group *group,
 	part->ssrca = other->audio.ssrc;
 	part->ssrcv = other->video.ssrc;
 	part->ix = group->part_ix;
+	part->level = AUDIO_LEVEL_ABS_SILENCE;
 
 	list_init(&part->authl);
 	list_append(&call->partl, &part->le, part);
