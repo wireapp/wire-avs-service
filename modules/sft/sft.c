@@ -5547,7 +5547,11 @@ static int alloc_call(struct call **callp, struct sft *sft,
 
 	call->audio.is_selective = selective_audio;
 	call->audio.ssrcc = selective_audio ? astreams : 0;
-	
+	/* Level is in -dB, so start at silence rather than 0 (loudest),
+	 * until we receive audio level extensions from the client
+	 */
+	call->audio.level = AUDIO_LEVEL_ABS_SILENCE;
+
 	call->twcc.seqno = -1;
 	call->video.is_selective = selective_video;
 	call->video.ssrcc = selective_video ? vstreams : 0;
