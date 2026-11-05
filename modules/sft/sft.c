@@ -227,6 +227,10 @@ struct ssrcv_update {
 #define TIMEOUT_PROVISIONAL 10000
 #define TIMEOUT_VIDEO_HI_FRAME 800
 #define TIMEOUT_SCREENSHARE_HI_FRAME 3000
+/* A selective stream not forwarded to for this long is considered free.
+ * Must be above the Opus DTX interval (400ms).
+ */
+#define TIMEOUT_STREAM_IDLE 1000
 
 
 /* Moved to avs_service as cmdline param or default
@@ -328,6 +332,7 @@ struct rtp_stream {
 	uint32_t current_ssrc;
 	uint16_t last_seq;
 	uint32_t last_ts;
+	uint64_t last_used;
 
 	enum video_stream_q q;
 	enum video_stream_q old_q;
@@ -1696,7 +1701,8 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 					  uint32_t ssrc,
 					  enum rtp_stream_type rst,
 					  bool kg,
-					  uint8_t level)
+					  uint8_t level,
+					  uint64_t now)
 {
 	struct rtp_stream *rtpsv = NULL;
 	int rtpsc = 0;
@@ -1743,15 +1749,20 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 		rs = &rtpsv[i];
 
 		found = ssrc == rs->current_ssrc;
-		if (0 == rs->current_ssrc && !free_rs) {
+		/* A stream is free if unassigned, or if its ssrc has
+		 * not been forwarded for a while (e.g. the sender left
+		 * without its stream being reset, or stopped sending)
+		 */
+		if (!free_rs && (0 == rs->current_ssrc
+		    || now - rs->last_used > TIMEOUT_STREAM_IDLE)) {
 			free_rs = rs;
 		}
 	}
 	if (found)
 		return rs;
 
-	/* No current ssrc found, prefer a free stream so that we
-	 * don't evict a speaker that is still active
+	/* No current ssrc found, prefer a free or idle stream so that
+	 * we don't evict a speaker that is still active
 	 */
 	if (free_rs)
 		return free_rs;
@@ -1822,7 +1833,8 @@ static void rtp_stream_reset(struct call *call,
 
 static void rtp_stream_update(struct rtp_stream *rs,
 			      struct rtp_header *rtp,
-			      uint8_t level)
+			      uint8_t level,
+			      uint64_t now)
 {
 	int tsdiff;
 	
@@ -1856,6 +1868,7 @@ static void rtp_stream_update(struct rtp_stream *rs,
 	rs->last_ts = rtp->ts;
 
 	rs->level = level;
+	rs->last_used = now;
 }
 
 #if 0
@@ -2583,7 +2596,7 @@ static void process_rtp(struct call *call,
 						 * silence level, we should remove them from the
 						 * streams, if one is assigned to them
 						 */
-						rs = rtp_stream_find(rcall, ssrc, rst, kg, aulevel);
+						rs = rtp_stream_find(rcall, ssrc, rst, kg, aulevel, now);
 						if (rs) {
 							rs->current_ssrc = 0;
 							rs->level = AUDIO_LEVEL_ABS_SILENCE;
@@ -2731,7 +2744,7 @@ static void process_rtp(struct call *call,
 			}
 			else {
 				rs = rtp_stream_find(rcall, ssrc, rst,
-						     kg, aulevel);
+						     kg, aulevel, now);
 			}
 			
 			if (!rs || skip) {
@@ -2739,7 +2752,7 @@ static void process_rtp(struct call *call,
 				continue;
 			}
 
-			rtp_stream_update(rs, rtp, aulevel);
+			rtp_stream_update(rs, rtp, aulevel, now);
 					
 			/* Modify the RTP header with the
 			 * RTP stream info
