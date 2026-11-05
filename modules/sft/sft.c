@@ -66,6 +66,8 @@
 
 #define AUDIO_LEVEL_SILENCE 110
 #define AUDIO_LEVEL_ABS_SILENCE 127
+/* How much louder (in dB) a speaker must be to take over an occupied stream */
+#define AUDIO_LEVEL_STEAL_MARGIN 3
 
 #define RTP_LEVELK 0.5f
 
@@ -1747,30 +1749,42 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 	}
 	if (found)
 		return rs;
-	
-	/* No current ssrc found check which stream to populate with */
 
+	/* No current ssrc found, prefer a free stream so that we
+	 * don't evict a speaker that is still active
+	 */
+	if (free_rs)
+		return free_rs;
+
+	/* All streams are taken, check which stream to take over */
 	switch(mode) {
-	case SELECT_MODE_LEVEL:
+	case SELECT_MODE_LEVEL: {
+		struct rtp_stream *quiet_rs = NULL;
+
 		/*
 		 * NOTE: level is in -dB so lower value is HIGHER level.
+		 * Take over the quietest stream, but only if we are
+		 * louder by a margin, to avoid flip-flopping between
+		 * speakers with similar levels.
 		 */
-		for(i = uses_kg ? 1 : 0; !found && i < rtpsc; i++) {
+		for(i = uses_kg ? 1 : 0; i < rtpsc; i++) {
 			rs = &rtpsv[i];
-			found = level < rs->level;
+			if (!quiet_rs || rs->level > quiet_rs->level)
+				quiet_rs = rs;
 		}
+		if (quiet_rs
+		    && (int)level + AUDIO_LEVEL_STEAL_MARGIN
+		       < (int)quiet_rs->level) {
+			return quiet_rs;
+		}
+	}
 		break;
 
 	default:
 		break;
 	}
 
-	if (!found) {
-		return free_rs ? free_rs : NULL;
-	}
-	else {
-		return rs;
-	}
+	return NULL;
 }
 
 static void rtp_stream_reset(struct call *call,
@@ -4656,7 +4670,8 @@ static int remove_participant(struct call *call, void *arg)
 		return 0;
 
 	lock_write_get(g_sft->lock);
-	rtp_stream_reset(other, call->audio.ssrc, RTP_STREAM_TYPE_AUDIO);
+	/* Free the stream used to forward the leaving call's audio */
+	rtp_stream_reset(call, other->audio.ssrc, RTP_STREAM_TYPE_AUDIO);
 
 	le = call->partl.head;
 	while(le && !found) {
