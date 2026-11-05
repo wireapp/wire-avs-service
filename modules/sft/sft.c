@@ -2701,11 +2701,11 @@ static void process_rtp(struct call *call,
 		else {
 			struct rtp_stream *rs;
 			bool skip = false;
-			uint32_t ssrcv;
-			uint32_t ssrcv_hi;
-			uint32_t ssrcv_lo;
+			uint32_t ssrcv = 0;
+			uint32_t ssrcv_hi = 0;
+			uint32_t ssrcv_lo = 0;
 			bool has_hi = false;
-			uint64_t fdiff;
+			uint64_t fdiff = 0;
 
 			if (call->issft) {
 				if (sft_part) {
