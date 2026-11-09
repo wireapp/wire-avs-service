@@ -231,6 +231,25 @@ struct ssrcv_update {
  * Must be above the Opus DTX interval (400ms).
  */
 #define TIMEOUT_STREAM_IDLE 1000
+/* A selective audio stream is kept by its source for this long after
+ * it went silent, so that pauses in speech do not cause the source
+ * to lose and regain a stream. Silent sources can still be taken
+ * over by anyone who is talking.
+ */
+#define TIMEOUT_STREAM_HOLD 1500
+
+/* RTP clock rates in ticks per ms */
+#define RTP_KHZ_AUDIO 48
+#define RTP_KHZ_VIDEO 90
+
+/* Largest packet/frame duration (in ts units) we trust as a step,
+ * and the step to use when the duration is unknown.
+ * Audio: 120ms is the largest Opus packet.
+ * Video: 1s covers low framerate screenshare, default is 100ms.
+ */
+#define MAX_DUR_AUDIO (120 * RTP_KHZ_AUDIO)
+#define MAX_DUR_VIDEO (1000 * RTP_KHZ_VIDEO)
+#define DEFAULT_DUR_VIDEO (100 * RTP_KHZ_VIDEO)
 
 
 /* Moved to avs_service as cmdline param or default
@@ -333,6 +352,8 @@ struct rtp_stream {
 	uint16_t last_seq;
 	uint32_t last_ts;
 	uint64_t last_used;
+	uint64_t last_active; /* last time the source was not silent */
+	uint32_t dur[2];   /* last two packet durations (ts units) */
 
 	enum video_stream_q q;
 	enum video_stream_q old_q;
@@ -1803,14 +1824,13 @@ static struct rtp_stream *rtp_stream_find(struct call *call,
 	return NULL;
 }
 
-static void rtp_stream_reset(struct call *call,
-			     uint32_t ssrc,
-			     enum rtp_stream_type rst)
+/* Find the stream currently forwarding ssrc, if any */
+static struct rtp_stream *rtp_stream_lookup(struct call *call,
+					    uint32_t ssrc,
+					    enum rtp_stream_type rst)
 {
 	struct rtp_stream *rtpsv = NULL;
 	int rtpsc = 0;
-	struct rtp_stream *rs;
-	bool found = false;
 	int i;
 
 	switch (rst) {
@@ -1828,11 +1848,22 @@ static void rtp_stream_reset(struct call *call,
 		break;
 	}
 
-	for (i = 0; i < rtpsc && !found; ++i) {
-		rs = &rtpsv[i];
-		found = rs->current_ssrc == ssrc;
+	for (i = 0; i < rtpsc; ++i) {
+		if (rtpsv[i].current_ssrc == ssrc)
+			return &rtpsv[i];
 	}
-	if (found)
+
+	return NULL;
+}
+
+static void rtp_stream_reset(struct call *call,
+			     uint32_t ssrc,
+			     enum rtp_stream_type rst)
+{
+	struct rtp_stream *rs;
+
+	rs = rtp_stream_lookup(call, ssrc, rst);
+	if (rs)
 		rs->current_ssrc = 0;
 }
 
@@ -1841,15 +1872,21 @@ static void rtp_stream_update(struct rtp_stream *rs,
 			      uint8_t level,
 			      uint64_t now)
 {
-	int tsdiff;
-	
+	uint32_t khz;
+	uint32_t max_dur;
+	uint32_t def_dur;
+
 	switch(rs->type) {
 	case RTP_STREAM_TYPE_AUDIO:
-		tsdiff = 1920;
+		khz = RTP_KHZ_AUDIO;
+		max_dur = MAX_DUR_AUDIO;
+		def_dur = MAX_DUR_AUDIO;
 		break;
 
 	case RTP_STREAM_TYPE_VIDEO:
-		tsdiff = 9000;
+		khz = RTP_KHZ_VIDEO;
+		max_dur = MAX_DUR_VIDEO;
+		def_dur = DEFAULT_DUR_VIDEO;
 		break;
 
 	default:
@@ -1857,17 +1894,55 @@ static void rtp_stream_update(struct rtp_stream *rs,
 	}
 
 	if (rs->current_ssrc && rtp->ssrc == rs->current_ssrc) {
-		int seqdiff = (int)rtp->seq - (int)rs->last_seq;
-		rs->seq = (int)rs->seq + seqdiff;
-		
-		tsdiff = (int)((int64_t)rtp->ts - (int64_t)rs->last_ts);	       
-		rs->ts = (uint32_t)((int64_t)rs->ts + (int64_t)tsdiff);
+		int seqdiff = (int16_t)(rtp->seq - rs->last_seq);
+		int tsdiff = (int32_t)(rtp->ts - rs->last_ts);
+
+		/* Only consecutive packets tell us the duration of
+		 * the previous packet. A DTX gap is also consecutive,
+		 * but has a large tsdiff, so ignore those.
+		 */
+		if (seqdiff == 1 && tsdiff > 0 && (uint32_t)tsdiff <= max_dur) {
+			rs->dur[1] = rs->dur[0];
+			rs->dur[0] = (uint32_t)tsdiff;
+		}
+
+		rs->seq = (uint16_t)(rs->seq + seqdiff);
+		rs->ts = (uint32_t)(rs->ts + tsdiff);
 	}
 	else {
+		/* A new source takes over this stream. Advance the
+		 * timestamp by the wall clock time since we last sent
+		 * on it, so the receiver's jitter buffer does not see
+		 * the packet as late. The step must be at least the
+		 * duration of the last packet sent, so the timestamps
+		 * do not overlap. Packet durations can change
+		 * (adaptive ptime), so use the max of the last two.
+		 */
+		uint64_t step = 0;
+		uint32_t min_step;
+
+		min_step = max(rs->dur[0], rs->dur[1]);
+		if (!min_step)
+			min_step = def_dur;
+
+		if (rs->last_used)
+			step = (now - rs->last_used) * khz;
+		if (step < min_step)
+			step = min_step;
+
 		rs->current_ssrc = rtp->ssrc;
 		rs->seq++;
-		rs->ts += tsdiff;		
+		rs->ts += (uint32_t)step;
+
+		/* Relearn the durations from the new source */
+		rs->dur[0] = 0;
+		rs->dur[1] = 0;
+
+		rs->last_active = now;
 	}
+
+	if (level < AUDIO_LEVEL_SILENCE)
+		rs->last_active = now;
 
 	rs->last_seq = rtp->seq;
 	rs->last_ts = rtp->ts;
@@ -2621,32 +2696,6 @@ static void process_rtp(struct call *call,
 			aulevel = AUDIO_LEVEL_ABS_SILENCE;
 		}
 
-#if 0
-		if (is_selective) {
-			if ((rst == RTP_STREAM_TYPE_AUDIO && !kg)
-			 || (rst == RTP_STREAM_TYPE_VIDEO
-			    && rcall->video.select.mode == SELECT_MODE_LEVEL)) {
-				if (aulevel >= AUDIO_LEVEL_SILENCE) {
-					if (RTP_STREAM_TYPE_AUDIO == rst) {
-						struct rtp_stream *rs;
-
-						/* The level from this user has gone below the
-						 * silence level, we should remove them from the
-						 * streams, if one is assigned to them
-						 */
-						rs = rtp_stream_find(rcall, ssrc, rst, kg, aulevel, now);
-						if (rs) {
-							rs->current_ssrc = 0;
-							rs->level = AUDIO_LEVEL_ABS_SILENCE;
-						}
-					}
-					deref_locked(rcall);
-					continue;
-				}
-			}
-		}
-#endif
-
 		if (!call->issft && !rcall->issft) {
 			/* Lookup this participant in remote list,
 			 * so we are sure that both sides have
@@ -2773,6 +2822,22 @@ static void process_rtp(struct call *call,
 					}
 
 					//info("process_rtp(%p): change=%d q=%d ssrc=%u skip=%d\n", call, rs->change, q, ssrc, skip);
+				}
+			}
+			else if (rst == RTP_STREAM_TYPE_AUDIO && !kg
+				 && aulevel >= AUDIO_LEVEL_SILENCE) {
+				/* Only forward speakers: a silent source
+				 * does not get a stream, and one that has
+				 * been silent for longer than the hold time
+				 * gives up its stream. Within the hold time
+				 * keep forwarding it; its level is silence,
+				 * so anyone talking can take the stream over.
+				 */
+				rs = rtp_stream_lookup(rcall, ssrc, rst);
+				if (rs && now - rs->last_active
+				          > TIMEOUT_STREAM_HOLD) {
+					rs->current_ssrc = 0;
+					rs = NULL;
 				}
 			}
 			else {
