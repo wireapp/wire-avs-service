@@ -2,7 +2,7 @@ name: Dev
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, release/*]
   workflow_dispatch:
 
 concurrency:
