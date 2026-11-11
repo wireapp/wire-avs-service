@@ -47,7 +47,7 @@ spec:
             mountPath: /etc/wire/sftd-disco
             readOnly: false
           args:
-            - _sft._tcp.{{ include "sftd.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            - _sft._tcp.{{ include "sftd.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true

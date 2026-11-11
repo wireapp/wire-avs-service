@@ -3,7 +3,16 @@ name: sftd
 description: SFTD is a component for engaging in conference calls
 type: application
 
-# No manual version change please!
-# The version number is automatically increased by the build pipeline.
-version: 0.0.42
-appVersion: 0.0.42
+version: 0.0.0
+appVersion: 0.0.0
+kubeVersion: ">=1.21.0-0"
+annotations:
+  helm.sh/images: |
+    - name: sftd
+      image: quay.io/wire/sftd:do-not-use
+    - name: get-external-ip
+      image: docker.io/alpine/kubectl:1.35.1
+    - name: sftd-disco
+      image: quay.io/wire/sftd_disco:1.1.1
+    - name: join-call-nginx
+      image: docker.io/nginxinc/nginx-unprivileged:1.29.5-alpine3.23-perl
