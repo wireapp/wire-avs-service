@@ -17,6 +17,10 @@ image:
 config:
   ingressClass: "nginx"
 
+# The cluster's DNS domain apex. Only change this if target cluster was
+# bootstrapped with a non-default domain.
+clusterDomain: cluster.local
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -27,7 +31,7 @@ metrics:
 
 # The time to wait after terminating an sft node before shutting it down. No
 # new calls will be initiated whilst a pod is being terminated.
-terminationGracePeriodSeconds: 10
+terminationGracePeriodSeconds: 0
 
 podAnnotations: {}
 
@@ -56,7 +60,30 @@ resources: {}
   #   cpu: 100m
   #   memory: 128Mi
 
+# The address sftd advertises to clients for media, i.e. the argument to -A.
+# sftd always binds media on 0.0.0.0, so this address is advertised only and does
+# not have to exist on a node interface.
+#
+# Accepted values:
+#   __SFT_EXT_IP__   the node external IP, discovered by the get-external-ip
+#                    init container. This is the default when mediaIP is unset.
+#   __SFT_HOST_IP__  the node address, from status.hostIP.
+#   __SFT_POD_IP__   the pod address, from status.podIP. sftd runs with
+#                    hostNetwork, so this is the same address as __SFT_HOST_IP__.
+#   a literal        for example 203.0.113.7.
+#
+# Set this to a host or literal address if clients reach sftd directly. The
+# get-external-ip init container, its node-read RBAC, and its startup delay of
+# up to 5 minutes are then all omitted.
+#
+# Leave this unset if the node is behind NAT. Clients cannot reach the node
+# address in that case, so sftd must advertise the discovered external IP.
+# mediaIP: __SFT_HOST_IP__
+
 externalIpHelper:
+  # This helper runs only when mediaIP references __SFT_EXT_IP__, which is the
+  # default. A host or literal mediaIP removes the helper and its RBAC.
+  #
   # The image used for the initContainer that determines the external IP address of the node.
   # This is a very small image that just contains kubectl, and is only used during startup.
   # We chose the `compat` flavor of the image since we need a shell to run the command that determines the external IP address, and the `compat` image includes a shell.
@@ -95,7 +122,7 @@ joinCall:
   securityContext:
     runAsUser: 101
   image:
-    repository: nginxinc/nginx-unprivileged
+    repository: docker.io/nginxinc/nginx-unprivileged
     pullPolicy: IfNotPresent
     tag: "1.29.5-alpine3.23-perl"
 sftdDisco:
@@ -108,6 +135,13 @@ sftdDisco:
 # trying to establish a connection to clients
 # DOCS: https://docs.wire.com/understand/sft.html#prerequisites
 turnDiscoveryEnabled: false
+
+# Additionally advertise the pod's internal IP as an ICE candidate, alongside the
+# external IP. Needed when the SFT is reachable on both an internal and an external
+# address: a TURN server in front of it must be given permission for both.
+# This does not open another listener; sftd always binds media on 0.0.0.0.
+# Has no effect unless an external IP is available (see externalIP settings).
+advertiseInternalIp: false
 
 # Allow establishing calls involving remote SFT servers (e.g. for Federation)
 # Requires appVersion 3.1.10 or later
@@ -142,11 +176,6 @@ coredumps:
 # fields/options.
 additionalCmdArgs: ""
 
-# init container image to fetch the external IP address of the node
-initImage:
-  repository: bitnamilegacy/kubectl
-  pullPolicy: IfNotPresent
-  tag: "1.29.11"
 
 # Set to false when migrating to Gateway API (gateway.enabled: true) and the
 # nginx Ingress is no longer needed.
@@ -157,17 +186,72 @@ ingress:
 # during migration; disable ingress.enabled in a follow-up apply once verified.
 gateway:
   enabled: false
-  # When true, a Gateway resource is created by this chart.
-  # Set to false when referencing an existing shared Gateway
-  # (e.g. one managed by the cluster operator with mergeGateways: true).
+  # Create a Gateway, or use gateway.name for an existing one.
   create: true
-  # Name of the Gateway resource. Defaults to <release-name>-gateway when empty.
+  # Defaults to <fullname>-gateway.
   name: ""
-  # GatewayClass name. Required when create: true.
-  className: ""
-  # Namespace of the Gateway. Defaults to release namespace when empty.
-  # Only set this when referencing an existing Gateway in another namespace.
+  # Namespace of an existing Gateway (create: false); defaults to the release
+  # namespace. That Gateway must admit ListenerSets from this namespace, e.g.
+  # wire-ingress' gateway.allowedListenerNamespaces.
   namespace: ""
+  className: envoy
   listeners:
     https:
       port: 443
+    # Required Gateway-owned listener; denies all routes on a separate port.
+    placeholder:
+      port: 65535
+  annotations: {}
+  infrastructure:
+    annotations: {}
+    labels: {}
+  envoyProxy:
+    # Set to false for a GatewayClass with mergeGateways: such a Gateway must
+    # not reference an EnvoyProxy and is otherwise not Accepted.
+    create: true
+    # Empty uses the Gateway name; with create: false, references an existing proxy.
+    name: ""
+    # Override EnvoyProxy defaults, including telemetry.accessLog.
+    spec: {}
+    replicas: 2
+    # Advisory spread; set [] to disable. PDB minAvailable: 1 unless replicas is 1.
+    topologySpreadKeys:
+      - kubernetes.io/hostname
+      - topology.kubernetes.io/zone
+  manageServiceType: true
+  serviceType: LoadBalancer
+  zoneAwareRouting:
+    enabled: false
+    minEndpointsThreshold: 3
+  proxyProtocol:
+    enabled: false
+    optional: false
+  tls:
+    enabled: true
+    minVersion: "1.3"
+    maxVersion: "1.3"
+    ecdhCurves: ["X25519MLKEM768", "X25519", "P-256", "P-384", "P-521"]
+    # TLS <= 1.2 only; omitted when minVersion is 1.3.
+    ciphers:
+      - ECDHE-ECDSA-AES128-GCM-SHA256
+      - ECDHE-ECDSA-AES256-GCM-SHA384
+      - ECDHE-RSA-AES128-GCM-SHA256
+      - ECDHE-RSA-AES256-GCM-SHA384
+    signatureAlgorithms: []
+  alpn:
+    enabled: true
+    protocols: [h2, http/1.1]
+  patchPolicies:
+    enabled: true
+    # FIPS requires this to match the controller runtime flag.
+    # Envoy Gateway < 1.10 defaults to false, >= 1.10 to true. Prefer true (with
+    # the flag on 1.9): legacy names depend on ListenerSet creation order.
+    xdsNameSchemeV2: null
+    # Legacy scheme: override if another listener is first on the HTTPS port.
+    xdsListenerName: ""
+    targetGatewayClass: false
+
+# Overrides gateway.tls with Envoy's FIPS_202205 compliance profile.
+# Requires EnvoyPatchPolicy support and a dedicated, non-merged Gateway.
+# Use an ECDSA P-256/P-384 certificate (cert-manager above uses P-384).
+FIPS_202205_tls_profile: false
