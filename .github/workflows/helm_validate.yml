@@ -5,6 +5,10 @@ on:
       - "charts/**"
       - ".github/workflows/helm_validate.yml"
     branches: ["master", "release-**"]
+  pull_request:
+    paths:
+      - "charts/**"
+      - ".github/workflows/helm_validate.yml"
 jobs:
   helm-test:
     permissions:
@@ -29,6 +33,12 @@ jobs:
                    -schema-location "$CRD_SCHEMA_LOCATION"'
         env:
           CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+      - name: Assert on the rendered sftd command line
+        run: |
+          nix shell \
+            "github:NixOS/nixpkgs/${NIXPKGS_CHANNEL}#kubernetes-helm" \
+            --command bash charts/sftd/render-tests.sh charts/sftd
+
       - name: Setup kind cluster and install Helm chart
         run: |
           nix shell \

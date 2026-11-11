@@ -48,20 +48,124 @@ usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] [-u
 
 ### Other (optional) parameters
 
-| Parameter                       | Default | Description                                                                                                                                                                           |
-|---------------------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `terminationGracePeriodSeconds` | `10`    | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating |
-| `replicaCount`                  | `1`     | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                                   |
-| `nodeSelector`, `affinity`      | `{}`    | Used to constraint SFT servers to only run on specific nodes                                                                                                                          |
-| `coredeumps.enabled`            | `false` | Enable recording of coredumps for testing and debugging.                                                                                                                              |
-|                                 |         | WARNING: changing this parameter requires reinstallation of the helm chart. Upgrading is not possible, because `StatefulSet`s have restrictions on what can be patched.               |
-|                                 |         | Required: configure `core_pattern` in the kernel of worker to be `/var/coredumps/core.%t.%h.%e.%p` or similar (same directory)                                                        |
-| `coredeumps.storageClassName`   |         | Storage class to use for creating the Persistent Volumes that holds the coredumps                                                                                                     |
-| `additionalCmdArgs`             | `""`    | Additional command line arguments. Mostly useful for development (until options got their dedicated parameters.) |                                                                                                                                                                                       |
+| Parameter                       | Default         | Description                                                                                                                                                                           |
+|---------------------------------|-----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `terminationGracePeriodSeconds` | `0`             | The time to wait after terminating an sft node before shutting it down. Useful to wait for a pod to have less calls before shutting down. Pod won't take new calls whilst terminating |
+| `replicaCount`                  | `1`             | Amount of SFT servers to run. Only one SFT server can run per node. So  `replicaCount <= nodeCount`                                                                                   |
+| `nodeSelector`, `affinity`      | `{}`            | Used to constraint SFT servers to only run on specific nodes                                                                                                                          |
+| `coredeumps.enabled`            | `false`         | Enable recording of coredumps for testing and debugging.                                                                                                                              |
+|                                 |                 | WARNING: changing this parameter requires reinstallation of the helm chart. Upgrading is not possible, because `StatefulSet`s have restrictions on what can be patched.               |
+|                                 |                 | Required: configure `core_pattern` in the kernel of worker to be `/var/coredumps/core.%t.%h.%e.%p` or similar (same directory)                                                        |
+| `coredeumps.storageClassName`   |                 | Storage class to use for creating the Persistent Volumes that holds the coredumps                                                                                                     |
+| `clusterDomain`                 | `cluster.local` | The cluster's DNS domain apex, used to build in-cluster service FQDNs.                                                                                                                |
+| `additionalCmdArgs`             | `""`            | Additional command line arguments. Mostly useful for development (until options got their dedicated parameters.)                                                                      |
 
 Please see [values.yaml](./values.yaml) for an overview of other parameters that can be configured.
 
 ## Deploy
+
+### Envoy Gateway and ListenerSet
+
+The nginx Ingress remains enabled by default. To use Envoy Gateway instead:
+
+```yaml
+ingress:
+  enabled: false
+gateway:
+  enabled: true
+host: calling.example.com
+allowOrigin: https://webapp.example.com
+tls:
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+```
+
+Gateway mode uses a `gateway.networking.k8s.io/v1` ListenerSet for HTTPS and
+HTTPRoute attachment (tested with Envoy Gateway 1.9.2). Install CRDs and a
+controller supporting v1 ListenerSet and its policy targets. Certificates stay
+in the release namespace. The required Gateway placeholder listener denies all
+routes; its port (`gateway.listeners.placeholder.port`, default 65535) must
+differ from HTTPS. Its hostname, `<hash>.placeholder.invalid`, is unique per
+Gateway, so Gateways merged by `mergeGateways` can share the port.
+
+The GatewayClass defaults to `envoy`; override `gateway.className` if needed.
+For a GatewayClass with `mergeGateways`, set `gateway.envoyProxy.create: false`;
+Envoy Gateway rejects merged Gateways that reference an EnvoyProxy.
+For an existing Gateway, set `gateway.create: false` and `gateway.name`, plus
+`gateway.namespace` if it lives in another namespace; its `allowedListeners`
+must admit this release's namespace. The chart manages its own ListenerSet and
+policies, not the existing proxy fleet. Both ingress toggles can be enabled
+during migration; point DNS at the intended controller.
+
+To share the wire-ingress Gateway (one proxy, IP and TLS profile for all hosts):
+
+```yaml
+gateway:
+  enabled: true
+  create: false
+  name: wire-ingress-wire-ingress-gateway  # <wire-ingress release>-wire-ingress-gateway
+  # namespace: wire                        # if not in the wire-ingress namespace
+  envoyProxy:
+    create: false
+```
+
+From another namespace, wire-ingress must list it in
+`gateway.allowedListenerNamespaces`. Leave `FIPS_202205_tls_profile` off here:
+wire-ingress' FIPS patch covers this listener, and a second patch from this
+chart would target a listener name that only matches by accident.
+
+TLS defaults to 1.3, using wire-ingress's `gateway.tls`, `gateway.alpn`, and
+`gateway.proxyProtocol` settings. For Envoy's FIPS_202205 TLS profile:
+
+```yaml
+FIPS_202205_tls_profile: true
+gateway:
+  patchPolicies:
+    xdsNameSchemeV2: true
+```
+
+Match `xdsNameSchemeV2` to the controller runtime flag (default false before
+Envoy Gateway 1.10, true from 1.10), and enable the controller's
+`extensionApis.enableEnvoyPatchPolicy`. On Envoy Gateway 1.9, prefer enabling
+the flag (`config.envoyGateway.runtimeFlags.enabled: [XDSNameSchemeV2]`) and
+setting `true`: legacy listener names follow ListenerSet creation order, so
+another ListenerSet on the Gateway can void the patch. FIPS mode overrides TLS settings with
+TLS 1.2/1.3, AES-GCM, and P-256/P-384 key agreement. Use an ECDSA P-256/P-384
+certificate; cert-manager defaults to P-384 in this chart. This is a TLS profile,
+not a FIPS-certified Envoy binary.
+
+FIPS requires a dedicated, non-merged Gateway in the release namespace; its
+patch affects every TLS filter chain on the HTTPS socket, including listeners
+without a ClientTrafficPolicy of their own. With an existing
+Gateway, check that ClientTrafficPolicy is accepted and EnvoyPatchPolicy is
+programmed. For legacy xDS names, set `gateway.patchPolicies.xdsListenerName`
+if another listener is first on that port. An unapplied patch leaves a restricted
+TLS 1.2 baseline, so also verify a successful TLS 1.3 handshake.
+
+Envoy defaults to two replicas, a PDB with `minAvailable: 1`, and advisory
+node/AZ spread. Adjust `gateway.envoyProxy.replicas` and `.topologySpreadKeys`,
+or override defaults through `.spec`. A final replica count of one omits the
+PDB. SFT replicas and their PDB remain independent. Spread needs eligible nodes
+in multiple zones; optional `gateway.zoneAwareRouting.enabled` prefers local
+backends and requires the topology injector and node zone labels.
+
+Use `gateway.annotations` for the Gateway and
+`gateway.infrastructure.annotations`/`labels` for generated resources (including
+load-balancer annotations). `gateway.serviceType` defaults to `LoadBalancer`;
+set `gateway.manageServiceType: false` to control it through the EnvoyProxy spec.
+
+Envoy Gateway's [default JSON access logs](https://gateway.envoyproxy.io/docs/tasks/observability/proxy-accesslog/#default-access-log)
+are used unchanged. Override them through `gateway.envoyProxy.spec.telemetry.accessLog`.
+
+For a smaller test environment, keep the TLS defaults and reduce infrastructure:
+
+```yaml
+gateway:
+  envoyProxy:
+    replicas: 1
+  serviceType: ClusterIP
+```
 
 #### Standalone
 

@@ -1,3 +1,6 @@
+{{- if and .Values.advertiseInternalIp (include "sftd.mediaIpIsPodAddress" .) -}}
+{{- fail "advertiseInternalIp is redundant when mediaIP resolves to the pod address (__SFT_POD_IP__ or __SFT_HOST_IP__): -A and -B would advertise the same address. Unset one of them." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -44,9 +47,13 @@ spec:
           secret:
             secretName: {{ include "sftd.fullname" . }}-secret
         {{- end }}
+        {{- if include "sftd.usesExternalIp" . }}
         - name: external-ip
           emptyDir: {}
+        {{- end }}
+      {{- if or (include "sftd.usesExternalIp" .) (and .Values.multiSFT.enabled .Values.multiSFT.discoveryRequired) }}
       initContainers:
+        {{- if include "sftd.usesExternalIp" . }}
         - name: get-external-ip
           {{- with .Values.externalIpHelper.image }}
           image: {{ .repository }}:{{ .tag }}
@@ -67,6 +74,11 @@ spec:
               set -e
               max_tries=30
               count=0
+              addr=
+
+              # The main container reads this file unconditionally under `set -e`,
+              # so it has to exist even when no external IP is found.
+              : > /external-ip/ip
 
               while [ "$count" -lt "$max_tries" ]; do
                 # In the cloud, this setting is available to indicate the true IP address
@@ -78,7 +90,6 @@ spec:
                 fi
 
                 if [ -n "$addr" ]; then
-                  echo -n "$addr" | tee /dev/stderr > /external-ip/ip
                   break
                 fi
 
@@ -87,15 +98,23 @@ spec:
                 sleep 10
               done
 
+              # No external IP is a legitimate configuration: on a directly
+              # reachable node sftd can advertise its own host interfaces, which
+              # under hostNetwork are the node addresses. Leave the file empty and
+              # let sftd start without -A rather than CrashLooping the pod.
               if [ -z "$addr" ]; then
-                echo "Error: No external IP found after $max_tries attempts." >&2
-                exit 1
+                echo "WARNING: no external IP found for node $NODE_NAME after $max_tries attempts." >&2
+                echo "WARNING: sftd will start without -A and advertise its host interface addresses." >&2
+                echo "WARNING: if this node is behind NAT, clients will not be able to reach it." >&2
+                exit 0
               fi
+
               echo -n "$addr" | tee /dev/stderr > /external-ip/ip
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
             runAsUser: 65534 # nobody user in the kubectl image
+        {{- end }}
         {{- if and .Values.multiSFT.enabled .Values.multiSFT.discoveryRequired }}
         - name: get-multi-sft-config
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -123,6 +142,7 @@ spec:
                 exit 1
               fi
         {{- end }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -138,13 +158,19 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
           volumeMounts:
             {{- if or .Values.sftTokenSecret .Values.multiSFT.secret }}
             - name: sft-secret
               mountPath: /secrets
             {{- end }}
+            {{- if include "sftd.usesExternalIp" . }}
             - name: external-ip
               mountPath: /external-ip
+            {{- end }}
             {{- if .Values.coredumps.enabled }}
             - name: coredumps
               mountPath: /var/coredumps
@@ -155,11 +181,26 @@ spec:
             - -c
             - |
               set -e
+              {{- if include "sftd.usesExternalIp" . }}
+              # /external-ip/ip is written by the get-external-ip init
+              # container, which only runs when mediaIP references
+              # __SFT_EXT_IP__. It is always created, so it may be empty.
               EXTERNAL_IP=$(cat /external-ip/ip)
-              if [ -z "${EXTERNAL_IP}" ]; then
+              {{- else }}
+              EXTERNAL_IP=""
+              {{- end }}
+              MEDIA_IP="{{ include "sftd.mediaIpShell" . }}"
+
+              if [ -z "${MEDIA_IP}" ]; then
                 ACCESS_ARGS=
+              {{- if .Values.advertiseInternalIp }}
+                echo "sftd: advertiseInternalIp is set but no media address is available; ignoring" >&2
+              {{- end }}
               else
-                ACCESS_ARGS="-A ${EXTERNAL_IP}"
+                ACCESS_ARGS="-A ${MEDIA_IP}"
+              {{- if .Values.advertiseInternalIp }}
+                ACCESS_ARGS="${ACCESS_ARGS} -B ${POD_IP}"
+              {{- end }}
               fi
 
               MULTI_SFT_ARGS=""

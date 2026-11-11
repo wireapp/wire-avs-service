@@ -268,6 +268,12 @@ pipeline {
                     echo "$chart_patched"
                     echo "$chart_patched" > ./charts/sftd/Chart.yaml
 
+                    # The HIP-0015 helm.sh/images annotation cannot know the image
+                    # tag, which is only decided here. The chart commits the
+                    # placeholder :do-not-use and we substitute it, matching other
+                    # pipelines.
+                    sed -i "s/:do-not-use/:$app_version/g" ./charts/sftd/Chart.yaml
+
                     # just in case the workdir was not cleaned
                     rm -f sftd-*.tgz
 
@@ -396,6 +402,10 @@ pipeline {
                 withCredentials([ string( credentialsId: 'wire-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
                     wireSend secret: "$jenkinsbot_secret", message: "✅ ${JOB_NAME} #${ BUILD_ID } succeeded\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
                 }
+                withCredentials([ string( credentialsId: 'wire-mls-jenkinsbot', variable: 'jenkinsbot_secret' ) ]) {
+                    wireMlsSend secret: "$jenkinsbot_secret", message: "✅ ${JOB_NAME} #${ BUILD_ID } succeeded\n${ BUILD_URL }console\nhttps://github.com/wireapp/wire-avs-service/commit/${ commitId }"
+		}
+		
             }
         }
 
