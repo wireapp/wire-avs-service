@@ -111,7 +111,6 @@ jobs:
           expires-after: 90d
 
       - name: Declare the dev build to the release managers
-        if: github.ref == 'refs/heads/dev'
         uses: wireapp/wire-rm-actions/notify-rm@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
         with:
           rm-staging-url: ${{ vars.RM_STAGING_URL }}
