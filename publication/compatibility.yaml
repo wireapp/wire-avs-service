@@ -1,0 +1,37 @@
+providesApis: []
+
+consumesApis: []
+
+dependsOn:
+  - component: wire-server
+    range: "*"
+    class: mandatory
+    reason: brig hands clients the SFT URLs and shares the zrest secret.
+  - component: coturn
+    range: "*"
+    class: optional
+    reason: The SFT uses a TURN server as its proxy when turnDiscoveryEnabled or multiSFT.turnServerURI(s) is set.
+  - resource: public-ip
+    range: "*"
+    class: mandatory
+    reason: One routable address per replica through hostNetwork, unless advertiseInternalIp.
+  - platform: kubernetes
+    range: ">=1.21.0"
+  - platform: ingress-nginx
+    range: "*"
+    class: alternative
+    reason: Default path when ingress.enabled.
+  - platform: gateway-api
+    range: "*"
+    class: alternative
+    reason: gateway.enabled replaces the ingress with an Envoy gateway.
+  - platform: cert-manager
+    range: "*"
+    class: optional
+    reason: Certificate resource when tls has no secretRef.
+  - platform: prometheus-operator
+    range: "*"
+    class: optional
+    reason: ServiceMonitor when metrics.serviceMonitor.enabled.
+
+includes: []
