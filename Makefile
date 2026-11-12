@@ -181,6 +181,17 @@ JNI_OBJS += \
 	$(patsubst %.c,$(BUILD)/java/jni/%.o,$(filter %.c,$(JNI_SRCS))) \
 	$(patsubst %.cpp,$(BUILD)/java/jni/%.o,$(filter %.cpp,$(JNI_SRCS)))
 
+# dtls_test: the DTLS context of sftd against libre peers
+DTLS_TEST_BIN    := $(BUILD)/test/dtls_test
+DTLS_TEST_OBJS   := $(BUILD)/test/dtls.o $(BUILD)/modules/reflow/dtls.o
+TEST_LIB_FILES := \
+	$(AVS_PATH)/lib/libavscore.a \
+	$(AVS_PATH)/lib/librew.a \
+	$(AVS_PATH)/lib/libre.a \
+	$(AVS_PATH)/lib/libsodium.a \
+	$(WEBRTC_LIB_PATH)/libwebrtc.a \
+	$(CONTRIB_USRSCTP_TARGET)
+
 
 
 #
@@ -191,11 +202,28 @@ JNI_OBJS += \
 all: contrib $(MOD_BINS) $(BIN)
 
 -include $(OBJS:.o=.d)
+-include $(BUILD)/test/dtls.d
 
 $(BIN): $(CONTRIB_USRSCTP_TARGET) $(CONTRIB_AVS_TARGET) $(OBJS)
 	@echo "  LD      $@"
 	$(CXX) $^ $(LFLAGS) -L$(BUILD)/lib -L$(AVS_PATH)/lib $(LIBS) -o $@
 #-static -pie
+
+test: $(DTLS_TEST_BIN) $(BIN)
+	$(DTLS_TEST_BIN)
+	test/startup.sh ./$(BIN)
+
+$(filter-out $(CONTRIB_AVS_TARGET) $(CONTRIB_USRSCTP_TARGET),$(TEST_LIB_FILES)): \
+	$(CONTRIB_AVS_TARGET)
+
+$(DTLS_TEST_BIN): $(DTLS_TEST_OBJS) $(TEST_LIB_FILES)
+	@echo "  LD      $@"
+	$(CXX) $(DTLS_TEST_OBJS) $(LFLAGS) $(LIBS) -o $@
+
+$(BUILD)/test/%.o: test/%.c $(CONTRIB_AVS_TARGET) Makefile
+	@echo "  CC      $@"
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -Imodules/reflow $(CFLAGS) -o $@ -c $< $(DFLAGS)
 
 $(BUILD)/%.o: %.c $(BUILD_SRC) Makefile $(APP_MK)
 	@echo "  CC      $@"
@@ -218,7 +246,7 @@ install: $(BIN)
 	@mkdir -p $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 0755 $(BIN) $(DESTDIR)$(BINDIR)
 
-.PHONY: java
+.PHONY: java test
 java:   
 	@mkdir -p $(BUILD)/$(JAVA_CLASSES_DIR)
 	$(JAVAC) -d $(BUILD)/$(JAVA_CLASSES_DIR) $(JAVA_SRCS)
