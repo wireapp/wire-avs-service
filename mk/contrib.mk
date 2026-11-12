@@ -102,10 +102,21 @@ $(CONTRIB_USRSCTP_TARGET): $(TOOLCHAIN_MASTER) $(CONTRIB_USRSCTP_CONFIG_TARGET) 
 CONTRIB_AVS_PATH := $(CONTRIB_BASE)/avs
 CONTRIB_AVS_BUILD_PATH := $(AVS_PATH)
 CONTRIB_AVS_TARGET := $(AVS_PATH)/lib/libavscore.a
+CONTRIB_AVS_FILES := $(addprefix $(AVS_DIR)/,$(shell \
+	git -C $(AVS_DIR) ls-files --recurse-submodules \
+	src include mk Makefile contrib/re contrib/rew contrib/rem))
 
-$(CONTRIB_AVS_TARGET): $(TOOLCHAIN_MASTER)
+# HAVE_WEBRTC=1 builds libre against the BoringSSL in libwebrtc, which
+# provides DTLS 1.3 and the X25519MLKEM768 group.
+CONTRIB_AVS_OPTIONS := \
+	HAVE_WEBRTC=1 \
+	NO_OPENSSL=1
+
+$(CONTRIB_AVS_TARGET): $(TOOLCHAIN_MASTER) $(CONTRIB_AVS_FILES)
+	@rm -f $(AVS_PATH).tar.bz2
 	@DO_NOT_UPDATE_CONFIG_SCRIPTS=1 \
-	make -C $(AVS_DIR) HAVE_WEBRTC= NO_OPENSSL=1 contrib_protobuf dist_host
+	make -C $(AVS_DIR) $(CONTRIB_AVS_OPTIONS) dist_host
+	@touch $@
 
 .PHONY: contrib_avs
 contrib_avs: $(CONTRIB_AVS_TARGET)

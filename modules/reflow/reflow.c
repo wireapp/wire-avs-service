@@ -48,7 +48,7 @@
 #       include "TargetConditionals.h"
 #endif
 
-#define RFLOG(level, fmt,  ...) loglv(level, "reflow:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
+#define RFLOG(level, fmt,  ...) avs_loglv(level, "reflow:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
 
 #define MAGIC 0xed1af100
 #define MAGIC_CHECK(s) \
@@ -388,7 +388,7 @@ static bool headroom_via_turn(size_t headroom);
 
 
 #if 0
-static void rf_log(const struct reflow *rf, enum log_level level,
+static void rf_log(const struct reflow *rf, enum avs_log_level level,
 		   const char *fmt, ...)
 {
 	char buf[512];
@@ -401,7 +401,7 @@ static void rf_log(const struct reflow *rf, enum log_level level,
 	str_ncpy(&buf[n], fmt, strlen(fmt)+1);
 	fmt = buf;
 
-	vloglv(level, fmt, ap);
+	avs_vloglv(level, fmt, ap);
 	va_end(ap);
 }
 #endif
@@ -2184,7 +2184,6 @@ static int init_ice(struct reflow *rf)
 {
 	struct trice_conf conf = {
 		.nom = ICE_NOMINATION_AGGRESSIVE,
-		.debug = false,
 		.trace = false,
 #if TARGET_OS_IPHONE
 		.ansi = false,
@@ -2335,12 +2334,14 @@ static bool exist_ssrc(struct reflow *rf, uint32_t ssrc)
  * @param audio_ch     Force a specific number of channels (optional)
  */
 int reflow_alloc(struct iflow		**flowp,
+		 const char		*msys_name,
 		 const char		*convid,
 		 const char		*userid_self,
 		 const char		*clientid_self,
 		 enum icall_conv_type	conv_type,
 		 enum icall_call_type	call_type,
 		 enum icall_vstate	vstate,
+		 const char		*rec_path,
 		 void			*extarg)
 {
 	enum media_crypto cryptos;
@@ -2406,6 +2407,7 @@ int reflow_alloc(struct iflow		**flowp,
 			    reflow_close,
 			    NULL, //reflow_get_stats,
 			    NULL, //reflow_get_audio_level
+			    NULL, //reflow_update_ssrc
 			    reflow_debug);
 	list_append(&g_reflow.rfl, &rf->le, rf);
 
@@ -4439,7 +4441,7 @@ static void reflow_remove_ssrc(struct reflow *rf, uint32_t ssrc)
 	if (!rf)
 		return;
 	
-	srtp_remove_stream(rf->srtp_tx, ssrc);
+	re_srtp_remove_stream(rf->srtp_tx, ssrc);
 }
 
 static void mf_remove_ssrc(struct mediaflow *mf, uint32_t ssrc)

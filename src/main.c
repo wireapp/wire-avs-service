@@ -207,7 +207,7 @@ static void shutdown_handler(void *arg)
 	re_cancel();
 }
 
-static const char *level_prefix(enum log_level level)
+static const char *level_prefix(enum avs_log_level level)
 {
 	switch (level) {
 	case LOG_LEVEL_DEBUG: return "DEBUG: ";
@@ -252,7 +252,7 @@ static void log_handler(uint32_t level, const char *msg, void *arg)
 	mem_deref(mb);
 }
 
-static struct log logh = {
+static struct avs_log logh = {
 	.h = log_handler
 };
 
@@ -325,7 +325,7 @@ static void generate_iflist(struct list *ifl, const char *ifstr)
 
 int main(int argc, char *argv[])
 {
-	enum log_level log_level = LOG_LEVEL_DEBUG;
+	enum avs_log_level log_level = LOG_LEVEL_DEBUG;
 	struct sa goog;
 	int err;
 	
@@ -482,8 +482,8 @@ int main(int argc, char *argv[])
 	if (err)
 		goto out;
 
-	log_set_min_level(log_level);
-	log_enable_stderr(false);
+	avs_log_set_min_level(log_level);
+	avs_log_enable_stderr(false);
 
 	if (avsd.log.prefix) {
 		char  buf[256];
@@ -501,7 +501,7 @@ int main(int argc, char *argv[])
 		avsd.log.fp = fopen(avsd.log.path, "a");
 	}
 
-	log_register_handler(&logh);
+	avs_log_register_handler(&logh);
 
 	err = module_init();
 	if (err) {
@@ -533,7 +533,7 @@ int main(int argc, char *argv[])
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
 
-	log_unregister_handler(&logh);
+	avs_log_unregister_handler(&logh);
 	
 	/* check for memory leaks */
 	tmr_debug();
@@ -542,7 +542,7 @@ int main(int argc, char *argv[])
 	(void)shutdown_handler;
 	(void)error_handler;
 
-	log_unregister_handler(&logh);
+	avs_log_unregister_handler(&logh);
 
 		
 	return err;

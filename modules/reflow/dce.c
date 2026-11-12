@@ -1969,7 +1969,7 @@ debug_printf(const char *format, ...)
 	va_list ap;
 
 	va_start(ap, format);
-	vlog(LOG_LEVEL_INFO, format, ap);
+	avs_vlog(LOG_LEVEL_INFO, format, ap);
 	va_end(ap);
 }
 

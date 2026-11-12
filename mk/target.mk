@@ -281,10 +281,9 @@ RANLIB	:= /usr/bin/ranlib
 SYSROOT	:= /usr
 
 CFLAGS		+= -fvisibility=default -Os
-CXXFLAGS	+= -stdlib=libc++
-LFLAGS		+= -stdlib=libc++
 
-#LIBS += -lc++abi
+# libwebrtc.a and libavscore.a are built against libstdc++ on Linux, so
+# sftd uses the default C++ runtime of clang there, which is libstdc++.
 
 endif
 

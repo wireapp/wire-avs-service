@@ -39,6 +39,7 @@
 #include <avs_service.h>
 #include <avs_service_turn.h>
 #include <avs_audio_level.h>
+#include <avs_stats.h>
 
 #if USE_RTX
 #include "jbuf.h"
@@ -98,7 +99,7 @@ enum select_mode {
 extern int rtcp_rr_encode(struct mbuf *mb, const struct rtcp_rr *rr);
 
 #define SFTLOG(level, fmt,  ...) \
-	loglv(level, "sft:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
+	avs_loglv(level, "sft:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
 
 
 #define SFT_USERID "sft"
@@ -4468,19 +4469,21 @@ static void call_close_handler(struct call *call, bool locked)
 
 static void icall_close_handler(struct icall *icall,
 				int err,
-				const char *metrics_json,
+				struct icall_metrics *metrics,
 				uint32_t msg_time,
 				const char *userid,
 				const char *clientid,
 				void *arg)
 {
 	struct call *call = arg;
+	char *metrics_json = metrics ? icall_metrics2json(metrics, NULL) : NULL;
 
 	SFTLOG(LOG_LEVEL_INFO,
 	       "[%u] icall=%p callid=%s err=%d userid=%s clientid=%s "
 	       "metrics: %s\n",
 	       call, mem_nrefs(call), icall, call->callid, err,
 	       userid, clientid, metrics_json);
+	mem_deref(metrics_json);
 	
 	call_close_handler(call, true);
 }
@@ -4523,14 +4526,17 @@ static void icall_audiocbr_handler(struct icall *icall, const char *userid,
 static void icall_quality_handler(struct icall *icall,
 				  const char *userid,
 				  const char *clientid,
-				  int rtt, int uploss, int downloss,
+				  struct stats_report stats,
+				  enum icall_conv_type peer,
 				  void *arg)
 {
 	struct call *call = arg;
 	
 	SFTLOG(LOG_LEVEL_INFO,
-	       "userid=%s clientid=%s rtt=%d uploss=%d downloss=%d\n",
-	       call, userid, clientid, rtt, uploss, downloss);
+	       "userid=%s clientid=%s rtt=%u uploss=%u downloss=%u peer=%d\n",
+	       call, userid, clientid, stats.rtt.candidate_pair,
+	       stats.loss_percentages.direction.tx,
+	       stats.loss_percentages.direction.rx, peer);
 }
 
 static int send_propsync(struct call *call, struct econn_props *props,
@@ -5461,7 +5467,8 @@ static int alloc_icall(struct call *call,
 		             : &call->sft->ecalls,
 	err = ecall_alloc(&ecall, ecalls,
 			  ICALL_CONV_TYPE_ONEONONE,
-			  NULL, call->sft->msys,
+			  ICALL_CALL_TYPE_VIDEO,
+			  NULL, "audummy", call->sft->msys,
 			  cid, SFT_USERID, call->sft->uuid);
 	lock_rel(call->sft->lock);
 	if (err) {
@@ -5754,7 +5761,7 @@ static int start_icall(struct call *call)
 
 	err = ICALL_CALLE(call->icall, start,
 			  ICALL_CALL_TYPE_VIDEO,
-			  true);
+			  true, false);
 	if (err) {
 		SFTLOG(LOG_LEVEL_WARN,
 		       "start failed on icall: %p (%m)\n",
