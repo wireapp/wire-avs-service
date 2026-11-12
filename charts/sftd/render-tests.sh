@@ -95,6 +95,17 @@ expect_error 'sftTokenSecret with multiSFT is rejected' 'please set the secret a
 	--set multiSFT.enabled=true \
 	--set sftTokenSecret=some-secret
 
+# dtls.* map to -D and -g
+expect 'dtls.requireDtls13=false omits -D' absent '  -D \' \
+	--set dtls.requireDtls13=false
+expect 'dtls.requireDtls13=true passes -D' present '  -D \' \
+	--set dtls.requireDtls13=true
+expect 'dtls.groups unset omits -g' absent '-g "'
+expect 'dtls.groups passes one group' present '-g "X25519MLKEM768" \' \
+	--set 'dtls.groups={X25519MLKEM768}'
+expect 'dtls.groups passes an ordered list' present '-g "X25519MLKEM768,P-256" \' \
+	--set 'dtls.groups={X25519MLKEM768,P-256}'
+
 # additionalCmdArgs is passed through verbatim
 expect 'additionalCmdArgs is passed through' present '-x 42' \
 	--set additionalCmdArgs='-x 42'

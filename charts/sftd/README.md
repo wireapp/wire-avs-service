@@ -6,11 +6,13 @@ installed as part of the `wire-server` umbrella chart.
 ## Parameters
 
 ```
-usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] [-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] [-q] [-w <count>] -T -t <URL> -s <path> -w <count>
+usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-B <addr>] [-M <addr>] [-r <port>] [-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] [-q] [-w <count>] [-D] [-g <groups>] -T -t <URL> -s <path> -w <count>
 	-a              Force authorization
 	-I <addr>       Address for HTTP requests (default: 127.0.0.1)
 	-p <port>       Port for HTTP requests (default: 8585)
 	-A <addr>       Address for media (default: same as request address)
+	-B <addr>       Additional address to advertise for media
+			 Only used when -A is set
 	-M <addr>       Address for metrics requests (default: 127.0.0.1)
 	-r <port>       Port for metrics requests (default: 49090)
 	-u <URL>        URL to use in responses
@@ -24,6 +26,9 @@ usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] [-u
 	-t <url>        Multi SFT TURN URL
 	-s <path>       Path to shared secrets file
 	-w <count>      Worker count (default: 16)
+	-D              Require DTLS 1.3 (reject DTLS 1.2 clients and SFTs)
+	-g <groups>     Comma separated DTLS key exchange groups, most preferred first
+			 (default: X25519MLKEM768,X25519,P-256,MLKEM1024)
 ```
 
 ### Required
@@ -58,6 +63,8 @@ usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-M <addr>] [-r <port>] [-u
 |                                 |                 | Required: configure `core_pattern` in the kernel of worker to be `/var/coredumps/core.%t.%h.%e.%p` or similar (same directory)                                                        |
 | `coredeumps.storageClassName`   |                 | Storage class to use for creating the Persistent Volumes that holds the coredumps                                                                                                     |
 | `clusterDomain`                 | `cluster.local` | The cluster's DNS domain apex, used to build in-cluster service FQDNs.                                                                                                                |
+| `dtls.requireDtls13`            | `false`         | Reject clients and SFTs that only support DTLS 1.2.                                                                                                                                   |
+| `dtls.groups`                   | `[]`            | DTLS key exchange groups, most preferred first, e.g. `[X25519MLKEM768]`. Empty keeps the sftd default: `X25519MLKEM768`, `X25519`, `P-256`, `MLKEM1024`.                              |
 | `additionalCmdArgs`             | `""`            | Additional command line arguments. Mostly useful for development (until options got their dedicated parameters.)                                                                      |
 
 Please see [values.yaml](./values.yaml) for an overview of other parameters that can be configured.
