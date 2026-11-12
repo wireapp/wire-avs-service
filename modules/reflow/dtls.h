@@ -29,8 +29,6 @@ void dtls_conn_handler(const struct sa *unused_peer, void *arg);
 bool send_dtls_handler(int *err, struct sa *dst_unused,
 		       struct mbuf *mb_pkt, void *arg);
 
-int reflow_init_dtls(struct tls **dtlsp);
-
 struct dtls_peer *dtls_peer_find(struct list *dtls_peers,
 				 size_t headroom,
 				 const struct sa *addr);

@@ -71,6 +71,11 @@ const char *avs_service_secret_path(void);
 
 const struct pl *avs_service_secret(void);
 
+#define DEFAULT_DTLS_GROUPS "X25519MLKEM768,X25519,P-256,MLKEM1024"
+
+bool avs_service_dtls13_only(void);
+const char *avs_service_dtls_groups(void);
+
 bool avs_service_is_draining(void);
 void avs_service_terminate(void);
 

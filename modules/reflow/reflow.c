@@ -1156,6 +1156,7 @@ static void dtls_estab_handler(void *arg)
 
 	info("           cipher %s\n",
 	     tls_cipher_name(rf->tls_conn));
+	info("           %H\n", dtls_print_session, rf->tls_conn);
 
 	if (rf->got_sdp) {
 		if (!verify_fingerprint(rf, rf->sdp, rf->audio.sdpm, rf->tls_conn)) {
@@ -6150,67 +6151,6 @@ void reflow_close(struct iflow *iflow)
 	mem_deref(iflow);
 }
 
-static const char *cipherv[] = {
-
-	"ECDHE-RSA-AES128-GCM-SHA256",
-	"ECDHE-ECDSA-AES128-GCM-SHA256",
-	"ECDHE-RSA-AES256-GCM-SHA384",
-	"ECDHE-ECDSA-AES256-GCM-SHA384",
-
-};
-
-
-static int init_dtls(struct tls **dtlsp)
-{
-	int err;
-	struct tls *dtls;
-
-	err = tls_alloc(&dtls, TLS_METHOD_DTLS, NULL, NULL);
-	if (err) {
-		warning("reflow: failed to create DTLS context (%m)\n",
-			err);
-		goto out;
-	}
-
-	err = cert_enable_ecdh(dtls);
-	if (err)
-		goto out;
-
-	info("msystem: setting %zu ciphers for DTLS\n", ARRAY_SIZE(cipherv));
-	err = tls_set_ciphers(dtls, cipherv, ARRAY_SIZE(cipherv));
-	if (err)
-		goto out;
-
-	info("msystem: generating ECDSA certificate\n");
-	err = cert_tls_set_selfsigned_ecdsa(dtls, "prime256v1");
-	if (err) {
-		warning("msystem: failed to generate ECDSA"
-			" certificate"
-			" (%m)\n", err);
-		goto out;
-	}
-
-	tls_set_verify_client(dtls);
-
-	err = tls_set_srtp(dtls,
-			   "SRTP_AEAD_AES_256_GCM:"
-			   "SRTP_AEAD_AES_128_GCM:"
-			   "SRTP_AES128_CM_SHA1_80");
-	if (err) {
-		warning("flowmgr: failed to enable SRTP profile (%m)\n",
-			err);
-		goto out;
-	}
-
-	*dtlsp = dtls;
-
-out:
-	if (err) {
-		mem_deref(dtls);
-	}
-	return err;
-}
-
 static char fmtp_no_cbr[] = "stereo=0;sprop-stereo=0;useinbandfec=1";
 static char fmtp_cbr[] = "stereo=0;sprop-stereo=0;useinbandfec=1;cbr=1";
 
@@ -6293,8 +6233,10 @@ static int module_init(void)
 			       reflow_get_mute);
 */
 
-	err = init_dtls(&g_reflow.dtls);
+	err = reflow_init_dtls(&g_reflow.dtls, avs_service_dtls13_only(),
+			       avs_service_dtls_groups());
 	if (err) {
+		error("reflow: DTLS setup failed (%m)\n", err);
 		goto out;
 	}
 

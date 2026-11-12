@@ -77,6 +77,11 @@ struct avs_service {
 	bool is_draining;
 	struct pl secret;
 
+	struct {
+		bool v13_only;
+		char *groups;
+	} dtls;
+
 	struct dnsc *dnsc;
 	struct list shuthl;
 };
@@ -118,7 +123,7 @@ static void usage(void)
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-B <addr>] [-M <addr>] [-r <port>] "
 			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] "
-			 "[-q] [-w <count>] -T -t <URL> -s <path> -w <count>\n");
+			 "[-q] [-w <count>] [-D] [-g <groups>] -T -t <URL> -s <path> -w <count>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
@@ -142,6 +147,9 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-t <url>        Multi SFT TURN URL\n");
 	(void)re_fprintf(stderr, "\t-s <path>       Path to shared secrets file\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
+	(void)re_fprintf(stderr, "\t-D              Require DTLS 1.3 (reject DTLS 1.2 clients and SFTs)\n");
+	(void)re_fprintf(stderr, "\t-g <groups>     Comma separated DTLS key exchange groups, most preferred first\n"
+			         "\t\t\t (default: %s)\n", DEFAULT_DTLS_GROUPS);
 }
 
 static void signal_handler(int sig)
@@ -340,7 +348,7 @@ int main(int argc, char *argv[])
 
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:B:b:c:f:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:B:b:c:Df:g:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -362,9 +370,20 @@ int main(int argc, char *argv[])
 				 sizeof(avsd.blacklist));
 			break;
 
+		case 'D':
+			avsd.dtls.v13_only = true;
+			break;
+
 		case 'f':
 			str_ncpy(avsd.federation_url, optarg,
 				 sizeof(avsd.federation_url));
+			break;
+
+		case 'g':
+			avsd.dtls.groups = mem_deref(avsd.dtls.groups);
+			err = str_dup(&avsd.dtls.groups, optarg);
+			if (err)
+				goto out;
 			break;
 
 		case 'I':
@@ -532,6 +551,7 @@ int main(int argc, char *argv[])
 
 	avsd.dnsc = mem_deref(avsd.dnsc);
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
+	avsd.dtls.groups = mem_deref(avsd.dtls.groups);
 
 	avs_log_unregister_handler(&logh);
 	
@@ -641,6 +661,16 @@ uint64_t avs_service_fir_timeout(void)
 	return avsd.fir_timeout;
 }
 
+bool avs_service_dtls13_only(void)
+{
+	return avsd.dtls.v13_only;
+}
+
+const char *avs_service_dtls_groups(void)
+{
+	return avsd.dtls.groups ? avsd.dtls.groups : DEFAULT_DTLS_GROUPS;
+}
+
 bool avs_service_is_draining(void)
 {
 	return avsd.is_draining;
@@ -671,6 +701,7 @@ void avs_service_terminate(void)
 	re_cancel();
 
 	mem_deref(avsd.log.prefix);
+	avsd.dtls.groups = mem_deref(avsd.dtls.groups);
 	if (avsd.log.fp && avsd.log.fp != stdout) {
 		fclose(avsd.log.fp);
 	}

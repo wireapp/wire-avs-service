@@ -25,6 +25,9 @@ extern const char *avs_software;
  */
 
 int dtls_print_sha256_fingerprint(struct re_printf *pf, const struct tls *tls);
+int dtls_print_session(struct re_printf *pf, const struct tls_conn *tc);
+int reflow_init_dtls(struct tls **dtlsp, bool dtls13_only,
+		     const char *groups);
 
 
 /*
