@@ -4,11 +4,11 @@ consumesApis: []
 
 dependsOn:
   - component: wire-server
-    range: ">=5.0.0"
+    range: "*"
     class: mandatory
     reason: brig hands clients the SFT URLs and shares the zrest secret.
   - component: coturn
-    range: ">=5.6.0"
+    range: "*"
     class: optional
     reason: The SFT uses a TURN server as its proxy when turnDiscoveryEnabled or multiSFT.turnServerURI(s) is set.
   - resource: public-ip
