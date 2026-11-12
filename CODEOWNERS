@@ -1,3 +1,4 @@
 * @wireapp/avs
-/.github/ @wireapp/avs @wireapp/release-managers
+/.github/ @wireapp/avs @wireapp/release-managers @wireapp/platform-engineering
 /publication/ @wireapp/avs @wireapp/release-managers
+/charts/ @wireapp/avs @wireapp/release-managers @wireapp/platform-engineering
