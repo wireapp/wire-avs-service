@@ -1,7 +1,9 @@
 **/build
 **/build-*
+!**/build-aux
 sftd
 upload
 .github
 jenkins
 charts
+contrib/avs/contrib/webrtc

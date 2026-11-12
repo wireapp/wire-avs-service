@@ -112,10 +112,17 @@ CONTRIB_AVS_OPTIONS := \
 	HAVE_WEBRTC=1 \
 	NO_OPENSSL=1
 
+# sftd needs only the WebRTC headers and the library of the host. wire-avs
+# downloads the zips of every platform when one of these is missing;
+# docker/get-webrtc.sh fetches just these two, with pinned checksums.
+CONTRIB_WEBRTC_ZIPS = $(patsubst %,$(abspath $(AVS_DIR))/contrib/webrtc/webrtc_$(WEBRTC_VER)_%.zip,\
+	headers $(HOST_TARGET))
+
 $(CONTRIB_AVS_TARGET): $(TOOLCHAIN_MASTER) $(CONTRIB_AVS_FILES)
 	@rm -f $(AVS_PATH).tar.bz2
 	@DO_NOT_UPDATE_CONFIG_SCRIPTS=1 \
-	make -C $(AVS_DIR) $(CONTRIB_AVS_OPTIONS) dist_host
+	make -C $(AVS_DIR) $(CONTRIB_AVS_OPTIONS) \
+		CONTRIB_WEBRTC_ZIP_FILES="$(CONTRIB_WEBRTC_ZIPS)" dist_host
 	@touch $@
 
 .PHONY: contrib_avs

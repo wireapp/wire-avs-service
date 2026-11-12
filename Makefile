@@ -87,6 +87,7 @@ CXXFLAGS +=
 #-stdlib=libc++
 LFLAGS +=
 #-stdlib=libc++
+LFLAGS += -fuse-ld=lld
 TARGET_ARCH = linux
 endif
 ifeq ($(HOST_UNAME),Darwin)
