@@ -115,15 +115,15 @@ int module_init(void)
 #endif
 
 	struct pl pl;
+	int err;
 
 	pl_set_str(&pl, "reflow.so");
-	module_handler(&pl, NULL);
-	
-	pl_set_str(&pl, "sft.so");
-	module_handler(&pl, NULL);
+	err = module_handler(&pl, NULL);
+	if (err)
+		return err;
 
-	
-	return 0;
+	pl_set_str(&pl, "sft.so");
+	return module_handler(&pl, NULL);
 }
 
 
