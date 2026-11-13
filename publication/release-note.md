@@ -1,16 +1,17 @@
 # sftd 5.1.0
 
-The first sftd release built and published by this repository's own pipeline, with SemVer versions. It gathers everything since 5.0.60: fixes for federated calls, a reworked Helm chart with Gateway API support, and no more Bitnami images. Check the list below if you override images or Helm values, or if you run the chart with `gateway.enabled`.
+The first sftd release built and published by this repository's own pipeline, with SemVer versions. It gathers everything since 5.0.60: fixes for federated calls, a reworked Helm chart with Gateway API support, and no more Bitnami images. The chart now comes from `oci://quay.io/wire/charts/stable/sftd` only. Check the list below if you override images or Helm values, or if you run the chart with `gateway.enabled`.
 
 ## Before upgrading
 
+- Install the chart from `oci://quay.io/wire/charts/stable/sftd`, version `5.1.0`. The `charts-avs` Helm repository keeps the `0.x` versions and does not get 5.1.0.
 - If you mirror or override images: `initImage` is gone, set `externalIpHelper.image` instead. The join-call proxy now runs `docker.io/nginxinc/nginx-unprivileged` as UID 101, so an override that still points to the Bitnami nginx image breaks it. Mirror `quay.io/wire/sftd_disco:1.1.1`, `docker.io/alpine/kubectl:1.35.1` and `docker.io/nginxinc/nginx-unprivileged:1.29.5-alpine3.23-perl`; the chart lists every image it uses in its `helm.sh/images` annotation.
 - If your values set `multiSFT.discoveryRequired` or `multiSFT.turnDiscoveryURL`, remove them and configure `multiSFT.turnServerURI` or `multiSFT.turnServerURIs`. With `discoveryRequired: true` left in, the StatefulSet references a volume that no longer exists and is rejected.
 - If you run with `gateway.enabled` (available since 5.0.80): HTTPS now attaches through a `ListenerSet`. Install Gateway API CRDs and a controller that support v1 `ListenerSet` (tested with Envoy Gateway 1.9.2). With an existing Gateway (`gateway.create: false`), its `allowedListeners` must admit the release namespace. With a `mergeGateways` GatewayClass, set `gateway.envoyProxy.create: false`.
 
 ## What's new
 
-- **Versions and packaging**: the image `quay.io/wire/sftd` and the Helm chart now share one SemVer version, so the chart goes from its `0.x` versions to `5.1.0`. The chart is still published to the `charts-avs` Helm repository, and also to `oci://quay.io/wire/charts/stable/sftd`. The binary tarball stays attached to the GitHub release.
+- **Versions and packaging**: the image `quay.io/wire/sftd` and the Helm chart now share one SemVer version, so the chart goes from its `0.x` versions to `5.1.0`. It is published to `oci://quay.io/wire/charts/stable/sftd`, no longer to `charts-avs`. The binary tarball stays attached to the GitHub release.
 - **Federated calls**: an SFT that joins a federated group call already in progress now receives the video streams of the other SFTs. Federation also works with several TURN servers: `multiSFT.turnServerURIs` spreads the replicas over them.
 - **Gateway API**: the chart can run behind Envoy Gateway instead of the nginx Ingress, with TLS 1.3 by default, an optional FIPS 202205 TLS profile, and the option to share the wire-ingress Gateway.
 - **Media address**: `mediaIP` sets the address sftd advertises to clients. When it is a host or literal address, the external IP lookup, its node-read RBAC and its startup delay of up to 5 minutes all go away. When no external IP is found, the pod now starts and advertises its host addresses, with a warning, instead of crash-looping.
@@ -24,6 +25,7 @@ The first sftd release built and published by this repository's own pipeline, wi
 
 ### Breaking
 
+- The chart is published to `oci://quay.io/wire/charts/stable/sftd` only, `charts-avs` stays on the `0.x` versions: [#68](https://github.com/wireapp/wire-avs-service/pull/68), [#75](https://github.com/wireapp/wire-avs-service/pull/75), WPB-29713
 - `initImage` replaced by `externalIpHelper.image`, join-call image moved to `nginxinc/nginx-unprivileged`, new `sftd_disco` image: [#41](https://github.com/wireapp/wire-avs-service/pull/41), [#46](https://github.com/wireapp/wire-avs-service/pull/46), WPB-23247, WPB-23564
 - TURN discovery removed from the chart (`multiSFT.turnDiscoveryURL`, `multiSFT.discoveryRequired`): [#35](https://github.com/wireapp/wire-avs-service/pull/35), WPB-21462
 - Gateway mode attaches HTTPS through a `ListenerSet`, GatewayClass defaults to `envoy`: [#59](https://github.com/wireapp/wire-avs-service/pull/59), [#60](https://github.com/wireapp/wire-avs-service/pull/60), WPB-29098, WPB-26933
