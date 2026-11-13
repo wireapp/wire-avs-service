@@ -15,11 +15,11 @@ on:
         required: true
     secrets:
       CHARTS_AVS_AWS_ACCESS_KEY_ID:
-        description: 'Publishes the exact Helm package to the S3 chart repository charts-avs'
-        required: true
+        description: 'Publishes the exact Helm package to the S3 chart repository charts-avs (dev-sourced releases only)'
+        required: false
       CHARTS_AVS_AWS_SECRET_ACCESS_KEY:
-        description: 'Publishes the exact Helm package to the S3 chart repository charts-avs'
-        required: true
+        description: 'Publishes the exact Helm package to the S3 chart repository charts-avs (dev-sourced releases only)'
+        required: false
       WIRE_BUILDS_WRITE_ACCESS_GH_TOKEN:
         description: 'Commits the published chart to wireapp/wire-builds build.json (dev-sourced releases only)'
         required: false
@@ -244,7 +244,7 @@ jobs:
 
       - name: Publish the chart to the S3 repository charts-avs (no rebuild)
         id: s3_chart
-        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' && steps.verify.outputs.source-ref == 'dev' }}
         uses: wireapp/wire-rm-actions/publish-chart-s3@813f008b900b1ad3284502f97cac343d80b1836b # v0.1.0
         with:
           chart-file: ${{ steps.verify.outputs.chart-path }}
@@ -338,25 +338,26 @@ jobs:
           set -euo pipefail
           {
             echo
-            if [[ "$S3_OUTCOME" != "success" ]]; then
-              echo "> :x: The chart of v${VERSION} was **not** pushed to the S3 repository \`charts-avs\` (${S3_OUTCOME}). The release is published; run the publication again to push it. \`wire-builds\` is not bumped before the chart is there."
+            if [[ "$SOURCE_BRANCH" != "dev" ]]; then
+              echo "> :information_source: Prepared from \`${SOURCE_BRANCH}\`: published to Quay and declared to the release managers only. \`charts-avs\` and \`wire-builds\` are updated by \`dev\`-sourced releases."
+            else
+              if [[ "$S3_OUTCOME" != "success" ]]; then
+                echo "> :x: The chart of v${VERSION} was **not** pushed to the S3 repository \`charts-avs\` (${S3_OUTCOME}). The release is published; run the publication again to push it. \`wire-builds\` is not bumped before the chart is there."
+              fi
+              case "$OUTCOME" in
+                success)
+                  if [[ -n "${UPDATED:-}" ]]; then
+                    echo "> :arrow_up: \`wire-builds\` bumped to sftd \`${VERSION}\` on: \`${UPDATED}\`."
+                  fi
+                  if [[ -n "${SKIPPED:-}" ]]; then
+                    echo "> :information_source: \`wire-builds\` already pinned \`${VERSION}\` on: \`${SKIPPED}\`."
+                  fi
+                  ;;
+                skipped)
+                  ;;
+                *)
+                  echo "> :x: \`wire-builds\` bump **${OUTCOME}** for v${VERSION}. The release is published; commit \`build.json\` by hand or run the publication again."
+                  ;;
+              esac
             fi
-            case "$OUTCOME" in
-              success)
-                if [[ -n "${UPDATED:-}" ]]; then
-                  echo "> :arrow_up: \`wire-builds\` bumped to sftd \`${VERSION}\` on: \`${UPDATED}\`."
-                fi
-                if [[ -n "${SKIPPED:-}" ]]; then
-                  echo "> :information_source: \`wire-builds\` already pinned \`${VERSION}\` on: \`${SKIPPED}\`."
-                fi
-                ;;
-              skipped)
-                if [[ "$S3_OUTCOME" == "success" ]]; then
-                  echo "> :information_source: \`wire-builds\` not updated: this release was prepared from \`${SOURCE_BRANCH}\`, only \`dev\`-sourced releases bump it."
-                fi
-                ;;
-              *)
-                echo "> :x: \`wire-builds\` bump **${OUTCOME}** for v${VERSION}. The release is published; commit \`build.json\` by hand or run the publication again."
-                ;;
-            esac
           } >> "$GITHUB_STEP_SUMMARY"

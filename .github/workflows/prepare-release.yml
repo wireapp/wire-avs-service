@@ -316,6 +316,7 @@ jobs:
           RELEASE_TYPE: ${{ inputs.type }}
           TARGET: ${{ needs.prepare.outputs.version }}
           SOURCE_COMMIT: ${{ needs.prepare.outputs.sha }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           HELM_SHA256: ${{ steps.helm.outputs.sha256 }}
           REPOSITORY: ${{ github.repository }}
@@ -333,6 +334,8 @@ jobs:
           fi
           chart_channel=dev
           if [[ "$RELEASE_TYPE" == "ga" ]]; then chart_channel=stable; fi
+          chart_repositories="\`oci://quay.io/wire/charts/${chart_channel}\`"
+          if [[ "$SOURCE_BRANCH" == "dev" ]]; then chart_repositories="\`charts-avs\` (S3) · ${chart_repositories}"; fi
           body_file="${RUNNER_TEMP}/release-body.md"
           {
             if [[ "$RELEASE_TYPE" == "ga" ]]; then
@@ -362,7 +365,7 @@ jobs:
             echo "| --- | --- |"
             echo "| Docker image | \`quay.io/wire/sftd:${TARGET}\` |"
             echo "| Helm chart | \`sftd\` \`${TARGET}\` |"
-            echo "| Chart repositories | \`charts-avs\` (S3) · \`oci://quay.io/wire/charts/${chart_channel}\` |"
+            echo "| Chart repositories | ${chart_repositories} |"
             echo "| Binary | \`wire-sft-${TARGET}-linux-amd64.tar.gz\` |"
             echo
             echo "<details>"
