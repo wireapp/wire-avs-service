@@ -2,7 +2,7 @@
   "schemaVersion": "wire.component-release/v1alpha2",
   "component": "sftd",
   "version": "5.1.0",
-  "summary": "First sftd release published by this repository's pipeline, with SemVer versions shared by the image and the chart. It brings everything since 5.0.60: federated call fixes, Gateway API support and no more Bitnami images. Before upgrading, check image overrides, leftover multiSFT discovery values and, with gateway.enabled, ListenerSet support.",
+  "summary": "First sftd release published by this repository's pipeline, with SemVer versions shared by the image and the chart, which now comes from oci://quay.io/wire/charts/stable/sftd only. It brings everything since 5.0.60: federated call fixes, Gateway API support and no more Bitnami images. Before upgrading, switch the chart repository and check image overrides, leftover multiSFT discovery values and, with gateway.enabled, ListenerSet support.",
   "upgrade_from": ">=5.0.60",
   "changes": [
     {
@@ -33,10 +33,11 @@
     },
     {
       "kind": "changed",
-      "description": "Versioning: releases are SemVer versions instead of 5.0.<build number>. The image quay.io/wire/sftd and the Helm chart share that version, so the chart goes from its 0.x versions to 5.1.0. The chart is still published to the charts-avs Helm repository and also to oci://quay.io/wire/charts/stable/sftd.",
-      "breaking": false,
+      "description": "Versioning: releases are SemVer versions instead of 5.0.<build number>, and the image quay.io/wire/sftd and the Helm chart share that version, so the chart goes from its 0.x versions to 5.1.0. The chart is published to oci://quay.io/wire/charts/stable/sftd only: install it from there, the charts-avs Helm repository keeps the 0.x versions and does not get 5.1.0.",
+      "breaking": true,
       "links": [
-        "https://github.com/wireapp/wire-avs-service/pull/68"
+        "https://github.com/wireapp/wire-avs-service/pull/68",
+        "https://github.com/wireapp/wire-avs-service/pull/75"
       ]
     },
     {
