@@ -76,6 +76,17 @@ const struct pl *avs_service_secret(void);
 bool avs_service_dtls13_only(void);
 const char *avs_service_dtls_groups(void);
 
+/* DTLS handshakes that sftd rejects because of -g or -D */
+enum avs_service_dtls_reject {
+	AVS_SERVICE_DTLS_REJECT_GROUP = 0,  /* no key exchange group in common */
+	AVS_SERVICE_DTLS_REJECT_VERSION,    /* no DTLS version in common */
+	AVS_SERVICE_DTLS_REJECT_MAX
+};
+
+void avs_service_dtls_rejected(enum avs_service_dtls_reject reason);
+uint64_t avs_service_dtls_rejected_count(enum avs_service_dtls_reject reason);
+int avs_service_dtls_rejected_metrics(struct re_printf *pf, void *arg);
+
 bool avs_service_is_draining(void);
 void avs_service_terminate(void);
 

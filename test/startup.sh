@@ -57,6 +57,9 @@ expect() {
 
 expect "-D: DTLS 1.3 only" ok \
 	'grep -q "reflow: DTLS versions 1.3$" "$LOG"' -D
+expect "/metrics has the rejection counters" ok \
+	'curl -s --max-time 5 "http://127.0.0.1:$((port + 1))/metrics" |
+	 grep -q "sft_dtls_rejected_total{reason=\"version\"} 0"'
 expect "-g X25519,bogus: exit status $EINVAL" $EINVAL true -g X25519,bogus
 
 echo "$failed sftd startup tests failed"

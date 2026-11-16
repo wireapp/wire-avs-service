@@ -183,7 +183,8 @@ JNI_OBJS += \
 
 # dtls_test: the DTLS context of sftd against libre peers
 DTLS_TEST_BIN    := $(BUILD)/test/dtls_test
-DTLS_TEST_OBJS   := $(BUILD)/test/dtls.o $(BUILD)/modules/reflow/dtls.o
+DTLS_TEST_OBJS   := $(BUILD)/test/dtls.o $(BUILD)/modules/reflow/dtls.o \
+	$(BUILD_SRC)/dtls_reject.o
 TEST_LIB_FILES := \
 	$(AVS_PATH)/lib/libavscore.a \
 	$(AVS_PATH)/lib/librew.a \

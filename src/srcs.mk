@@ -3,6 +3,7 @@
 #
 
 SRCS    += config.c
+SRCS    += dtls_reject.c
 SRCS	+= httpd.c
 SRCS	+= main.c
 SRCS    += mediapump.c

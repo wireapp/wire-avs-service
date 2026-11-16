@@ -33,6 +33,10 @@
  * and a 1500 byte path with TURN framing */
 #define MAX_DATAGRAM 1200
 
+/* Rejections that sftd counts (dtls_case.reject) */
+#define REJECT_GROUP   (1 + AVS_SERVICE_DTLS_REJECT_GROUP)
+#define REJECT_VERSION (1 + AVS_SERVICE_DTLS_REJECT_VERSION)
+
 struct dtls_case {
 	const char *name;
 	bool dtls13_only;         /* -D */
@@ -42,6 +46,7 @@ struct dtls_case {
 	const char *peer_groups;
 	int version;              /* 0: the handshake fails */
 	uint16_t group;
+	int reject;               /* REJECT_GROUP, REJECT_VERSION or 0 */
 	bool peer_cm_only;        /* the peer offers SRTP_AES128_CM_SHA1_80 only */
 };
 
@@ -60,7 +65,8 @@ static const struct dtls_case cases[] = {
 	 .peer_version = V13, .peer_groups = "MLKEM1024",
 	 .version = V13, .group = SSL_GROUP_MLKEM1024},
 	{.name = "-D: DTLS 1.2 client is rejected", .dtls13_only = true,
-	 .peer_version = V12, .peer_groups = "X25519:P-256"},
+	 .peer_version = V12, .peer_groups = "X25519:P-256",
+	 .reject = REJECT_VERSION},
 	{.name = "-D: DTLS 1.3 client is accepted", .dtls13_only = true,
 	 .peer_version = V13, .peer_groups = "X25519MLKEM768:X25519:P-256",
 	 .version = V13, .group = SSL_GROUP_X25519_MLKEM768},
@@ -69,7 +75,13 @@ static const struct dtls_case cases[] = {
 	 .version = V13, .group = SSL_GROUP_SECP256R1},
 	{.name = "-g X25519MLKEM768: client without it is rejected",
 	 .groups = "X25519MLKEM768",
-	 .peer_version = V13, .peer_groups = "X25519:P-256"},
+	 .peer_version = V13, .peer_groups = "X25519:P-256",
+	 .reject = REJECT_GROUP},
+	/* in DTLS 1.2 a missing group is SSL_R_NO_SHARED_CIPHER */
+	{.name = "-g X25519: DTLS 1.2 client with P-256 only is rejected",
+	 .groups = "X25519",
+	 .peer_version = V12, .peer_groups = "P-256",
+	 .reject = REJECT_GROUP},
 	/* an older SFT supports DTLS 1.2 only */
 	{.name = "SFT link: DTLS 1.2 SFT", .sft_is_client = true,
 	 .peer_version = V12, .peer_groups = "X25519:P-256",
@@ -220,16 +232,55 @@ static bool check_conn(const struct tls_conn *conn,
 	return true;
 }
 
+/* sftd counts the rejection, and /metrics shows the counters */
+static bool check_rejected(const struct dtls_case *tc,
+			   const uint64_t *beforev)
+{
+	static uint64_t totalv[AVS_SERVICE_DTLS_REJECT_MAX];
+	char *metrics = NULL;
+	char line[160];
+	bool ok = true;
+	int r;
+
+	for (r = 0; r < AVS_SERVICE_DTLS_REJECT_MAX; r++) {
+		uint64_t n = tc->reject == r + 1;
+
+		totalv[r] += n;
+		if (avs_service_dtls_rejected_count(r) - beforev[r] != n) {
+			re_printf("    reason %d: count not %llu\n", r, n);
+			ok = false;
+		}
+	}
+
+	re_snprintf(line, sizeof(line),
+		    "sft_dtls_rejected_total{reason=\"group\"} %llu\n"
+		    "sft_dtls_rejected_total{reason=\"version\"} %llu\n",
+		    totalv[AVS_SERVICE_DTLS_REJECT_GROUP],
+		    totalv[AVS_SERVICE_DTLS_REJECT_VERSION]);
+	if (re_sdprintf(&metrics, "%H", avs_service_dtls_rejected_metrics,
+			NULL) || !strstr(metrics, line)) {
+		re_printf("    metrics:\n%s    expected:\n%s", metrics, line);
+		ok = false;
+	}
+	mem_deref(metrics);
+
+	return ok;
+}
+
 static bool run_case(const struct dtls_case *tc)
 {
 	struct test t;
 	struct tls *sft_tls = NULL, *peer = NULL;
 	struct dtls_sock **sft_sock;
 	struct sa laddr, srv_addr;
+	uint64_t beforev[AVS_SERVICE_DTLS_REJECT_MAX];
+	int r;
 	bool ok = false;
 	int err;
 
 	memset(&t, 0, sizeof(t));
+	for (r = 0; r < AVS_SERVICE_DTLS_REJECT_MAX; r++)
+		beforev[r] = avs_service_dtls_rejected_count(r);
 	sa_set_str(&laddr, "127.0.0.1", 0);
 	sft_sock = tc->sft_is_client ? &t.cli_sock : &t.srv_sock;
 
@@ -285,6 +336,8 @@ static bool run_case(const struct dtls_case *tc)
 			  t.sft_datagram_max);
 		ok = false;
 	}
+
+	ok &= check_rejected(tc, beforev);
 
  out:
 	if (err) {

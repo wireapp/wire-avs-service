@@ -5973,6 +5973,9 @@ static void http_stats_handler(struct http_conn *hc,
 	mbuf_printf(mb, "sft_calls_total %llu\n", sft->stats.group_cnt);
 	mbuf_printf(mb, "\n");
 
+	mbuf_printf(mb, "%H", avs_service_dtls_rejected_metrics, NULL);
+	mbuf_printf(mb, "\n");
+
 	lock_rel(sft->lock);
 
 	mb->pos = 0;
