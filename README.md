@@ -1,15 +1,15 @@
 # avs-service
 AVS services (SFT etc)
 
-In order to build all that is necessary is to follow the Dockerfile.
+In order to build all that is necessary is to follow docker/Dockerfile.
 If building on anything else than docker, please include all the necessary
-pre-requisits as defined in the Dockerfile.
+pre-requisits as defined in docker/Dockerfile.
 
 To build:
 - Clone this repository using git clone --recursive
-- Run docker build ./
+- Run docker build -f docker/Dockerfile .
 
-To run the tests (DTLS handshakes, the reflow module, sftd startup):
+To run the tests (DTLS handshakes, sftd startup):
 `make test`
 
 ## DTLS
