@@ -1,15 +1,39 @@
 {
   "schemaVersion": "wire.component-release/v1alpha2",
   "component": "sftd",
-  "version": "5.1.0",
-  "summary": "First release of sftd under the Wire release standard: SemVer versions, the image and the Helm chart at the same version, published by the release pipeline of this repository instead of Jenkins.",
-  "upgrade_from": ">=5.0.80",
+  "version": "5.2.0",
+  "summary": "First sftd release prepared from dev. On top of 5.1.0 it brings the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. The chart is the same as in 5.1.0 and is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
+  "upgrade_from": ">=5.1.0",
   "changes": [
     {
-      "kind": "changed",
-      "description": "Versioning: releases are now picked as SemVer versions instead of 5.0.<build number>. The image quay.io/wire/sftd and the Helm chart share that version, so the chart goes from 0.152.0 to 5.1.0. The chart is still published to the charts-avs Helm repository and also to oci://quay.io/wire/charts/stable/sftd. Pin sftd 5.1.0.",
+      "kind": "fixed",
+      "description": "Audio stream selection: a new speaker takes a free stream before taking over an active one, and only takes over a speaker who is quieter by a clear margin. This stops two speakers of similar level from alternating on the same stream, which garbled the audio. Streams whose sender has stopped for more than a second are freed, new participants start at silence instead of the loudest level, federated participants are compared with their own audio level instead of a level shared by the whole remote SFT, and a participant leaving no longer resets the streams of another call.",
       "breaking": false,
-      "links": []
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/commit/0c03d6a",
+        "https://github.com/wireapp/wire-avs-service/commit/692fb2d",
+        "https://github.com/wireapp/wire-avs-service/commit/7095c4f",
+        "https://github.com/wireapp/wire-avs-service/commit/a035e42",
+        "https://github.com/wireapp/wire-avs-service/commit/50d46bf"
+      ]
+    },
+    {
+      "kind": "fixed",
+      "description": "Audio no longer becomes very delayed after a stream has been unused for a while: when a new source takes over a stream, its timestamps follow the time that has actually passed, so the receiver's jitter buffer does not grow.",
+      "breaking": false,
+      "links": ["https://github.com/wireapp/wire-avs-service/commit/633af34"]
+    },
+    {
+      "kind": "fixed",
+      "description": "In federated calls, video forwarding no longer uses uninitialised SSRCs when the sending participant is not found.",
+      "breaking": false,
+      "links": ["https://github.com/wireapp/wire-avs-service/commit/a2e7b85"]
+    },
+    {
+      "kind": "changed",
+      "description": "Releases prepared from dev publish the chart to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd (oci://quay.io/wire/charts/dev/sftd for pre-releases), and pin it in wire-builds. 5.1.0 was published to the OCI repository only.",
+      "breaking": false,
+      "links": ["https://github.com/wireapp/wire-avs-service/pull/75"]
     }
   ],
   "migrations": [],
