@@ -6213,17 +6213,6 @@ static int module_init(void)
 {
 	int err = 0;
 
-	/* Audio codecs we support */
-	list_append(&g_reflow.aucodecl, &opus.le, &opus);
-
-	/* Video codecs we support */
-	list_append(&g_reflow.vidcodecl, &vp8.le, &vp8);
-
-	list_append(&g_reflow.bundle_vidcodecl, &vp8.bundle_le, &vp8);
-#if USE_RTX
-	list_append(&g_reflow.bundle_vidcodecl, &rtx.bundle_le, &rtx);
-#endif
-	
 	info("reflow_init: setting flow to reflow\n");
 	if (g_reflow.initialized)
 		return EALREADY;
@@ -6239,6 +6228,17 @@ static int module_init(void)
 		error("reflow: DTLS setup failed (%m)\n", err);
 		goto out;
 	}
+
+	/* Audio codecs we support */
+	list_append(&g_reflow.aucodecl, &opus.le, &opus);
+
+	/* Video codecs we support */
+	list_append(&g_reflow.vidcodecl, &vp8.le, &vp8);
+
+	list_append(&g_reflow.bundle_vidcodecl, &vp8.bundle_le, &vp8);
+#if USE_RTX
+	list_append(&g_reflow.bundle_vidcodecl, &rtx.bundle_le, &rtx);
+#endif
 
 	iflow_set_alloc(reflow_alloc);
 	mediapump_register(&g_reflow.mediaflow.mp, "reflow",
@@ -6266,6 +6266,10 @@ static int module_close(void)
 	info("reflow: module closing...\n");
 
 	g_reflow.dtls = mem_deref(g_reflow.dtls);
+
+	list_clear(&g_reflow.aucodecl);
+	list_clear(&g_reflow.vidcodecl);
+	list_clear(&g_reflow.bundle_vidcodecl);
 
 	le = g_reflow.rfl.head;
 	while(le) {
