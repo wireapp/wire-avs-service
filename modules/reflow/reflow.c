@@ -79,7 +79,6 @@ enum {
 	RTP_FIRST_PKT_TIMEOUT_MS = 10000,
 	RTP_RESTART_TIMEOUT_MS = 2000,
 	DCE_TIMEOUT_MS = 5000,
-	DTLS_MTU       = 1480,
 	SSRC_MAX       = 4,
 	ICE_INTERVAL   = 50,    /* milliseconds */
 	PORT_DISCARD   = 9,     /* draft-ietf-ice-trickle-05 */
@@ -2609,9 +2608,8 @@ int reflow_alloc(struct iflow		**flowp,
 			warning("reflow(%p): dtls context is missing\n", rf);
 		}
 
-		err = dtls_listen(&rf->dtls_sock, &laddr_dtls,
-				  NULL, 2, LAYER_DTLS,
-				  dtls_conn_handler, rf);
+		err = reflow_dtls_listen(&rf->dtls_sock, &laddr_dtls,
+					 dtls_conn_handler, rf);
 		if (err) {
 			warning("reflow(%p): dtls_listen failed (%m)\n",
 				rf, err);
@@ -2626,8 +2624,6 @@ int reflow_alloc(struct iflow		**flowp,
 					  NULL, rf);
 		if (err)
 			goto out;
-
-		dtls_set_mtu(rf->dtls_sock, DTLS_MTU);
 
 		re_snprintf(rf->audio.fingerprint,
 			    sizeof(rf->audio.fingerprint),

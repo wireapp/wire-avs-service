@@ -29,6 +29,10 @@
 #define V12 DTLS1_2_VERSION
 #define V13 DTLS1_3_VERSION
 
+/* The largest datagram sftd may send: it fits a 1280 byte IPv6 path
+ * and a 1500 byte path with TURN framing */
+#define MAX_DATAGRAM 1200
+
 struct dtls_case {
 	const char *name;
 	bool dtls13_only;         /* -D */
@@ -88,6 +92,8 @@ struct test {
 	struct dtls_sock *cli_sock;
 	struct tls_conn *srv_conn;
 	struct tls_conn *cli_conn;
+	struct udp_helper *uh;
+	size_t sft_datagram_max;  /* largest datagram sent by sftd */
 	bool srv_estab;
 	bool cli_estab;
 	int err;
@@ -131,6 +137,19 @@ static void conn_handler(const struct sa *peer, void *arg)
 
 	t->err = dtls_accept(&t->srv_conn, t->srv_tls, t->srv_sock,
 			     srv_estab_handler, NULL, close_handler, t);
+}
+
+static bool send_handler(int *err, struct sa *dst, struct mbuf *mb,
+			 void *arg)
+{
+	struct test *t = arg;
+	(void)err;
+	(void)dst;
+
+	if (mbuf_get_left(mb) > t->sft_datagram_max)
+		t->sft_datagram_max = mbuf_get_left(mb);
+
+	return false;
 }
 
 static void timeout_handler(void *arg)
@@ -222,8 +241,9 @@ static bool run_case(const struct dtls_case *tc)
 
 	t.srv_tls = tc->sft_is_client ? peer : sft_tls;
 
-	err = dtls_listen(sft_sock, &laddr, NULL, 2, 2,
-			  tc->sft_is_client ? NULL : conn_handler, &t);
+	/* the socket of sftd as reflow creates it, with its MTU */
+	err = reflow_dtls_listen(sft_sock, &laddr,
+				 tc->sft_is_client ? NULL : conn_handler, &t);
 	if (!err) {
 		err = dtls_listen(tc->sft_is_client ? &t.srv_sock : &t.cli_sock,
 				  &laddr, NULL, 2, 2,
@@ -231,6 +251,9 @@ static bool run_case(const struct dtls_case *tc)
 	}
 	if (!err)
 		err = udp_local_get(dtls_udp_sock(t.srv_sock), &srv_addr);
+	if (!err)
+		err = udp_register_helper(&t.uh, dtls_udp_sock(*sft_sock), 1,
+					  send_handler, NULL, &t);
 	if (!err)
 		err = dtls_connect(&t.cli_conn,
 				   tc->sft_is_client ? sft_tls : peer,
@@ -257,6 +280,12 @@ static bool run_case(const struct dtls_case *tc)
 			  t.timeout);
 	}
 
+	if (t.sft_datagram_max > MAX_DATAGRAM) {
+		re_printf("    sftd sent a %zu byte datagram\n",
+			  t.sft_datagram_max);
+		ok = false;
+	}
+
  out:
 	if (err) {
 		re_printf("    setup failed (%m)\n", err);
@@ -264,6 +293,7 @@ static bool run_case(const struct dtls_case *tc)
 	}
 	mem_deref(t.cli_conn);
 	mem_deref(t.srv_conn);
+	mem_deref(t.uh);
 	mem_deref(t.cli_sock);
 	mem_deref(t.srv_sock);
 	mem_deref(peer);
