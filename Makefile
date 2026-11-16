@@ -239,6 +239,14 @@ $(BUILD_SRC): Makefile
 	@mkdir -p $(BUILD_SRC) $(MOD_BLD)
 	@touch $@
 
+# The objects and src/static.c depend on the build directory
+$(BUILD):
+	@mkdir -p $@
+
+# The objects include headers of the avs dist, of WebRTC and of usrsctp
+$(OBJS) $(foreach m,$(MODULES),$($(m)_OBJS)): \
+	| $(CONTRIB_AVS_TARGET) $(CONTRIB_USRSCTP_TARGET)
+
 clean:
 	@rm -rf $(BIN) $(MOD_BINS) $(BUILD)
 

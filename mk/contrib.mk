@@ -118,11 +118,17 @@ CONTRIB_AVS_OPTIONS := \
 CONTRIB_WEBRTC_ZIPS = $(patsubst %,$(abspath $(AVS_DIR))/contrib/webrtc/webrtc_$(WEBRTC_VER)_%.zip,\
 	headers $(HOST_TARGET))
 
+# dist_host writes libavscore.a before the rest of the dist, so remove it
+# if dist_host fails, or the next make would take the dist as complete.
+# The top level of the wire-avs build is not safe with -j (two rules unpack
+# the same WebRTC zip, and libre.a is installed while it is written), so
+# it runs with -j1; wire-avs runs its own sub-makes with -j8.
 $(CONTRIB_AVS_TARGET): $(TOOLCHAIN_MASTER) $(CONTRIB_AVS_FILES)
 	@rm -f $(AVS_PATH).tar.bz2
 	@DO_NOT_UPDATE_CONFIG_SCRIPTS=1 \
-	make -C $(AVS_DIR) $(CONTRIB_AVS_OPTIONS) \
-		CONTRIB_WEBRTC_ZIP_FILES="$(CONTRIB_WEBRTC_ZIPS)" dist_host
+	make -j1 -C $(AVS_DIR) $(CONTRIB_AVS_OPTIONS) \
+		CONTRIB_WEBRTC_ZIP_FILES="$(CONTRIB_WEBRTC_ZIPS)" dist_host \
+		|| { rm -f $@; exit 1; }
 	@touch $@
 
 .PHONY: contrib_avs
