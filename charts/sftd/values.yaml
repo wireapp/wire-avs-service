@@ -156,6 +156,9 @@ advertiseInternalIp: false
 dtls:
   # Reject clients and SFTs that only support DTLS 1.2 (sftd -D).
   requireDtls13: false
+  # Disable the SRTP_AES128_CM_SHA1_80 fallback (sftd -G). CM-only clients
+  # cannot set up media when this is true. The default keeps them working.
+  requireGcmSrtp: false
   # Key exchange groups, most preferred first (sftd -g), for example
   # [X25519MLKEM768]. Clients that support none of them cannot connect.
   # Released Wire clients (checked with AVS 10.5.35) do not offer

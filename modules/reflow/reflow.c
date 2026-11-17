@@ -6219,6 +6219,7 @@ static int module_init(void)
 */
 
 	err = reflow_init_dtls(&g_reflow.dtls, avs_service_dtls13_only(),
+			       avs_service_srtp_gcm_only(),
 			       avs_service_dtls_groups());
 	if (err) {
 		error("reflow: DTLS setup failed (%m)\n", err);

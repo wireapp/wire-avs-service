@@ -40,6 +40,7 @@
 struct dtls_case {
 	const char *name;
 	bool dtls13_only;         /* -D */
+	bool srtp_gcm_only;       /* -G */
 	const char *groups;       /* -g, NULL: sftd default */
 	bool sft_is_client;       /* sftd connects, as towards another SFT */
 	int peer_version;         /* highest DTLS version of the peer */
@@ -91,11 +92,20 @@ static const struct dtls_case cases[] = {
 	 .peer_version = V13,
 	 .peer_groups = "X25519MLKEM768:X25519:P-256:MLKEM1024",
 	 .version = V13, .group = SSL_GROUP_X25519_MLKEM768},
-	/* reflow.c fails such a flow; that is not tested here */
-	{.name = "client offering SRTP_AES128_CM_SHA1_80 only gets no SRTP "
-		 "profile",
+	{.name = "default: CM-only DTLS 1.2 client uses CM",
 	 .peer_version = V12, .peer_groups = "X25519:P-256",
 	 .version = V12, .group = SSL_GROUP_X25519, .peer_cm_only = true},
+	{.name = "default: CM-only DTLS 1.3 client uses CM",
+	 .peer_version = V13, .peer_groups = "X25519:P-256",
+	 .version = V13, .group = SSL_GROUP_X25519, .peer_cm_only = true},
+	{.name = "-G: GCM client is accepted", .srtp_gcm_only = true,
+	 .peer_version = V13, .peer_groups = "X25519MLKEM768:X25519:P-256",
+	 .version = V13, .group = SSL_GROUP_X25519_MLKEM768},
+	/* reflow.c fails such a flow after DTLS; that is not tested here */
+	{.name = "-G: CM-only client gets no SRTP profile",
+	 .srtp_gcm_only = true, .peer_cm_only = true,
+	 .peer_version = V13, .peer_groups = "X25519:P-256",
+	 .version = V13, .group = SSL_GROUP_X25519},
 };
 
 struct test {
@@ -176,7 +186,15 @@ static void timeout_handler(void *arg)
 static int peer_tls(struct tls **tlsp, const struct dtls_case *tc)
 {
 	struct tls *tls = NULL;
+	const char *profiles;
 	int err;
+
+	if (tc->peer_cm_only)
+		profiles = "SRTP_AES128_CM_SHA1_80";
+	else if (tc->sft_is_client)
+		profiles = "SRTP_AEAD_AES_256_GCM:SRTP_AES128_CM_SHA1_80";
+	else
+		profiles = "SRTP_AES128_CM_SHA1_80:SRTP_AEAD_AES_256_GCM";
 
 	err = tls_alloc(&tls, TLS_METHOD_DTLS, NULL, NULL);
 	if (!err)
@@ -188,10 +206,7 @@ static int peer_tls(struct tls **tlsp, const struct dtls_case *tc)
 	if (!err)
 		err = cert_tls_set_selfsigned_ecdsa(tls, "prime256v1");
 	if (!err)
-		err = tls_set_srtp(tls, tc->peer_cm_only ?
-				   "SRTP_AES128_CM_SHA1_80" :
-				   "SRTP_AES128_CM_SHA1_80:"
-				   "SRTP_AEAD_AES_256_GCM");
+		err = tls_set_srtp(tls, profiles);
 
 	if (err)
 		mem_deref(tls);
@@ -208,15 +223,17 @@ static bool check_conn(const struct tls_conn *conn,
 	uint16_t group = 0;
 	enum srtp_suite suite;
 	uint8_t key[64];
+	const enum srtp_suite expected_suite = tc->peer_cm_only ?
+		SRTP_AES_CM_128_HMAC_SHA1_80 : SRTP_AES_256_GCM;
+	const bool expect_srtp = !tc->peer_cm_only || !tc->srtp_gcm_only;
 	bool srtp;
 
 	srtp = !tls_srtp_keyinfo(conn, &suite, key, sizeof(key),
 				 key, sizeof(key));
-	if (tc->peer_cm_only ? srtp : !srtp || suite != SRTP_AES_256_GCM) {
+	if (srtp != expect_srtp || (srtp && suite != expected_suite)) {
 		re_printf("    SRTP profile %s, expected %s\n",
 			  srtp ? srtp_suite_name(suite) : "none",
-			  tc->peer_cm_only ? "none" :
-			  srtp_suite_name(SRTP_AES_256_GCM));
+			  expect_srtp ? srtp_suite_name(expected_suite) : "none");
 		return false;
 	}
 
@@ -284,7 +301,8 @@ static bool run_case(const struct dtls_case *tc)
 	sa_set_str(&laddr, "127.0.0.1", 0);
 	sft_sock = tc->sft_is_client ? &t.cli_sock : &t.srv_sock;
 
-	err = reflow_init_dtls(&sft_tls, tc->dtls13_only, tc->groups);
+	err = reflow_init_dtls(&sft_tls, tc->dtls13_only,
+				tc->srtp_gcm_only, tc->groups);
 	if (!err)
 		err = peer_tls(&peer, tc);
 	if (err)

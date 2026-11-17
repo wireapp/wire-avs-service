@@ -18,6 +18,7 @@
 
 #define _DEFAULT_SOURCE
 #include <stdlib.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -79,6 +80,7 @@ struct avs_service {
 
 	struct {
 		bool v13_only;
+		bool srtp_gcm_only;
 		char *groups;
 	} dtls;
 
@@ -123,7 +125,7 @@ static void usage(void)
 	(void)re_fprintf(stderr,
 			 "usage: sftd [-a] [-I <addr>] [-p <port>] [-A <addr>] [-B <addr>] [-M <addr>] [-r <port>] "
 			 "[-u <URL>] [-b <blacklist> [-l <prefix>] [-O <iflist>] "
-			 "[-q] [-w <count>] [-D] [-g <groups>] -T -t <URL> -s <path> -w <count>\n");
+			 "[-q] [-w <count>] [-D] [-G] [-g <groups>] -T -t <URL> -s <path> -w <count>\n");
 	(void)re_fprintf(stderr, "\t-a              Force authorization\n"),
 	(void)re_fprintf(stderr, "\t-I <addr>       Address for HTTP requests (default: %s)\n",
 			 DEFAULT_REQ_ADDR);
@@ -148,6 +150,7 @@ static void usage(void)
 	(void)re_fprintf(stderr, "\t-s <path>       Path to shared secrets file\n");
 	(void)re_fprintf(stderr, "\t-w <count>      Worker count (default: %d)\n", NUM_WORKERS);
 	(void)re_fprintf(stderr, "\t-D              Require DTLS 1.3 (reject DTLS 1.2 clients and SFTs)\n");
+	(void)re_fprintf(stderr, "\t-G              Require GCM SRTP (CM-only peers cannot set up media)\n");
 	(void)re_fprintf(stderr, "\t-g <groups>     Comma separated DTLS key exchange groups, most preferred first\n"
 			         "\t\t\t (default: %s)\n", DEFAULT_DTLS_GROUPS);
 }
@@ -335,6 +338,7 @@ int main(int argc, char *argv[])
 {
 	enum avs_log_level log_level = LOG_LEVEL_DEBUG;
 	struct sa goog;
+	bool log_registered = false;
 	int err;
 	
 	(void)sys_coredump_set(true);
@@ -348,7 +352,7 @@ int main(int argc, char *argv[])
 
 	for (;;) {
 
-		const int c = getopt(argc, argv, "aA:B:b:c:Df:g:I:k:l:M:O:p:qr:s:Tt:u:vw:x:");
+		const int c = getopt(argc, argv, "aA:B:b:c:Df:g:GI:k:l:M:O:p:qr:s:Tt:u:vw:x:");
 		if (0 > c)
 			break;
 
@@ -386,6 +390,10 @@ int main(int argc, char *argv[])
 				goto out;
 			break;
 
+		case 'G':
+			avsd.dtls.srtp_gcm_only = true;
+			break;
+
 		case 'I':
 			err = sa_set_str(&avsd.req_addr, optarg,
 					 DEFAULT_REQ_PORT);
@@ -398,7 +406,10 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'l':
-			str_dup(&avsd.log.prefix, optarg);
+			avsd.log.prefix = mem_deref(avsd.log.prefix);
+			err = str_dup(&avsd.log.prefix, optarg);
+			if (err)
+				goto out;
 			break;
 
 		case 'M':
@@ -518,9 +529,16 @@ int main(int argc, char *argv[])
 			    "%s_%s.log", avsd.log.prefix, buf);
 
 		avsd.log.fp = fopen(avsd.log.path, "a");
+		if (!avsd.log.fp) {
+			err = errno;
+			fprintf(stderr, "%s: cannot open log file '%s': %s\n",
+				argv[0], avsd.log.path, strerror(err));
+			goto out;
+		}
 	}
 
 	avs_log_register_handler(&logh);
+	log_registered = true;
 
 	err = module_init();
 	if (err) {
@@ -553,7 +571,13 @@ int main(int argc, char *argv[])
 	avsd.secret.p = mem_deref((void *)avsd.secret.p);
 	avsd.dtls.groups = mem_deref(avsd.dtls.groups);
 
-	avs_log_unregister_handler(&logh);
+	if (log_registered)
+		avs_log_unregister_handler(&logh);
+	if (avsd.log.fp && avsd.log.fp != stdout) {
+		fclose(avsd.log.fp);
+		avsd.log.fp = stdout;
+	}
+	avsd.log.prefix = mem_deref(avsd.log.prefix);
 	
 	/* check for memory leaks */
 	tmr_debug();
@@ -562,9 +586,6 @@ int main(int argc, char *argv[])
 	(void)shutdown_handler;
 	(void)error_handler;
 
-	avs_log_unregister_handler(&logh);
-
-		
 	return err;
 }
 
@@ -666,6 +687,11 @@ bool avs_service_dtls13_only(void)
 	return avsd.dtls.v13_only;
 }
 
+bool avs_service_srtp_gcm_only(void)
+{
+	return avsd.dtls.srtp_gcm_only;
+}
+
 const char *avs_service_dtls_groups(void)
 {
 	return avsd.dtls.groups ? avsd.dtls.groups : DEFAULT_DTLS_GROUPS;
@@ -700,9 +726,5 @@ void avs_service_terminate(void)
 	
 	re_cancel();
 
-	mem_deref(avsd.log.prefix);
 	avsd.dtls.groups = mem_deref(avsd.dtls.groups);
-	if (avsd.log.fp && avsd.log.fp != stdout) {
-		fclose(avsd.log.fp);
-	}
 }

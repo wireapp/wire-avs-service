@@ -265,7 +265,7 @@ static void info_handler(const SSL *ssl, int where, int value)
 
 
 int reflow_init_dtls(struct tls **dtlsp, bool dtls13_only,
-		     const char *groups)
+		     bool srtp_gcm_only, const char *groups)
 {
 	struct tls *dtls = NULL;
 	SSL_CTX *ctx;
@@ -345,14 +345,19 @@ int reflow_init_dtls(struct tls **dtlsp, bool dtls13_only,
 
 	tls_set_verify_client(dtls);
 
-	err = tls_set_srtp(dtls,
+	err = tls_set_srtp(dtls, srtp_gcm_only ?
 			   "SRTP_AEAD_AES_256_GCM:"
-			   "SRTP_AEAD_AES_128_GCM");
+			   "SRTP_AEAD_AES_128_GCM" :
+			   "SRTP_AEAD_AES_256_GCM:"
+			   "SRTP_AEAD_AES_128_GCM:"
+			   "SRTP_AES128_CM_SHA1_80");
 	if (err) {
 		warning("flowmgr: failed to enable SRTP profile (%m)\n",
 			err);
 		goto out;
 	}
+	info("reflow: SRTP profiles %s\n",
+	     srtp_gcm_only ? "GCM only" : "GCM with CM fallback");
 
 	*dtlsp = dtls;
 

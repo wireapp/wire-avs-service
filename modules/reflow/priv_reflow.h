@@ -32,7 +32,7 @@ enum {
 int dtls_print_sha256_fingerprint(struct re_printf *pf, const struct tls *tls);
 int dtls_print_session(struct re_printf *pf, const struct tls_conn *tc);
 int reflow_init_dtls(struct tls **dtlsp, bool dtls13_only,
-		     const char *groups);
+		     bool srtp_gcm_only, const char *groups);
 int reflow_dtls_listen(struct dtls_sock **sockp, const struct sa *laddr,
 		       dtls_conn_h *connh, void *arg);
 

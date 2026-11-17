@@ -20,14 +20,16 @@ MLKEM1024 (post-quantum, DTLS 1.3 only), and
 picks the first one in this order that the client supports, whatever the
 client's own order. A client that supports X25519MLKEM768 gets it; if its
 first message carries no X25519MLKEM768 key share, this costs one extra
-round trip (HelloRetryRequest). The DTLS 1.2 cipher suites and the SRTP
-profiles of sftd do not change: Wire clients get TLS_AES_128_GCM_SHA256
-with DTLS 1.3 and ECDHE-ECDSA-AES128-GCM-SHA256 with DTLS 1.2, and the
-SRTP profile is SRTP_AEAD_AES_256_GCM when the client offers it (AVS
-10.5.35 and later), otherwise SRTP_AES128_CM_SHA1_80. Two options change
-this:
+round trip (HelloRetryRequest). Wire clients get TLS_AES_128_GCM_SHA256
+with DTLS 1.3 and ECDHE-ECDSA-AES128-GCM-SHA256 with DTLS 1.2. For SRTP,
+sftd prefers AEAD_AES_256_GCM, then AEAD_AES_128_GCM, and falls back to
+SRTP_AES128_CM_SHA1_80 for clients that offer only CM (as observed with
+AVS 10.4.46 and 10.5.33 on SFT calls). Three options change this:
 
 - `-D` rejects clients that only support DTLS 1.2.
+- `-G` requires GCM SRTP. CM-only peers can complete DTLS but cannot set up
+  SRTP, so their calls fail. The DTLS version/group rejection metric does not
+  count these failures.
 - `-g <groups>` sets the groups as a comma separated list, most preferred
   first, for example `-g X25519MLKEM768`. A client that supports none of
   them cannot connect. The names are those of BoringSSL: X25519MLKEM768,
@@ -35,7 +37,7 @@ this:
   is unknown. If no group in the list works with DTLS 1.2 (as with
   `-g X25519MLKEM768`), sftd accepts DTLS 1.3 only and logs a warning.
 
-Both options also apply when sftd connects to another SFT (federation and
+The options also apply when sftd connects to another SFT (federation and
 multi-SFT calls). An SFT from a release without these options supports
 DTLS 1.2 only, so with `-D`, or with a `-g` list that DTLS 1.2 cannot use,
 calls that involve such an SFT fail.

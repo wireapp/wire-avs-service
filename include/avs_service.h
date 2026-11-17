@@ -74,6 +74,7 @@ const struct pl *avs_service_secret(void);
 #define DEFAULT_DTLS_GROUPS "X25519MLKEM768,X25519,P-256,MLKEM1024"
 
 bool avs_service_dtls13_only(void);
+bool avs_service_srtp_gcm_only(void);
 const char *avs_service_dtls_groups(void);
 
 /* DTLS handshakes that sftd rejects because of -g or -D */
