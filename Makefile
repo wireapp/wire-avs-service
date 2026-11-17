@@ -30,6 +30,10 @@ AVS_PATH := $(AVS_DIR)/build/dist/$(HOST_TARGET)/avscore
 RE_PATH := $(AVS_DIR)/contrib/re
 LIBRE_MK := $(RE_PATH)/mk/re.mk
 
+# libre uses the BoringSSL in libwebrtc. Stop re.mk from detecting a system
+# OpenSSL and adding -lssl -lcrypto, which would bind libre to it.
+override USE_OPENSSL :=
+
 include $(LIBRE_MK)
 include mk/modules.mk
 include mk/contrib.mk
@@ -43,8 +47,11 @@ endif
 BINDIR	:= $(PREFIX)/bin
 
 ifeq ($(WEBRTC_VER),)
-WEBRTC_VER := m79.7
+WEBRTC_VER := $(shell sed -n 's/^WEBRTC_VER := //p' $(AVS_DIR)/mk/target.mk)
 endif
+
+WEBRTC_PATH := $(AVS_DIR)/contrib/webrtc/$(WEBRTC_VER)
+WEBRTC_LIB_PATH := $(WEBRTC_PATH)/lib/$(HOST_TARGET)-$(shell uname -m)
 
 BUILD_SRC := $(BUILD)/src
 
@@ -53,8 +60,7 @@ CPPFLAGS += \
 	-DHAVE_INET6=1 \
 	-DHAVE_INTTYPES_H \
 	-DHAVE_STDBOOL_H \
-	-DHAVE_CRYPTOBOX \
-	-DHAVE_PROTOBUF \
+	-DUSE_OPENSSL \
 	-DSFT_PROJECT='"$(PROJECT)"' \
 	-DSFT_VERSION='"$(SFT_VERSION)"' \
 	-DUSE_REMB=0 \
@@ -65,6 +71,7 @@ CPPFLAGS += \
 	-I$(AVS_DIR)/include \
 	-I$(AVS_PATH)/include \
 	-I$(RE_PATH)/include \
+	-I$(WEBRTC_PATH)/include/third_party/boringssl/src/include \
 	-I$(AVS_DIR)/contrib/rew/include \
 	-Icontrib/usrsctp
 
@@ -80,6 +87,7 @@ CXXFLAGS +=
 #-stdlib=libc++
 LFLAGS +=
 #-stdlib=libc++
+LFLAGS += -fuse-ld=lld
 TARGET_ARCH = linux
 endif
 ifeq ($(HOST_UNAME),Darwin)
@@ -100,7 +108,8 @@ CXXFLAGS+= $(EXTRA_CXXFLAGS)
 
 LFLAGS  += \
 	-L$(BUILD)/lib \
-	-L$(AVS_PATH)/lib
+	-L$(AVS_PATH)/lib \
+	-L$(WEBRTC_LIB_PATH)
 
 ifneq ($(SYSROOT_ALT),)
 LFLAGS += -L$(SYSROOT_ALT)/lib
@@ -144,7 +153,7 @@ JNI_SRCS	:= \
 
 CONTRIB_PROTOBUF_LIBS := $(shell pkg-config --libs 'libprotobuf-c >= 1.0.0')
 
-LIBS	+=  -lavscore -lrew -lre -lssl -lcrypto -lsodium -lusrsctp -lm -lpthread -ldl
+LIBS	+=  -lavscore -lrew -lre -lsodium -lusrsctp -lwebrtc -lm -lpthread -ldl
 
 ifeq ($(HOST_UNAME),Linux)
 #LIBS   += -lX11 -lXcomposite -lXdamage -lXext -lXfixes -lXrender -levent
@@ -173,6 +182,18 @@ JNI_OBJS += \
 	$(patsubst %.c,$(BUILD)/java/jni/%.o,$(filter %.c,$(JNI_SRCS))) \
 	$(patsubst %.cpp,$(BUILD)/java/jni/%.o,$(filter %.cpp,$(JNI_SRCS)))
 
+# dtls_test: the DTLS context of sftd against libre peers
+DTLS_TEST_BIN    := $(BUILD)/test/dtls_test
+DTLS_TEST_OBJS   := $(BUILD)/test/dtls.o $(BUILD)/modules/reflow/dtls.o \
+	$(BUILD_SRC)/dtls_reject.o
+TEST_LIB_FILES := \
+	$(AVS_PATH)/lib/libavscore.a \
+	$(AVS_PATH)/lib/librew.a \
+	$(AVS_PATH)/lib/libre.a \
+	$(AVS_PATH)/lib/libsodium.a \
+	$(WEBRTC_LIB_PATH)/libwebrtc.a \
+	$(CONTRIB_USRSCTP_TARGET)
+
 
 
 #
@@ -183,11 +204,28 @@ JNI_OBJS += \
 all: contrib $(MOD_BINS) $(BIN)
 
 -include $(OBJS:.o=.d)
+-include $(BUILD)/test/dtls.d
 
 $(BIN): $(CONTRIB_USRSCTP_TARGET) $(CONTRIB_AVS_TARGET) $(OBJS)
 	@echo "  LD      $@"
-	$(CC) $^ $(LFLAGS) -L$(BUILD)/lib -L$(AVS_PATH)/lib $(LIBS) -o $@
+	$(CXX) $^ $(LFLAGS) -L$(BUILD)/lib -L$(AVS_PATH)/lib $(LIBS) -o $@
 #-static -pie
+
+test: $(DTLS_TEST_BIN) $(BIN)
+	$(DTLS_TEST_BIN)
+	test/startup.sh ./$(BIN)
+
+$(filter-out $(CONTRIB_AVS_TARGET) $(CONTRIB_USRSCTP_TARGET),$(TEST_LIB_FILES)): \
+	$(CONTRIB_AVS_TARGET)
+
+$(DTLS_TEST_BIN): $(DTLS_TEST_OBJS) $(TEST_LIB_FILES)
+	@echo "  LD      $@"
+	$(CXX) $(DTLS_TEST_OBJS) $(LFLAGS) $(LIBS) -o $@
+
+$(BUILD)/test/%.o: test/%.c $(CONTRIB_AVS_TARGET) Makefile
+	@echo "  CC      $@"
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -Imodules/reflow $(CFLAGS) -o $@ -c $< $(DFLAGS)
 
 $(BUILD)/%.o: %.c $(BUILD_SRC) Makefile $(APP_MK)
 	@echo "  CC      $@"
@@ -201,6 +239,14 @@ $(BUILD_SRC): Makefile
 	@mkdir -p $(BUILD_SRC) $(MOD_BLD)
 	@touch $@
 
+# The objects and src/static.c depend on the build directory
+$(BUILD):
+	@mkdir -p $@
+
+# The objects include headers of the avs dist, of WebRTC and of usrsctp
+$(OBJS) $(foreach m,$(MODULES),$($(m)_OBJS)): \
+	| $(CONTRIB_AVS_TARGET) $(CONTRIB_USRSCTP_TARGET)
+
 clean:
 	@rm -rf $(BIN) $(MOD_BINS) $(BUILD)
 
@@ -210,7 +256,7 @@ install: $(BIN)
 	@mkdir -p $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 0755 $(BIN) $(DESTDIR)$(BINDIR)
 
-.PHONY: java
+.PHONY: java test
 java:   
 	@mkdir -p $(BUILD)/$(JAVA_CLASSES_DIR)
 	$(JAVAC) -d $(BUILD)/$(JAVA_CLASSES_DIR) $(JAVA_SRCS)

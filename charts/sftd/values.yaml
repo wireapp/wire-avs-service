@@ -143,6 +143,29 @@ turnDiscoveryEnabled: false
 # Has no effect unless an external IP is available (see externalIP settings).
 advertiseInternalIp: false
 
+# DTLS for media. By default sftd accepts DTLS 1.2 and 1.3 and offers the
+# key exchange groups X25519MLKEM768, X25519, P-256 and MLKEM1024. sftd
+# picks the first of these that the client supports, so clients that support
+# X25519MLKEM768 get it. Both settings also apply to calls with other SFTs
+# (federation, multiSFT): SFTs from chart versions without these settings
+# support DTLS 1.2 only.
+# A client that these settings reject cannot set up media: its call times
+# out after about 10 seconds, and in a 1:1 call the other client may end
+# the call too. The client is not told why; sftd logs "DTLS handshake
+# rejected" and counts the handshake in the metric sft_dtls_rejected_total.
+dtls:
+  # Reject clients and SFTs that only support DTLS 1.2 (sftd -D).
+  requireDtls13: false
+  # Disable the SRTP_AES128_CM_SHA1_80 fallback (sftd -G). CM-only clients
+  # cannot set up media when this is true. The default keeps them working.
+  requireGcmSrtp: false
+  # Key exchange groups, most preferred first (sftd -g), for example
+  # [X25519MLKEM768]. Clients that support none of them cannot connect.
+  # Released Wire clients (checked with AVS 10.5.35) do not offer
+  # X25519MLKEM768. A list without X25519 or a P-curve also rejects
+  # DTLS 1.2. Empty keeps the sftd default.
+  groups: []
+
 # Allow establishing calls involving remote SFT servers (e.g. for Federation)
 # Requires appVersion 3.1.10 or later
 # sftd must be directly configured with the authentication secret used by

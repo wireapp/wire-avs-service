@@ -242,6 +242,9 @@ spec:
                       ${ACCESS_ARGS} \
                       ${MULTI_SFT_ARGS} \
                       {{ if .Values.turnDiscoveryEnabled }}-T{{ end }} \
+                      {{ if .Values.dtls.requireDtls13 }}-D{{ end }} \
+                      {{ if .Values.dtls.requireGcmSrtp }}-G{{ end }} \
+                      {{ with .Values.dtls.groups }}-g {{ join "," . | quote }}{{ end }} \
                       -u "https://{{ required "must specify host" .Values.host }}/sfts/${POD_NAME}" \
                       {{ .Values.additionalCmdArgs }} \
                       ${AUTH_SFT_ARGS}

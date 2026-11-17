@@ -48,7 +48,7 @@
 #       include "TargetConditionals.h"
 #endif
 
-#define RFLOG(level, fmt,  ...) loglv(level, "reflow:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
+#define RFLOG(level, fmt,  ...) avs_loglv(level, "reflow:%s(%p): "fmt, __FUNCTION__, __VA_ARGS__)
 
 #define MAGIC 0xed1af100
 #define MAGIC_CHECK(s) \
@@ -79,7 +79,6 @@ enum {
 	RTP_FIRST_PKT_TIMEOUT_MS = 10000,
 	RTP_RESTART_TIMEOUT_MS = 2000,
 	DCE_TIMEOUT_MS = 5000,
-	DTLS_MTU       = 1480,
 	SSRC_MAX       = 4,
 	ICE_INTERVAL   = 50,    /* milliseconds */
 	PORT_DISCARD   = 9,     /* draft-ietf-ice-trickle-05 */
@@ -388,7 +387,7 @@ static bool headroom_via_turn(size_t headroom);
 
 
 #if 0
-static void rf_log(const struct reflow *rf, enum log_level level,
+static void rf_log(const struct reflow *rf, enum avs_log_level level,
 		   const char *fmt, ...)
 {
 	char buf[512];
@@ -401,7 +400,7 @@ static void rf_log(const struct reflow *rf, enum log_level level,
 	str_ncpy(&buf[n], fmt, strlen(fmt)+1);
 	fmt = buf;
 
-	vloglv(level, fmt, ap);
+	avs_vloglv(level, fmt, ap);
 	va_end(ap);
 }
 #endif
@@ -1156,6 +1155,7 @@ static void dtls_estab_handler(void *arg)
 
 	info("           cipher %s\n",
 	     tls_cipher_name(rf->tls_conn));
+	info("           %H\n", dtls_print_session, rf->tls_conn);
 
 	if (rf->got_sdp) {
 		if (!verify_fingerprint(rf, rf->sdp, rf->audio.sdpm, rf->tls_conn)) {
@@ -2184,7 +2184,6 @@ static int init_ice(struct reflow *rf)
 {
 	struct trice_conf conf = {
 		.nom = ICE_NOMINATION_AGGRESSIVE,
-		.debug = false,
 		.trace = false,
 #if TARGET_OS_IPHONE
 		.ansi = false,
@@ -2335,12 +2334,14 @@ static bool exist_ssrc(struct reflow *rf, uint32_t ssrc)
  * @param audio_ch     Force a specific number of channels (optional)
  */
 int reflow_alloc(struct iflow		**flowp,
+		 const char		*msys_name,
 		 const char		*convid,
 		 const char		*userid_self,
 		 const char		*clientid_self,
 		 enum icall_conv_type	conv_type,
 		 enum icall_call_type	call_type,
 		 enum icall_vstate	vstate,
+		 const char		*rec_path,
 		 void			*extarg)
 {
 	enum media_crypto cryptos;
@@ -2406,6 +2407,7 @@ int reflow_alloc(struct iflow		**flowp,
 			    reflow_close,
 			    NULL, //reflow_get_stats,
 			    NULL, //reflow_get_audio_level
+			    NULL, //reflow_update_ssrc
 			    reflow_debug);
 	list_append(&g_reflow.rfl, &rf->le, rf);
 
@@ -2606,9 +2608,8 @@ int reflow_alloc(struct iflow		**flowp,
 			warning("reflow(%p): dtls context is missing\n", rf);
 		}
 
-		err = dtls_listen(&rf->dtls_sock, &laddr_dtls,
-				  NULL, 2, LAYER_DTLS,
-				  dtls_conn_handler, rf);
+		err = reflow_dtls_listen(&rf->dtls_sock, &laddr_dtls,
+					 dtls_conn_handler, rf);
 		if (err) {
 			warning("reflow(%p): dtls_listen failed (%m)\n",
 				rf, err);
@@ -2623,8 +2624,6 @@ int reflow_alloc(struct iflow		**flowp,
 					  NULL, rf);
 		if (err)
 			goto out;
-
-		dtls_set_mtu(rf->dtls_sock, DTLS_MTU);
 
 		re_snprintf(rf->audio.fingerprint,
 			    sizeof(rf->audio.fingerprint),
@@ -4439,7 +4438,7 @@ static void reflow_remove_ssrc(struct reflow *rf, uint32_t ssrc)
 	if (!rf)
 		return;
 	
-	srtp_remove_stream(rf->srtp_tx, ssrc);
+	re_srtp_remove_stream(rf->srtp_tx, ssrc);
 }
 
 static void mf_remove_ssrc(struct mediaflow *mf, uint32_t ssrc)
@@ -6148,67 +6147,6 @@ void reflow_close(struct iflow *iflow)
 	mem_deref(iflow);
 }
 
-static const char *cipherv[] = {
-
-	"ECDHE-RSA-AES128-GCM-SHA256",
-	"ECDHE-ECDSA-AES128-GCM-SHA256",
-	"ECDHE-RSA-AES256-GCM-SHA384",
-	"ECDHE-ECDSA-AES256-GCM-SHA384",
-
-};
-
-
-static int init_dtls(struct tls **dtlsp)
-{
-	int err;
-	struct tls *dtls;
-
-	err = tls_alloc(&dtls, TLS_METHOD_DTLS, NULL, NULL);
-	if (err) {
-		warning("reflow: failed to create DTLS context (%m)\n",
-			err);
-		goto out;
-	}
-
-	err = cert_enable_ecdh(dtls);
-	if (err)
-		goto out;
-
-	info("msystem: setting %zu ciphers for DTLS\n", ARRAY_SIZE(cipherv));
-	err = tls_set_ciphers(dtls, cipherv, ARRAY_SIZE(cipherv));
-	if (err)
-		goto out;
-
-	info("msystem: generating ECDSA certificate\n");
-	err = cert_tls_set_selfsigned_ecdsa(dtls, "prime256v1");
-	if (err) {
-		warning("msystem: failed to generate ECDSA"
-			" certificate"
-			" (%m)\n", err);
-		goto out;
-	}
-
-	tls_set_verify_client(dtls);
-
-	err = tls_set_srtp(dtls,
-			   "SRTP_AEAD_AES_256_GCM:"
-			   "SRTP_AEAD_AES_128_GCM:"
-			   "SRTP_AES128_CM_SHA1_80");
-	if (err) {
-		warning("flowmgr: failed to enable SRTP profile (%m)\n",
-			err);
-		goto out;
-	}
-
-	*dtlsp = dtls;
-
-out:
-	if (err) {
-		mem_deref(dtls);
-	}
-	return err;
-}
-
 static char fmtp_no_cbr[] = "stereo=0;sprop-stereo=0;useinbandfec=1";
 static char fmtp_cbr[] = "stereo=0;sprop-stereo=0;useinbandfec=1;cbr=1";
 
@@ -6271,6 +6209,23 @@ static int module_init(void)
 {
 	int err = 0;
 
+	info("reflow_init: setting flow to reflow\n");
+	if (g_reflow.initialized)
+		return EALREADY;
+/*
+	iflow_register_statics(reflow_destroy,
+			       reflow_set_mute,
+			       reflow_get_mute);
+*/
+
+	err = reflow_init_dtls(&g_reflow.dtls, avs_service_dtls13_only(),
+			       avs_service_srtp_gcm_only(),
+			       avs_service_dtls_groups());
+	if (err) {
+		error("reflow: DTLS setup failed (%m)\n", err);
+		goto out;
+	}
+
 	/* Audio codecs we support */
 	list_append(&g_reflow.aucodecl, &opus.le, &opus);
 
@@ -6281,20 +6236,6 @@ static int module_init(void)
 #if USE_RTX
 	list_append(&g_reflow.bundle_vidcodecl, &rtx.bundle_le, &rtx);
 #endif
-	
-	info("reflow_init: setting flow to reflow\n");
-	if (g_reflow.initialized)
-		return EALREADY;
-/*
-	iflow_register_statics(reflow_destroy,
-			       reflow_set_mute,
-			       reflow_get_mute);
-*/
-
-	err = init_dtls(&g_reflow.dtls);
-	if (err) {
-		goto out;
-	}
 
 	iflow_set_alloc(reflow_alloc);
 	mediapump_register(&g_reflow.mediaflow.mp, "reflow",
@@ -6322,6 +6263,10 @@ static int module_close(void)
 	info("reflow: module closing...\n");
 
 	g_reflow.dtls = mem_deref(g_reflow.dtls);
+
+	list_clear(&g_reflow.aucodecl);
+	list_clear(&g_reflow.vidcodecl);
+	list_clear(&g_reflow.bundle_vidcodecl);
 
 	le = g_reflow.rfl.head;
 	while(le) {
