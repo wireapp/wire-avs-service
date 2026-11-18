@@ -1,11 +1,11 @@
 # sftd 5.2.0
 
-The first sftd release prepared from `dev`. On top of 5.1.0, it brings the audio and video fixes for selective forwarding that Jenkins shipped in `5.0.99` and `5.0.100`. The Helm chart is the same as in 5.1.0, and it is published to the `charts-avs` Helm repository again, as well as to `oci://quay.io/wire/charts/stable/sftd`.
+The first sftd GA built by this repository's pipeline, from `dev`. 5.1.0 was prepared on `release/5.1` but never published, so 5.2.0 is where its reworked Helm chart reaches operators, together with the audio and video fixes for selective forwarding that Jenkins shipped in `5.0.99` and `5.0.100`. The chart is published to the `charts-avs` Helm repository again, as well as to `oci://quay.io/wire/charts/stable/sftd`.
 
 ## Before upgrading
 
-- Coming from 5.1.0: nothing to change. The chart and its values are the same.
-- Coming from a `5.0.x` build (5.0.80 or later, the oldest build that upgrades directly): read the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md) first. Its "Before upgrading" section applies to 5.2.0 too.
+- Coming from a `5.0.x` build (5.0.80 or later, the oldest build that upgrades directly): work through the "Before upgrading" section of the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md). Every chart change it lists is in 5.2.0. Skip its first point only: 5.2.0 is in `charts-avs` too.
+- Coming from a 5.1.0 or 5.2.0 pre-release: nothing to change. The chart and its values are the same.
 - Install the chart, version `5.2.0`, from `charts-avs` or from `oci://quay.io/wire/charts/stable/sftd`. Pre-releases are in `oci://quay.io/wire/charts/dev/sftd` and in `charts-avs`.
 
 ## What's new
@@ -13,7 +13,7 @@ The first sftd release prepared from `dev`. On top of 5.1.0, it brings the audio
 - **Audio in group calls**: a new speaker now takes a free stream before taking over an active one, and only takes over a speaker who is clearly quieter. Two speakers of similar level no longer alternate on the same stream, which garbled the audio. Streams whose sender has gone quiet for more than a second are freed, and new participants start at silence instead of looking like the loudest speaker.
 - **Audio delay**: audio no longer becomes very delayed after a stream has been unused for a while. When a new source takes over a stream, its timestamps follow the time that has actually passed, so the receiver's jitter buffer does not grow.
 - **Federated calls**: each remote participant is compared with their own audio level instead of a level shared by the whole remote SFT, and video forwarding no longer uses uninitialised SSRCs when the sending participant is not found.
-- **Chart repositories**: releases prepared from `dev` publish the chart to `charts-avs` and to the OCI repository, and pin it in `wire-builds`. 5.1.0 was published to the OCI repository only.
+- **Chart repositories**: releases prepared from `dev` publish the chart to `charts-avs` and to the OCI repository, and pin it in `wire-builds`. The 5.1.0 pre-releases went to the OCI repository only.
 
 ---
 

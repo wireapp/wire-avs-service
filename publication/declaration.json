@@ -2,7 +2,7 @@
   "schemaVersion": "wire.component-release/v1alpha2",
   "component": "sftd",
   "version": "5.2.0",
-  "summary": "First sftd release prepared from dev. On top of 5.1.0 it brings the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. The chart is the same as in 5.1.0 and is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
+  "summary": "First sftd GA built by this repository's pipeline. 5.1.0 was never published, so 5.2.0 brings its reworked Helm chart, plus the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. Coming from a 5.0.x build, follow the 'Before upgrading' section of the 5.1.0 release note first. The chart is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
   "upgrade_from": ">=5.0.80",
   "changes": [
     {
@@ -31,7 +31,7 @@
     },
     {
       "kind": "changed",
-      "description": "Releases prepared from dev publish the chart to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd (oci://quay.io/wire/charts/dev/sftd for pre-releases), and pin it in wire-builds. 5.1.0 was published to the OCI repository only.",
+      "description": "Releases prepared from dev publish the chart to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd (oci://quay.io/wire/charts/dev/sftd for pre-releases), and pin it in wire-builds. The 5.1.0 pre-releases went to the OCI repository only.",
       "breaking": false,
       "links": ["https://github.com/wireapp/wire-avs-service/pull/75"]
     }
