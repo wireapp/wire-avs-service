@@ -2,9 +2,44 @@
   "schemaVersion": "wire.component-release/v1alpha2",
   "component": "sftd",
   "version": "5.2.0",
-  "summary": "First sftd release prepared from dev. On top of 5.1.0 it brings the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. The chart is the same as in 5.1.0 and is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
-  "upgrade_from": ">=5.1.0",
+  "summary": "First sftd GA built by this repository's pipeline, from dev. It brings all the work that has been done since 5.0.80: the reworked Helm chart and the audio and video fixes for for the lip sync issue among others. Coming from a 5.0.x build, follow the 'Before upgrading' section of the 5.1.0 release note first. The chart is still published to the legacy charts-avs Helm repository, as well as to oci://quay.io/wire/charts/stable/sftd.",
+  "upgrade_from": ">=5.0.80",
   "changes": [
+    {
+      "kind": "changed",
+      "description": "The external IP helper image moved from initImage to externalIpHelper.image, the join-call proxy runs nginxinc/nginx-unprivileged as UID 101, and sftd_disco has its own image. If you mirror or override images, set externalIpHelper.image, drop Bitnami nginx overrides of joinCall.image, and mirror quay.io/wire/sftd_disco:1.1.1, docker.io/alpine/kubectl:1.35.1 and docker.io/nginxinc/nginx-unprivileged:1.29.5-alpine3.23-perl.",
+      "breaking": true,
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/pull/41",
+        "https://github.com/wireapp/wire-avs-service/pull/46"
+      ]
+    },
+    {
+      "kind": "removed",
+      "description": "TURN discovery is gone from the chart. Remove multiSFT.discoveryRequired and multiSFT.turnDiscoveryURL from your values and set multiSFT.turnServerURI or multiSFT.turnServerURIs: with discoveryRequired: true left in, the StatefulSet references a missing volume and is rejected.",
+      "breaking": true,
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/pull/35"
+      ]
+    },
+    {
+      "kind": "changed",
+      "description": "With gateway.enabled, HTTPS attaches through a ListenerSet and the GatewayClass defaults to envoy. Install Gateway API CRDs and a controller supporting v1 ListenerSet (tested with Envoy Gateway 1.9.2); an existing Gateway must admit the release namespace in allowedListeners; with a mergeGateways GatewayClass, set gateway.envoyProxy.create: false.",
+      "breaking": true,
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/pull/59",
+        "https://github.com/wireapp/wire-avs-service/pull/60"
+      ]
+    },
+    {
+      "kind": "changed",
+      "description": "Versioning: releases are SemVer versions instead of 5.0.<build number>, and the image quay.io/wire/sftd and the Helm chart share that version, so the chart goes from its 0.x versions to 5.2.0. Install it from the charts-avs Helm repository or from oci://quay.io/wire/charts/stable/sftd; pre-releases are in oci://quay.io/wire/charts/dev/sftd. Releases prepared from dev are also pinned in wire-builds.",
+      "breaking": true,
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/pull/68",
+        "https://github.com/wireapp/wire-avs-service/pull/75"
+      ]
+    },
     {
       "kind": "fixed",
       "description": "Audio stream selection: a new speaker takes a free stream before taking over an active one, and only takes over a speaker who is quieter by a clear margin. This stops two speakers of similar level from alternating on the same stream, which garbled the audio. Streams whose sender has stopped for more than a second are freed, new participants start at silence instead of the loudest level, federated participants are compared with their own audio level instead of a level shared by the whole remote SFT, and a participant leaving no longer resets the streams of another call.",
@@ -21,19 +56,17 @@
       "kind": "fixed",
       "description": "Audio no longer becomes very delayed after a stream has been unused for a while: when a new source takes over a stream, its timestamps follow the time that has actually passed, so the receiver's jitter buffer does not grow.",
       "breaking": false,
-      "links": ["https://github.com/wireapp/wire-avs-service/commit/633af34"]
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/commit/633af34"
+      ]
     },
     {
       "kind": "fixed",
       "description": "In federated calls, video forwarding no longer uses uninitialised SSRCs when the sending participant is not found.",
       "breaking": false,
-      "links": ["https://github.com/wireapp/wire-avs-service/commit/a2e7b85"]
-    },
-    {
-      "kind": "changed",
-      "description": "Releases prepared from dev publish the chart to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd (oci://quay.io/wire/charts/dev/sftd for pre-releases), and pin it in wire-builds. 5.1.0 was published to the OCI repository only.",
-      "breaking": false,
-      "links": ["https://github.com/wireapp/wire-avs-service/pull/75"]
+      "links": [
+        "https://github.com/wireapp/wire-avs-service/commit/a2e7b85"
+      ]
     }
   ],
   "migrations": [],
