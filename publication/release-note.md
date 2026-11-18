@@ -19,6 +19,13 @@ The first sftd GA built by this repository's pipeline, from `dev`. It brings the
 
 ## Details
 
+### Breaking, coming from 5.0.x (the 5.1.0 chart)
+
+- Images: `initImage` becomes `externalIpHelper.image`, the join-call proxy runs `nginx-unprivileged` as UID 101, `sftd_disco` has its own image: [#41](https://github.com/wireapp/wire-avs-service/pull/41), [#46](https://github.com/wireapp/wire-avs-service/pull/46)
+- TURN discovery removed: drop `multiSFT.discoveryRequired` and `multiSFT.turnDiscoveryURL`, set `multiSFT.turnServerURI` or `multiSFT.turnServerURIs`: [#35](https://github.com/wireapp/wire-avs-service/pull/35)
+- With `gateway.enabled`, HTTPS attaches through a v1 `ListenerSet`: [#59](https://github.com/wireapp/wire-avs-service/pull/59), [#60](https://github.com/wireapp/wire-avs-service/pull/60)
+- SemVer versions shared by the image and the chart, which goes from `0.x` to `5.2.0`, in `charts-avs` and `oci://quay.io/wire/charts/stable/sftd`: [#68](https://github.com/wireapp/wire-avs-service/pull/68), [#75](https://github.com/wireapp/wire-avs-service/pull/75), WPB-29713
+
 ### Fixes
 
 - Free audio streams preferred, a margin before taking over a speaker, streams reset on the right call when a participant leaves: [`0c03d6a`](https://github.com/wireapp/wire-avs-service/commit/0c03d6a), [`692fb2d`](https://github.com/wireapp/wire-avs-service/commit/692fb2d)
@@ -39,4 +46,4 @@ The first sftd GA built by this repository's pipeline, from `dev`. It brings the
 
 ### Configuration
 
-No configuration change.
+No change since the 5.1.0 chart. Coming from 5.0.x, the values added, removed and changed are in the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md).
