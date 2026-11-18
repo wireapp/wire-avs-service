@@ -3,7 +3,7 @@
   "component": "sftd",
   "version": "5.2.0",
   "summary": "First sftd release prepared from dev. On top of 5.1.0 it brings the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. The chart is the same as in 5.1.0 and is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
-  "upgrade_from": ">=5.1.0",
+  "upgrade_from": ">=5.0.80",
   "changes": [
     {
       "kind": "fixed",

@@ -5,7 +5,7 @@ The first sftd release prepared from `dev`. On top of 5.1.0, it brings the audio
 ## Before upgrading
 
 - Coming from 5.1.0: nothing to change. The chart and its values are the same.
-- Coming from a `5.0.x` build: read the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md) first. Its "Before upgrading" section applies to 5.2.0 too.
+- Coming from a `5.0.x` build (5.0.80 or later, the oldest build that upgrades directly): read the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md) first. Its "Before upgrading" section applies to 5.2.0 too.
 - Install the chart, version `5.2.0`, from `charts-avs` or from `oci://quay.io/wire/charts/stable/sftd`. Pre-releases are in `oci://quay.io/wire/charts/dev/sftd` and in `charts-avs`.
 
 ## What's new
