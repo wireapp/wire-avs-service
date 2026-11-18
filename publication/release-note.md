@@ -1,6 +1,6 @@
 # sftd 5.2.0
 
-The first sftd GA built by this repository's pipeline, from `dev`. 5.1.0 was prepared on `release/5.1` but never published, so 5.2.0 is where its reworked Helm chart reaches operators, together with the audio and video fixes for selective forwarding that Jenkins shipped in `5.0.99` and `5.0.100`. The chart is published to the `charts-avs` Helm repository again, as well as to `oci://quay.io/wire/charts/stable/sftd`.
+The first sftd GA built by this repository's pipeline, from `dev`. It brings the reworked Helm chart of 5.1.0, together with the audio and video fixes for selective forwarding that Jenkins shipped in `5.0.99` and `5.0.100`. 5.1.0 itself is not out yet: it will follow from `release/5.1`, with the new chart but without those fixes. The chart is published to the `charts-avs` Helm repository again, as well as to `oci://quay.io/wire/charts/stable/sftd`.
 
 ## Before upgrading
 

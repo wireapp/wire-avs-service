@@ -2,7 +2,7 @@
   "schemaVersion": "wire.component-release/v1alpha2",
   "component": "sftd",
   "version": "5.2.0",
-  "summary": "First sftd GA built by this repository's pipeline. 5.1.0 was never published, so 5.2.0 brings its reworked Helm chart, plus the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. Coming from a 5.0.x build, follow the 'Before upgrading' section of the 5.1.0 release note first. The chart is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
+  "summary": "First sftd GA built by this repository's pipeline. It brings the reworked Helm chart of 5.1.0, which is not out yet and will follow from release/5.1, plus the audio and video fixes for selective forwarding that Jenkins shipped in 5.0.99 and 5.0.100. Coming from a 5.0.x build, follow the 'Before upgrading' section of the 5.1.0 release note first. The chart is published to the charts-avs Helm repository again, as well as to oci://quay.io/wire/charts/stable/sftd.",
   "upgrade_from": ">=5.0.80",
   "changes": [
     {
