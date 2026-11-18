@@ -1,10 +1,10 @@
 # sftd 5.2.0
 
-The first sftd GA built by this repository's pipeline, from `dev`. It brings the reworked Helm chart of 5.1.0, together with the audio and video fixes for selective forwarding that Jenkins shipped in `5.0.99` and `5.0.100`. 5.1.0 itself is not out yet: it will follow from `release/5.1`, with the new chart but without those fixes. The chart is published to the `charts-avs` Helm repository again, as well as to `oci://quay.io/wire/charts/stable/sftd`.
+The first sftd GA built by this repository's pipeline, from `dev`. It brings all the work that has been done since 5.0.80: the reworked Helm chart, the audio and video fixes for for the lip sync issue. The chart is still published to the legacy `charts-avs` Helm repository, as well as to `oci://quay.io/wire/charts/stable/sftd`.
 
 ## Before upgrading
 
-- Coming from a `5.0.x` build (5.0.80 or later, the oldest build that upgrades directly): work through the "Before upgrading" section of the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md). Every chart change it lists is in 5.2.0. Skip its first point only: 5.2.0 is in `charts-avs` too.
+- Coming from a `5.0.x` build (5.0.80 or later, the oldest build that upgrades directly): work through the "Before upgrading" section of the [5.1.0 release note](https://github.com/wireapp/wire-avs-service/blob/release/5.1/publication/release-note.md). Every chart change it lists is in 5.2.0.
 - Coming from a 5.1.0 or 5.2.0 pre-release: nothing to change. The chart and its values are the same.
 - Install the chart, version `5.2.0`, from `charts-avs` or from `oci://quay.io/wire/charts/stable/sftd`. Pre-releases are in `oci://quay.io/wire/charts/dev/sftd` and in `charts-avs`.
 
@@ -37,7 +37,7 @@ The first sftd GA built by this repository's pipeline, from `dev`. It brings the
 
 ### Changes
 
-- The chart of releases prepared from `dev` goes to `charts-avs` and `wire-builds` again, releases of `release/X.Y` lines go to the OCI repository only: [#75](https://github.com/wireapp/wire-avs-service/pull/75), WPB-29713
+- The chart of releases prepared from `dev` still goes to `charts-avs` and `wire-builds` but releases of `release/X.Y` lines go to the OCI repository only: [#75](https://github.com/wireapp/wire-avs-service/pull/75), WPB-29713
 - `sftd -h` lists the `-B` option: [`92a611c`](https://github.com/wireapp/wire-avs-service/commit/92a611c)
 
 ### Maintenance
