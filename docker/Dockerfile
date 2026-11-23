@@ -1,4 +1,4 @@
-FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11 AS build
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -53,7 +53,7 @@ RUN make SFT_VERSION="${SFT_VERSION}" \
 FROM scratch AS binary
 COPY --from=build /src/sftd /sftd
 
-FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
