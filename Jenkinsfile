@@ -94,7 +94,7 @@ pipeline {
                         """
                     ).trim()
                 }
-                sh "make BUILD_NUMBER=$buildNumber"
+                sh "docker/get-webrtc.sh && make BUILD_NUMBER=$buildNumber"
                 archiveArtifacts artifacts: "sftd"
             }
         }

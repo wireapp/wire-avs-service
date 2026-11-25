@@ -1,32 +1,48 @@
 FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11 AS build
 
+# LLVM 19 from apt.llvm.org, as wire-avs uses for WebRTC 20260605.102. The
+# signing key is checked by fingerprint; the 19.x packages are not pinned.
+ARG LLVM_KEY_FINGERPRINT=6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
+    && apt-get install -y ca-certificates curl gnupg \
+    && curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+       -o /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key \
+    && test "$(gpg --show-keys --with-colons /tmp/llvm.asc | grep -c '^pub:')" = 1 \
+    && test "$(gpg --show-keys --with-colons /tmp/llvm.asc | awk -F: '$1 == "fpr" { print $10; exit }')" = "${LLVM_KEY_FINGERPRINT}" \
+    && gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm.asc \
+    && rm /tmp/llvm.asc \
+    && echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-19 main" \
+       > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update \
     && apt-get install -y \
-       ca-certificates \
-       curl \
        pkg-config \
        make \
        gcc \
        git \
-       clang \
-       clang-tools \
+       clang-19 \
+       clang-tools-19 \
+       lld-19 \
        libtool \
        autoconf \
        automake \
        protobuf-c-compiler \
        zlib1g-dev \
-       libc++-dev \
-       libc++abi-dev \
-       libssl-dev \
        libreadline-dev \
+       libglib2.0-dev \
        libx11-dev \
        libxcomposite-dev \
        libxdamage-dev \
+       libxext-dev \
+       libxfixes-dev \
        libxrender-dev \
        libprotobuf-c-dev \
+       python3 \
        rsync \
        gettext-base \
+       unzip \
+    && update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100 \
+    && update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG RUSTUP_VERSION=1.28.2
@@ -47,7 +63,9 @@ WORKDIR /src
 COPY . .
 
 ARG SFT_VERSION=0.0.0-local
-RUN make SFT_VERSION="${SFT_VERSION}" \
+RUN docker/get-webrtc.sh \
+    && make SFT_VERSION="${SFT_VERSION}" \
+    && make SFT_VERSION="${SFT_VERSION}" test \
     && test "$(make --no-print-directory SFT_VERSION="${SFT_VERSION}" version)" = "${SFT_VERSION}"
 
 FROM scratch AS binary
