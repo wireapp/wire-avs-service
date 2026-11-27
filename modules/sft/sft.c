@@ -7568,12 +7568,15 @@ static void sft_destructor(void *arg)
 
 	lock_write_get(sft->lock);
 	
+	/* Calls first: call_destructor removes the call's group from
+	 * sft->groups when the call was the group's last.
+	 */
 	dict_flush(sft->calls);
 	mem_deref(sft->calls);
-	dict_flush(sft->groups);
-	mem_deref(sft->groups);
 	dict_flush(sft->provisional.calls);
 	mem_deref(sft->provisional.calls);
+	dict_flush(sft->groups);
+	mem_deref(sft->groups);
 	list_flush(&sft->cbl);
 	list_flush(&sft->ecalls);
 
