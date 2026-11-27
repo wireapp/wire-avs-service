@@ -123,6 +123,10 @@ def tcp_open(port):
 def port_free(port):
     for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
         s = socket.socket(socket.AF_INET, kind)
+        # Like the servers themselves, ignore TIME_WAIT leftovers (e.g.
+        # from the previous run's metrics scrape); only live binds count.
+        if kind == socket.SOCK_STREAM:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((LOCALHOST, port))
         except OSError:
@@ -310,9 +314,17 @@ class Checks:
 
 
 def metric_value(text, name):
+    """Sum of all samples of a metric; None if the metric is not exported.
+
+    Labeled counters (e.g. turn_auth_credential_failures{cause=...}) emit
+    no samples until the first increment, so a declared metric without
+    samples counts as 0.
+    """
     total = None
     for line in text.splitlines():
-        if line.startswith(name) and not line.startswith("#"):
+        if re.match(r"^#\s+TYPE\s+%s\s" % re.escape(name), line):
+            total = total or 0.0
+        elif line.startswith(name):
             m = re.match(r"^%s(\{[^}]*\})?\s+(\S+)" % re.escape(name), line)
             if m:
                 total = (total or 0.0) + float(m.group(2))
