@@ -2268,6 +2268,16 @@ static int send_streams_to_sft(struct call *rcall, struct econn_message *msg)
 	return err;
 }
 
+/* Can we send a message to this SFT call? A non-host SFT federating
+ * over TURN keeps its SFT call provisional (isprov) for the whole call,
+ * since there is neither an HTTP response nor a datachannel to
+ * promote it, so isprov must not be used for this.
+ */
+static bool sft_call_reachable(const struct call *call)
+{
+	return call->issft && (call->dc_estab || call->sft_cid);
+}
+
 /* Send a CONF_STREAMS message to every SFT in the group, except
  * exclude (normally the SFT the information came from).
  */
@@ -2289,7 +2299,7 @@ static void send_streams_to_sfts(struct group *group,
 	LIST_FOREACH(&group->calll, le) {
 		struct call *gc = le->data;
 
-		if (gc && gc->issft && !gc->isprov && gc != exclude)
+		if (gc && sft_call_reachable(gc) && gc != exclude)
 			++sftc;
 	}
 	if (sftc)
@@ -2298,7 +2308,7 @@ static void send_streams_to_sfts(struct group *group,
 		LIST_FOREACH(&group->calll, le) {
 			struct call *gc = le->data;
 
-			if (n < sftc && gc && gc->issft && !gc->isprov
+			if (n < sftc && gc && sft_call_reachable(gc)
 			    && gc != exclude) {
 				sftv[n++] = mem_ref(gc);
 			}
