@@ -262,8 +262,30 @@ struct sctp_header {
 static void payload_destructor(void *arg)
 {
 	struct payload *pld = arg;
+	struct dce *dce = pld->dce;
+	void *parg = pld->arg;
 
+	/* g_dce.pendingl is shared by all threads: payloads are created
+	 * on the usrsctp threads and destroyed on the workers. The refs
+	 * on dce and its arg are taken under the lock in payload_new, so
+	 * drop them under the lock too, except a last ref: its
+	 * destructor takes g_dce.lock (dce_destructor).
+	 */
+	struct lock *lock = g_dce.lock;	/* NULL after dce_close */
+
+	if (lock)
+		lock_write_get(lock);
 	list_unlink(&pld->le);
+	if (dce && mem_nrefs(dce) > 1) {
+		mem_deref(dce);
+		dce = NULL;
+	}
+	if (parg && mem_nrefs(parg) > 1) {
+		mem_deref(parg);
+		parg = NULL;
+	}
+	if (lock)
+		lock_rel(lock);
 
 	switch (pld->type) {
 
@@ -278,8 +300,8 @@ static void payload_destructor(void *arg)
 	default:
 		break;
 	}
-	mem_deref(pld->dce);
-	mem_deref(pld->arg);
+	mem_deref(dce);
+	mem_deref(parg);
 }
 
 
@@ -301,6 +323,7 @@ static bool exist_dce(struct list *dcel, struct dce *dce)
 }
 
 
+/* locked: take g_dce.lock here; false only if the caller holds it */
 static struct payload *payload_new(struct dce *dce, struct dce_channel *ch,
 				   enum mq_type type, bool locked)
 {
@@ -1286,7 +1309,7 @@ handle_association_change_event(struct dce *dce,
 		if (!dce)
 			return;
 
-		pld = payload_new(dce, NULL, ESTAB, false);
+		pld = payload_new(dce, NULL, ESTAB, true);
 		if (pld) {
 			info("dce(%p): ESTAB to worker: %p(%p)\n",
 			     dce, dce->worker, worker_tid(dce->worker));
@@ -1295,7 +1318,7 @@ handle_association_change_event(struct dce *dce,
 			LIST_FOREACH(&dce->channell, le) {
 				struct dce_channel *ch = le->data;
                 
-				pld = payload_new(dce, ch, CH_ESTAB, false);
+				pld = payload_new(dce, ch, CH_ESTAB, true);
 				if (pld) {
 					assign_task(dce, pld, true);
 				}
@@ -1333,7 +1356,7 @@ handle_association_change_event(struct dce *dce,
 	LIST_FOREACH(&dce->channell, le) {
 		struct dce_channel *ch = le->data;
 
-		pld = payload_new(dce, ch, CH_CLOSE, false);
+		pld = payload_new(dce, ch, CH_CLOSE, true);
 		if (pld) {
 			assign_task(dce, pld, true);
 		}
@@ -2120,7 +2143,7 @@ void dce_close(void)
 	}
 	list_flush(&g_dce.pendingl);
 
-	mem_deref(g_dce.lock);
+	g_dce.lock = mem_deref(g_dce.lock);
 	dce_inited = false;	
 }
 
