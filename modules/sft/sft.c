@@ -147,6 +147,7 @@ struct sft {
 	struct lock *lock;
 
 	struct tmr tmr_terminate;
+	bool closing; /* module_close: workers are gone */
 };
 
 static struct sft *g_sft = NULL;
@@ -5355,7 +5356,10 @@ static void call_destructor(void *arg)
 
 	if (group && group->calll.head == NULL) {
 		dict_remove(sft->groups, group->id);
-		if (avs_service_is_draining()
+		/* Not while the module closes: the service is already
+		 * terminating and the workers are gone.
+		 */
+		if (avs_service_is_draining() && !sft->closing
 		    && dict_count(sft->groups) == 0) {
 
 			worker_assign_main(service_terminate, NULL);
@@ -7855,6 +7859,12 @@ static int module_init(void)
 static int module_close(void)
 {
 	info("sft: module unloading...\n");
+
+	/* Calls still in the dicts are destroyed by sft_destructor after
+	 * the workers have stopped, see call_destructor.
+	 */
+	if (g_sft)
+		g_sft->closing = true;
 
 	worker_close();
 	

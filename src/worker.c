@@ -190,6 +190,9 @@ struct worker *worker_get(const char *id)
 	uint32_t key;
 	int wid;
 	
+	if (!workb || !workb->c)
+		return NULL;
+
 	key = hash_joaat_str_ci(id);
 	wid = (int)(key % (uint32_t)workb->c);
 
@@ -200,7 +203,7 @@ struct worker *worker_get(const char *id)
 
 struct worker *worker_main(void)
 {
-	return workb->main;
+	return workb ? workb->main : NULL;
 }
 
 static int push_task(struct worker *w, enum worker_task_id tid,
@@ -230,6 +233,10 @@ static int push_task(struct worker *w, enum worker_task_id tid,
 
 int worker_assign_main(worker_task_h *taskh, void *arg)
 {
+	/* NULL after worker_close() */
+	if (!workb || !workb->main)
+		return ENOENT;
+
 	return push_task(workb->main, WORKER_TASK_RUN, taskh, arg);
 }
 
