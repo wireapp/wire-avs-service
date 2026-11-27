@@ -270,6 +270,11 @@ struct pending_stream {
 
 #define TIMEOUT_FB 400
 
+/* Min interval between on-demand keyframe requests to one source */
+#define KEYFRAME_REQ_INTERVAL 500
+/* Warn if a stream waits this long for a new source's keyframe */
+#define TIMEOUT_SWITCH_WARN 3000
+
 #define RTP_SEQ_MOD (1<<16)
 
 #define SSRC_MIN_SEQUENTIAL 2
@@ -372,6 +377,15 @@ struct rtp_stream {
 	enum video_stream_q old_q;
 	bool change;
 
+	/* Video: the source (participant ssrcv) this stream forwards,
+	 * and a new source that waits for its first keyframe before
+	 * it takes over the stream, see video_source_switch().
+	 */
+	uint32_t src_ssrcv;
+	uint32_t pending_ssrcv;
+	uint64_t pending_ts;
+	bool pending_warned;
+
 	struct gnack_rtx_stream rtx;
 };
 
@@ -453,6 +467,7 @@ struct call {
 #endif
 		uint64_t last_ts;
 		struct tmr tmr_ssrcv;
+		uint64_t last_kf_req; /* last on-demand keyframe request */
 	} video;
 
 	struct sft *sft;
@@ -1938,8 +1953,11 @@ static void rtp_stream_reset(struct call *call,
 	struct rtp_stream *rs;
 
 	rs = rtp_stream_lookup(call, ssrc, rst);
-	if (rs)
+	if (rs) {
 		rs->current_ssrc = 0;
+		rs->src_ssrcv = 0;
+		rs->pending_ssrcv = 0;
+	}
 }
 
 static void rtp_stream_update(struct rtp_stream *rs,
@@ -2498,6 +2516,88 @@ static void pending_stream_apply(struct call *call,
 
 	list_unlink(&ps->le);
 	mem_deref(ps);
+}
+
+static void send_fir(struct call *call);
+
+static int fir_task(struct call *call, void *arg)
+{
+	(void)arg;
+
+	send_fir(call);
+
+	return 0;
+}
+
+/* Ask a source for a keyframe, rate limited per source.
+ * Sent from the source call's worker, like the periodic FIR.
+ */
+static void request_keyframe(struct call *call, uint64_t now)
+{
+	/* A source behind another SFT can't be reached with a FIR from
+	 * here; its own SFT sends periodic FIRs (sftd -k).
+	 */
+	if (call->issft)
+		return;
+
+	if (call->video.last_kf_req
+	    && now - call->video.last_kf_req < KEYFRAME_REQ_INTERVAL)
+		return;
+
+	call->video.last_kf_req = now;
+	assign_task(call, fir_task, NULL, false);
+}
+
+/* A video stream keeps its ssrc when a different source takes it over
+ * (tile switch, a participant leaving), so the receiver keeps using
+ * the same decoder. The new source's delta frames would be decoded on
+ * top of the old source's reference frames: the receiver shows the
+ * previous user's video, attributed to the new one, until the next
+ * keyframe. So a new source only takes over a stream at a keyframe;
+ * until then its packets are dropped and a keyframe is requested.
+ * Returns true if the packet may be forwarded on the stream.
+ */
+static bool video_source_switch(struct call *call,
+				struct call *rcall,
+				struct rtp_stream *rs,
+				uint32_t ssrcv,
+				bool has_gfh,
+				bool is_keyframe,
+				uint64_t now)
+{
+	if (rs->src_ssrcv == ssrcv)
+		return true;
+
+	/* Without frame info we can't tell keyframes, don't wait */
+	if (!has_gfh || is_keyframe) {
+		info("video_source_switch(%p): rcall=%p stream ssrc=%u "
+		     "source %u -> %u %s waited=%llums\n",
+		     call, rcall, rs->ssrc, rs->src_ssrcv, ssrcv,
+		     is_keyframe ? "at keyframe" : "(no frame info)",
+		     rs->pending_ssrcv == ssrcv ? now - rs->pending_ts : 0);
+
+		rs->src_ssrcv = ssrcv;
+		rs->pending_ssrcv = 0;
+		return true;
+	}
+
+	if (rs->pending_ssrcv != ssrcv) {
+		rs->pending_ssrcv = ssrcv;
+		rs->pending_ts = now;
+		rs->pending_warned = false;
+	}
+	else if (!rs->pending_warned
+		 && now - rs->pending_ts > TIMEOUT_SWITCH_WARN) {
+		warning("video_source_switch(%p): rcall=%p stream ssrc=%u "
+			"waiting %llums for keyframe from source %u%s\n",
+			call, rcall, rs->ssrc, now - rs->pending_ts, ssrcv,
+			call->issft ? " (remote)" : "");
+		rs->pending_warned = true;
+	}
+
+	request_keyframe(call, now);
+
+	return false;
 }
 
 static void process_rtp(struct call *call,
@@ -3087,6 +3187,14 @@ static void process_rtp(struct call *call,
 			}
 			
 			if (!rs || skip) {
+				deref_locked(rcall);
+				continue;
+			}
+
+			if (rst == RTP_STREAM_TYPE_VIDEO
+			    && !video_source_switch(call, rcall, rs, ssrcv,
+						    has_gfh, is_keyframe,
+						    now)) {
 				deref_locked(rcall);
 				continue;
 			}
@@ -5595,6 +5703,8 @@ static void select_video_streams(struct call *call,
 		for(i = ix; i < call->video.rtps.c; ++i) {
 			struct rtp_stream *rs = &call->video.rtps.v[i];
 			rs->current_ssrc = 0;
+			rs->src_ssrcv = 0;
+			rs->pending_ssrcv = 0;
 		}
 	}
 	lock_rel(call->lock);
