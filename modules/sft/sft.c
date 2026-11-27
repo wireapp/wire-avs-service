@@ -222,6 +222,8 @@ struct ssrcv_update {
 
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 45000
+/* PING-Req interval on SFT <-> SFT calls, see sft_ping_start() */
+#define TIMEOUT_SFT_PING 10000
 #define TIMEOUT_RR 500
 #define TIMEOUT_TWCC 64
 #define TIMEOUT_PROVISIONAL 10000
@@ -464,6 +466,7 @@ struct call {
 
 	struct tmr tmr_setup;
 	struct tmr tmr_conn;
+	struct tmr tmr_ping;
 	struct tmr tmr_rr;
 	struct tmr tmr_fir;
 	struct tmr tmr_q;
@@ -3956,8 +3959,96 @@ static void conn_handler(void *arg)
 	else {	
 		SFTLOG(LOG_LEVEL_INFO, "connection timeout\n", call);
 
-		ICALL_CALL(call->icall, end);
+		if (call->icall) {
+			ICALL_CALL(call->icall, end);
+		}
+		else {
+			/* SFT call federated over TURN: no icall to end,
+			 * close it like a HANGUP from the peer.
+			 */
+			lock_write_get(g_sft->lock);
+			call_close_handler(call, false);
+			lock_rel(g_sft->lock);
+		}
 	}
+}
+
+/* SFT <-> SFT liveness.
+ *
+ * Client calls are kept alive by the client's PINGs (tmr_conn), but
+ * nothing sends PINGs on a call between two SFTs. A peer SFT that went
+ * away without a HANGUP (crash, SIGKILL, network) left its call, its
+ * participants and so the group behind until restart; a draining SFT
+ * never exited.
+ *
+ * Both SFTs now send a PING-Req every TIMEOUT_SFT_PING and answer
+ * PING-Reqs. Any PING from the peer (re)arms tmr_conn, so the call
+ * ends TIMEOUT_CONN after the peer was last heard of. tmr_conn is only
+ * armed by the first PING from the peer: a peer SFT without PING
+ * support (it ignores our PINGs) is not timed out.
+ */
+static int sft_send_ping(struct call *call, bool resp)
+{
+	struct econn_message msg;
+	char *str = NULL;
+	int err;
+
+	/* SFT call with a data channel */
+	if (call->icall)
+		return ecall_ping((struct ecall *)call->icall, resp);
+
+	/* SFT call federated over TURN */
+	if (!call->group || !call->group->federate.tc || !call->sft_cid
+	    || !call->federate.dstid)
+		return ENOTCONN;
+
+	econn_message_init(&msg, ECONN_PING, call->callid);
+	msg.resp = resp;
+	str_ncpy(msg.src_userid, call->callid, sizeof(msg.src_userid));
+	str_ncpy(msg.dest_userid, call->federate.dstid,
+		 sizeof(msg.dest_userid));
+
+	err = econn_message_encode(&str, &msg);
+	if (err)
+		return err;
+
+	tc_send(call->group->federate.tc,
+		&call->sft_tuple, call->sft_cid,
+		(uint8_t *)str, str_len(str));
+	mem_deref(str);
+
+	return 0;
+}
+
+static void sft_ping_handler(void *arg)
+{
+	struct call *call = arg;
+	int err;
+
+	err = sft_send_ping(call, false);
+	if (err) {
+		SFTLOG(LOG_LEVEL_WARN, "sending PING failed: %m\n",
+		       call, err);
+	}
+
+	tmr_start(&call->tmr_ping, TIMEOUT_SFT_PING, sft_ping_handler, call);
+}
+
+static void sft_ping_start(struct call *call)
+{
+	if (!call->issft || tmr_isrunning(&call->tmr_ping))
+		return;
+
+	SFTLOG(LOG_LEVEL_INFO, "starting SFT PINGs\n", call);
+	tmr_start(&call->tmr_ping, TIMEOUT_SFT_PING, sft_ping_handler, call);
+}
+
+static void sft_ping_recv(struct call *call, bool resp)
+{
+	tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
+
+	if (!resp)
+		sft_send_ping(call, true);
 }
 
 static int generate_provid(char **provid)
@@ -4182,6 +4273,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 		if (group) {
 			send_conf_conn(call, false, NULL, call->callid, NULL);
 		}
+		sft_ping_start(call);
 	}
 	else {
 		tmr_start(&call->tmr_fir, avs_service_fir_timeout(),
@@ -4410,6 +4502,7 @@ static void call_close_handler(struct call *call, bool locked)
 
 	info("call_close_handler(%p): group=%p\n", call, group);
 	tmr_cancel(&call->tmr_conn);
+	tmr_cancel(&call->tmr_ping);
 
 	issft = call->issft;
 	if (group) {
@@ -4621,9 +4714,18 @@ static int ecall_ping_handler(struct ecall *ecall,
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
 #endif
 	
+	if (call->issft) {
+		sft_ping_recv(call, response);
+		return 0;
+	}
+
 	tmr_start(&call->tmr_conn, TIMEOUT_CONN, conn_handler, call);
 
-	ecall_ping(ecall, true);
+	/* Only answer requests: answering responses too would make two
+	 * SFTs that both send requests ping-pong forever.
+	 */
+	if (!response)
+		ecall_ping(ecall, true);
 
 	return 0;
 }
@@ -4839,6 +4941,7 @@ static void call_destructor(void *arg)
 	tmr_cancel(&call->tmr_rr);
 	tmr_cancel(&call->tmr_fir);
 	tmr_cancel(&call->tmr_conn);
+	tmr_cancel(&call->tmr_ping);
 	tmr_cancel(&call->tmr_q);
 	tmr_cancel(&call->video.tmr_ssrcv);
 	lock_write_get(call->twcc.lock);
@@ -5673,6 +5776,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	
 	tmr_init(&call->tmr_setup);
 	tmr_init(&call->tmr_conn);
+	tmr_init(&call->tmr_ping);
 	tmr_init(&call->tmr_rr);
 	tmr_init(&call->tmr_fir);
 
@@ -6094,7 +6198,24 @@ static struct call *federate_request(struct group *group,
 			err = ENOSYS;
 			goto out;
 		}
+		/* Both SFTs know each other's call id now */
+		sft_ping_start(call);
 		ecall_confmsg_handler(NULL, cmsg, call);
+		break;
+
+	case ECONN_PING:
+		dstid = cmsg->dest_userid;
+
+		lock_write_get(g_sft->lock);
+		call = dict_lookup(g_sft->calls, dstid);
+		lock_rel(g_sft->lock);
+		if (!call) {
+			info("federate_request: PING-%s for unknown call: %s\n",
+			     cmsg->resp ? "resp" : "req", dstid);
+			err = ENOSYS;
+			goto out;
+		}
+		sft_ping_recv(call, cmsg->resp);
 		break;
 
 	case ECONN_CONF_PART:
