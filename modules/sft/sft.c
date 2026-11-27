@@ -215,9 +215,17 @@ struct nack_entry {
 	int nlost;
 };
 
-struct ssrcv_update {
-	struct call *call;
-	struct call *rcall;
+/* Video ssrcs received in a CONF_STREAMS for a participant that we
+ * do not know about yet (the CONF_PART introducing it has not arrived).
+ * Applied once the participant shows up.
+ */
+struct pending_stream {
+	char userid[ECONN_ID_LEN];
+	char clientid[ECONN_ID_LEN];
+	uint32_t hi;
+	uint32_t lo;
+
+	struct le le;
 };
 
 #define TIMEOUT_SETUP 10000
@@ -464,6 +472,7 @@ struct call {
 
 	struct list partl;
 	struct list sft_partl;
+	struct list pending_streaml; /* struct pending_stream */
 
 	struct le group_le;
 
@@ -1726,6 +1735,14 @@ static struct rtp_stream *video_stream_find(struct call *fcall,
 	struct le *le;
 	const char *userid;
 
+	/* An unknown source (e.g. a federated participant whose video
+	 * ssrcs we have not received yet) has ssrc 0. It must not match
+	 * the streams whose ssrc has not been learnt yet (also 0), or its
+	 * packets get mixed into another user's stream.
+	 */
+	if (!ssrc)
+		return NULL;
+
 	lock_write_get(call->lock);
 
 	for(le = call->video.select.streaml.head; !found && le; le = le->next) {
@@ -2174,25 +2191,31 @@ static void process_dd(struct call *call,
 	}
 }
 
-static void append_stream(struct econn_message *msg, struct call *call)
+static void append_stream_info(struct econn_message *msg,
+			       const char *userid, const char *clientid,
+			       uint32_t hi, uint32_t lo)
 {
 	struct econn_stream_info *sinfo;
 
 	sinfo = mem_zalloc(sizeof(*sinfo), NULL);
 	if (!sinfo) {
-		warning("append_stream: call(%p): cannot allocate sinfo\n",
-			call);
+		warning("append_stream_info: cannot allocate sinfo\n");
 		return;
 	}
-	str_ncpy(sinfo->userid, call->userid,
-		 ARRAY_SIZE(sinfo->userid));
+	str_ncpy(sinfo->userid, userid, ARRAY_SIZE(sinfo->userid));
 	sinfo->quality = 0;
-	str_ncpy(sinfo->ssrcv.clientid, call->clientid,
+	str_ncpy(sinfo->ssrcv.clientid, clientid,
 		 sizeof(sinfo->ssrcv.clientid));
-	sinfo->ssrcv.hi = call->video.hi.ssrc;
-	sinfo->ssrcv.lo = call->video.lo.ssrc;
+	sinfo->ssrcv.hi = hi;
+	sinfo->ssrcv.lo = lo;
 
 	list_append(&msg->u.confstreams.streaml, &sinfo->le, sinfo);
+}
+
+static void append_stream(struct econn_message *msg, struct call *call)
+{
+	append_stream_info(msg, call->userid, call->clientid,
+			   call->video.hi.ssrc, call->video.lo.ssrc);
 }
 
 static void sft_send_propsyncs(struct call *call)
@@ -2212,13 +2235,94 @@ static void sft_send_propsyncs(struct call *call)
 	}
 }
 
+/* Send a CONF_STREAMS message to another SFT */
+static int send_streams_to_sft(struct call *rcall, struct econn_message *msg)
+{
+	char *mstr = NULL;
+	int err = 0;
+
+	str_ncpy(msg->dest_userid, rcall->federate.dstid,
+		 ARRAY_SIZE(msg->dest_userid));
+
+	if (rcall->dc_estab) {
+		err = send_dce_msg(rcall, msg);
+	}
+	else if (rcall->sft_cid) {
+		err = econn_message_encode(&mstr, msg);
+		if (!err) {
+			tc_send(rcall->federate.tc,
+				&rcall->sft_tuple, rcall->sft_cid,
+				(uint8_t *)mstr, str_len(mstr));
+		}
+	}
+	else {
+		err = ENOTCONN;
+	}
+
+	if (err) {
+		warning("send_streams_to_sft(%p): failed: %m\n", rcall, err);
+	}
+
+	mem_deref(mstr);
+
+	return err;
+}
+
+/* Send a CONF_STREAMS message to every SFT in the group, except
+ * exclude (normally the SFT the information came from).
+ */
+static void send_streams_to_sfts(struct group *group,
+				 struct call *exclude,
+				 struct econn_message *msg)
+{
+	struct call **sftv = NULL;
+	size_t sftc = 0;
+	size_t n = 0;
+	size_t i;
+	struct le *le;
+
+	if (!group)
+		return;
+
+	/* Collect the SFT calls under the lock, send outside of it */
+	lock_write_get(g_sft->lock);
+	LIST_FOREACH(&group->calll, le) {
+		struct call *gc = le->data;
+
+		if (gc && gc->issft && !gc->isprov && gc != exclude)
+			++sftc;
+	}
+	if (sftc)
+		sftv = mem_zalloc(sftc * sizeof(*sftv), NULL);
+	if (sftv) {
+		LIST_FOREACH(&group->calll, le) {
+			struct call *gc = le->data;
+
+			if (n < sftc && gc && gc->issft && !gc->isprov
+			    && gc != exclude) {
+				sftv[n++] = mem_ref(gc);
+			}
+		}
+	}
+	lock_rel(g_sft->lock);
+
+	for (i = 0; i < n; ++i) {
+		send_streams_to_sft(sftv[i], msg);
+		mem_deref(sftv[i]);
+	}
+	mem_deref(sftv);
+}
+
+/* Send the video ssrcs of every participant we know about to the
+ * SFT call. These are our own clients, and, if we are the host SFT,
+ * also the participants behind the other federated SFTs, since we
+ * are the only one connected to all of them.
+ */
 static void sft_send_conf_streams(struct call *call)
 {
 	struct econn_message *msg = NULL;
 	struct group *group = NULL;
-	char *mstr = NULL;
 	struct le *le;
-	int err = 0;
 
 	if (!call)
 		return;
@@ -2229,102 +2333,161 @@ static void sft_send_conf_streams(struct call *call)
 		return;
 	}
 
-	if (!call->sft_cid) {
-		warning("sft_send_confstreams(%p): no cid for call\n", call);
-		return;
-	}
-
 	msg = econn_message_alloc();
 	if (!msg) {
 		warning("sft_send_confstreams(%p): no message\n", call);
 		goto out;
 	}
 	econn_message_init(msg, ECONN_CONF_STREAMS, group->id);
-	str_ncpy(msg->dest_userid, call->federate.dstid,
-		 ARRAY_SIZE(msg->dest_userid));
 	msg->resp = true;
 
+	lock_write_get(g_sft->lock);
 	LIST_FOREACH(&group->calll, le) {
 		struct call *gc = le->data;
+		struct le *ple;
 
-		if (!gc->issft)
+		if (!gc)
+			continue;
+
+		if (!gc->issft) {
 			append_stream(msg, gc);
-	}
+			continue;
+		}
 
-	err = econn_message_encode(&mstr, msg);
-	if (err) {
-		warning("sft_send_confstreams(%p): ssrcv_timeout: failed to "
-			"encode message: %m\n", call, err);
-		goto out;
+		if (!group->sft.ishost || gc == call)
+			continue;
+
+		LIST_FOREACH(&gc->partl, ple) {
+			struct participant *rpart = ple->data;
+
+			/* Only the participants behind the other SFT */
+			if (!rpart || rpart->call || !rpart->userid)
+				continue;
+			if (!rpart->simulcast.ssrcv_hi
+			    && !rpart->simulcast.ssrcv_lo)
+				continue;
+
+			append_stream_info(msg, rpart->userid,
+					   rpart->clientid ? rpart->clientid
+							   : "_",
+					   rpart->simulcast.ssrcv_hi,
+					   rpart->simulcast.ssrcv_lo);
+		}
 	}
-	else {
-		tc_send(call->federate.tc,
-			&call->sft_tuple, call->sft_cid,
-			(uint8_t *)mstr, str_len(mstr));
-	}
+	lock_rel(g_sft->lock);
+
+	info("sft_send_confstreams(%p): sending %u streams\n",
+	     call, (uint32_t)list_count(&msg->u.confstreams.streaml));
+
+	send_streams_to_sft(call, msg);
 
  out:
-	mem_deref(mstr);
 	mem_deref(msg);
 }
 
+/* The video ssrcs of one of our clients have been learnt (or changed),
+ * let every federated SFT know about them.
+ */
 static void ssrcv_timeout_handler(void *arg)
 {
-	struct ssrcv_update *ssu = arg;
+	struct call *call = arg;
 	struct econn_message *msg = NULL;
-	struct call *call = ssu->call;
-	struct call *rcall = ssu->rcall;
-	int err = 0;
+
+	if (!call->group)
+		goto out;
 
 	msg = econn_message_alloc();
 	if (!msg) {
 		warning("call(%p): ssrcv_timeout_handler no message\n", call);
 		goto out;
 	}
-	econn_message_init(msg, ECONN_CONF_STREAMS,
-			   call->group ? call->group->id : "sft");
-	str_ncpy(msg->dest_userid, rcall->federate.dstid,
-		 ARRAY_SIZE(msg->dest_userid));
+	econn_message_init(msg, ECONN_CONF_STREAMS, call->group->id);
 	msg->resp = true;
 
 	append_stream(msg, call);
 
-	if (rcall->dc_estab) {
-		err = send_dce_msg(rcall, msg);
-		if (err) {
-			warning("call(%p): ssrcv_timeout_handler: "
-				"send_dce failed: %m\n",
-				call, err);
-			goto out;
-		}
-	}
-	else if (rcall->sft_cid) {
-		char *mstr;
+	info("call(%p): ssrcv_timeout: hi:%u lo:%u\n",
+	     call, call->video.hi.ssrc, call->video.lo.ssrc);
 
-		err = econn_message_encode(&mstr, msg);
-		if (err) {
-			warning("call(%p): ssrcv_timeout: failed to "
-				"encode message: %m\n", call, err);
-		}
-		else {
-			tc_send(rcall->federate.tc,
-				&rcall->sft_tuple, rcall->sft_cid,
-				(uint8_t *)mstr, str_len(mstr));
-			mem_deref(mstr);
-		}
-	}
+	send_streams_to_sfts(call->group, NULL, msg);
 
  out:
 	mem_deref(msg);
-	mem_deref(ssu);
+	mem_deref(call); /* ref taken when the timer was started */
 }
 
-static void ssu_destructor(void *arg)
+/* Federated participants are identified by a per-client hash as
+ * userid and "_" as clientid, treat a missing clientid the same way.
+ */
+static const char *pending_clientid(const char *clientid)
 {
-	struct ssrcv_update *ssu = arg;
+	return str_isset(clientid) ? clientid : "_";
+}
 
-	mem_deref(ssu->call);
-	mem_deref(ssu->rcall);
+static struct pending_stream *pending_stream_find(struct call *call,
+						  const char *userid,
+						  const char *clientid)
+{
+	struct le *le;
+
+	clientid = pending_clientid(clientid);
+
+	LIST_FOREACH(&call->pending_streaml, le) {
+		struct pending_stream *ps = le->data;
+
+		if (streq(ps->userid, userid)
+		    && streq(ps->clientid, clientid))
+			return ps;
+	}
+
+	return NULL;
+}
+
+static void pending_stream_set(struct call *call,
+			       const char *userid, const char *clientid,
+			       uint32_t hi, uint32_t lo)
+{
+	struct pending_stream *ps;
+
+	ps = pending_stream_find(call, userid, clientid);
+	if (!ps) {
+		ps = mem_zalloc(sizeof(*ps), NULL);
+		if (!ps)
+			return;
+		str_ncpy(ps->userid, userid, sizeof(ps->userid));
+		str_ncpy(ps->clientid, pending_clientid(clientid),
+			 sizeof(ps->clientid));
+		list_append(&call->pending_streaml, &ps->le, ps);
+	}
+	if (hi)
+		ps->hi = hi;
+	if (lo)
+		ps->lo = lo;
+}
+
+/* Apply (and drop) any ssrcs received before the participant was known */
+static void pending_stream_apply(struct call *call,
+				 struct participant *part)
+{
+	struct pending_stream *ps;
+
+	if (!part->userid)
+		return;
+
+	ps = pending_stream_find(call, part->userid, part->clientid);
+	if (!ps)
+		return;
+
+	info("pending_stream_apply(%p): part=%s.%s hi:%u lo:%u\n",
+	     call, ps->userid, ps->clientid, ps->hi, ps->lo);
+
+	if (ps->hi)
+		part->simulcast.ssrcv_hi = ps->hi;
+	if (ps->lo)
+		part->simulcast.ssrcv_lo = ps->lo;
+
+	list_unlink(&ps->le);
+	mem_deref(ps);
 }
 
 static void process_rtp(struct call *call,
@@ -2696,6 +2859,17 @@ static void process_rtp(struct call *call,
 	/* Reset data to start of packet */
 	mb->pos = pos;
 
+	/* Our client's video ssrcs changed, tell all federated SFTs.
+	 * A single timer for all of them: (re)starting it per SFT would
+	 * replace the pending update, so only the last SFT got it.
+	 * If an update is already pending, it will pick up the new
+	 * ssrcs when it fires.
+	 */
+	if (update_ssrcv && group && !tmr_isrunning(&call->video.tmr_ssrcv)) {
+		tmr_start(&call->video.tmr_ssrcv, 0,
+			  ssrcv_timeout_handler, mem_ref(call));
+	}
+
 	// Send same packet to all members of this group
 	have_parts = true;
 	
@@ -2737,20 +2911,6 @@ static void process_rtp(struct call *call,
 		     ssrc, is_selective, aulevel,
 		     rcall->issft ? "SFT" : "CLI", rcall, rcall->mf);
 #endif
-		if (rcall->issft) {
-			if (update_ssrcv) {
-				struct ssrcv_update *ssu;
-
-				ssu = mem_zalloc(sizeof(*ssu), ssu_destructor);
-				if (ssu) {
-					ssu->call = mem_ref(call);
-					ssu->rcall = mem_ref(rcall);
-					tmr_start(&call->video.tmr_ssrcv, 0,
-						  ssrcv_timeout_handler, ssu);
-				}
-			}
-		}
-
 		/* Clamp to absoulte silence */
 		if (aulevel >= AUDIO_LEVEL_SILENCE) {
 			aulevel = AUDIO_LEVEL_ABS_SILENCE;
@@ -2830,6 +2990,17 @@ static void process_rtp(struct call *call,
 				fdiff = call->screenshare ? TIMEOUT_SCREENSHARE_HI_FRAME
 					                  : TIMEOUT_VIDEO_HI_FRAME;
 				has_hi = (now - call->video.hi.ts) < fdiff;
+			}
+
+			/* Video whose source we cannot identify (a federated
+			 * participant whose ssrcs we have not received yet)
+			 * can't be attributed by the client (csrc would be 0),
+			 * and must not take a stream from a known source.
+			 * Raw forwarding to other SFTs above is unaffected.
+			 */
+			if (rst == RTP_STREAM_TYPE_VIDEO && !ssrcv) {
+				deref_locked(rcall);
+				continue;
 			}
 
 			if (rst == RTP_STREAM_TYPE_VIDEO
@@ -5011,6 +5182,7 @@ static void call_destructor(void *arg)
 
 	close_call(call);
 	list_flush(&call->partl);
+	list_flush(&call->pending_streaml);
 
 	mem_deref(call->turnv);
 	mem_deref(call->callid);
@@ -5228,6 +5400,7 @@ static void sft_confpart_handler(const struct econn_message *msg,
 			rpart->simulcast = tpart->simulcast;
 			rpart->level = tpart->level;
 		}
+		pending_stream_apply(call, rpart);
 		//rpart->ts = call->join_ts + part->ts;
 		rpart->ix = group ? group->part_ix++ : 0;
 
@@ -5432,10 +5605,26 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 
 	if (call->issft) {
 		struct list *partl = ishost ? &call->partl : &call->sft_partl;
+		struct econn_message *rmsg = NULL;
+
+		/* As host, relay the streams to the other SFTs, they
+		 * have no other way of learning about them
+		 */
+		if (ishost && call->group) {
+			rmsg = econn_message_alloc();
+			if (rmsg) {
+				econn_message_init(rmsg, ECONN_CONF_STREAMS,
+						   call->group->id);
+				rmsg->resp = true;
+			}
+		}
 
 		LIST_FOREACH(&msg->u.confstreams.streaml, le) {
 			struct econn_stream_info *si = le->data;
 			struct participant *part;
+
+			if (!si->ssrcv.hi && !si->ssrcv.lo)
+				continue;
 
 			part = find_part_by_userclient(partl,
 						       si->userid,
@@ -5454,10 +5643,31 @@ static void ecall_confstreams_handler(struct ecall *ecall,
 					part->simulcast.ssrcv_lo = si->ssrcv.lo;
 			}
 			else {
-				warning("ecall_confstreams_handler(%p): participant not found: %s.%s\n",
-					call, si->userid, si->ssrcv.clientid);
+				/* The CONF_PART introducing this participant
+				 * has not arrived yet, keep the ssrcs until
+				 * it does, otherwise its video is never
+				 * forwarded.
+				 */
+				info("ecall_confstreams_handler(%p): "
+				     "participant not found: %s.%s, "
+				     "keeping as pending\n",
+				     call, si->userid, si->ssrcv.clientid);
+				pending_stream_set(call, si->userid,
+						   si->ssrcv.clientid,
+						   si->ssrcv.hi, si->ssrcv.lo);
+			}
+
+			if (rmsg) {
+				append_stream_info(rmsg, si->userid,
+						   si->ssrcv.clientid,
+						   si->ssrcv.hi, si->ssrcv.lo);
 			}
 		}
+
+		if (rmsg && !list_isempty(&rmsg->u.confstreams.streaml))
+			send_streams_to_sfts(call->group, call, rmsg);
+		mem_deref(rmsg);
+
 		return;
 	}
 	
