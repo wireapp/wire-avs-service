@@ -72,7 +72,12 @@
 
 #define USE_BANDWIDTH_LIMIT 0
 
-void *(* volatile memset_s)(void *s, int c, size_t n) = memset;
+/* Called through a volatile pointer so the compiler cannot drop the
+ * wipe. Must be static and must not be named memset_s: a global data
+ * symbol with that name shadows libc's memset_s(), which libsodium's
+ * sodium_memzero() calls on macOS, and crashes it (SIGBUS).
+ */
+static void *(* volatile reflow_memzero)(void *s, int c, size_t n) = memset;
 
 enum {
 	RTP_TIMEOUT_MS = 20000,
@@ -1219,8 +1224,8 @@ static void dtls_estab_handler(void *arg)
 	check_data_channel(rf);
 
 	/* Wipe the keys from memory */
-	memset_s(cli_key, 0, sizeof(cli_key));
-	memset_s(srv_key, 0, sizeof(srv_key));
+	reflow_memzero(cli_key, 0, sizeof(cli_key));
+	reflow_memzero(srv_key, 0, sizeof(srv_key));
 
 	return;
 
@@ -1228,8 +1233,8 @@ static void dtls_estab_handler(void *arg)
 	warning("reflow(%p): DTLS-SRTP error (%m)\n", rf, err);
 
 	/* Wipe the keys from memory */
-	memset_s(cli_key, 0, sizeof(cli_key));
-	memset_s(srv_key, 0, sizeof(srv_key));
+	reflow_memzero(cli_key, 0, sizeof(cli_key));
+	reflow_memzero(srv_key, 0, sizeof(srv_key));
 
 	IFLOW_CALL_CB(rf->iflow, closeh,
 		err, rf->iflow.arg);
