@@ -230,6 +230,10 @@ struct pending_stream {
 
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 45000
+/* Time from the client's SETUP/UPDATE response until the data channel
+ * is up (ICE + DTLS + SCTP), see call_setup_wait_dc().
+ */
+#define TIMEOUT_DC_SETUP TIMEOUT_CONN
 /* PING-Req interval on SFT <-> SFT calls, see sft_ping_start() */
 #define TIMEOUT_SFT_PING 10000
 #define TIMEOUT_RR 500
@@ -3799,13 +3803,32 @@ static void icall_start_handler(struct icall *icall,
 	}
 }
 
+/* The client has answered: from here until the data channel is up
+ * nothing else guards the call (the ecall connection timer stops once
+ * DTLS is up, tmr_conn only starts with the data channel). Without a
+ * deadline, a client that goes away after DTLS but before SCTP leaves
+ * the call alive until usrsctp gives up on the association (~5 min).
+ *
+ * SFT calls are left alone: a federated SFT link does not necessarily
+ * get a data channel of its own.
+ */
+static void call_setup_wait_dc(struct call *call)
+{
+	if (call->issft || call->dc_estab) {
+		tmr_cancel(&call->tmr_setup);
+		return;
+	}
+
+	tmr_start(&call->tmr_setup, TIMEOUT_DC_SETUP,
+		  setup_timeout_handler, call);
+}
+
 static void icall_answer_handler(struct icall *icall, void *arg)
 {
 	struct call *call = arg;
 	
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
-	if (tmr_isrunning(&call->tmr_setup))
-		tmr_cancel(&call->tmr_setup);
+	call_setup_wait_dc(call);
 }
 
 #if 0
@@ -4569,6 +4592,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	/* When data channel establishes, don't use HTTP any more */
 	call->isprov = false;
 	call->dc_estab = true;
+	tmr_cancel(&call->tmr_setup);
 	
 	SFTLOG(LOG_LEVEL_INFO,
 	       "issft: %d group: %p userid: %s clientid: %s update=%d\n",
@@ -6992,8 +7016,8 @@ static int update_call(struct call *call, void *arg)
 	struct econn_message *cmsg = arg;
 
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
-	
-	tmr_cancel(&call->tmr_setup);
+
+	call_setup_wait_dc(call);
 
 	ICALL_CALLE(call->icall, msg_recv, 0, 0,
 		    cmsg->src_userid, cmsg->src_clientid,
