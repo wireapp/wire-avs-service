@@ -6402,7 +6402,7 @@ static void http_stats_handler(struct http_conn *hc,
 		lock_write_get(sft->lock);
 
 		info("Calls in list: %d\n", (int)dict_count(sft->groups));
-		dict_apply(sft->calls, print_group_handler, NULL);
+		dict_apply(sft->groups, print_group_handler, NULL);
 		info("Parts in list: %d\n", (int)dict_count(sft->calls));
 		dict_apply(sft->calls, print_call_handler, NULL);
 		http_creply(hc, 200, "OK", "text/plain", "Debug\n");
