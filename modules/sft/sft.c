@@ -1159,8 +1159,9 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	struct le *le;
 	uint16_t seqno;
 	uint32_t refcnt;
-	uint32_t refts;	
+	uint32_t refts;
 	uint64_t prevts;
+	uint64_t basets;
 
 	/*
 	  0                   1                   2                   3
@@ -1213,9 +1214,15 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
-	/* reference time is in multiples of 64ms */
-	refts = ((uint32_t)twcc->refts & 0xffffffLL);
-	refcnt = ((refts/64) << 8) | (uint8_t)twcc->fbcnt;
+	/* Reference time is in multiples of 64ms, and the receiver
+	 * reconstructs arrival times relative to the *quantized*
+	 * reference time. The deltas must therefore be computed from
+	 * the quantized value too, otherwise every feedback carries a
+	 * (refts % 64) ms error which shows up as delay variation.
+	 */
+	basets = twcc->refts - (twcc->refts % 64);
+	refts = (uint32_t)((basets / 64) & 0xffffffLL);
+	refcnt = (refts << 8) | (uint8_t)twcc->fbcnt;
 
 	mbuf_write_u32(mb, htonl(refcnt));
 
@@ -1260,7 +1267,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	}
 
 	// Add delta
-	prevts = twcc->refts;
+	prevts = basets;
 	LIST_FOREACH(&twcc->pktl, le) {
 		struct transpkt *tp = le->data;
 
@@ -1557,6 +1564,13 @@ static void update_twcc(struct twcc *twcc,
 
 	if (twcc->seqno == -1)
 		twcc->seqno = wseq;
+
+	/* Already covered by a previous feedback (reported as lost);
+	 * adding it would make the base seqno go backwards and
+	 * misalign every status/delta in the next feedback.
+	 */
+	if (seq_less(wseq, (uint16_t)twcc->seqno))
+		goto out;
 
 	tp = mem_zalloc(sizeof(*tp), transpkt_destructor);
 	tp->seqno = wseq;
