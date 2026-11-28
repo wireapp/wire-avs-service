@@ -226,6 +226,8 @@ struct ssrcv_update {
 #define TIMEOUT_SFT_PING 10000
 #define TIMEOUT_RR 500
 #define TIMEOUT_TWCC 64
+/* Max transport seq distance from the expected base before resyncing */
+#define TWCC_MAX_SEQ_GAP 1000
 #define TIMEOUT_PROVISIONAL 10000
 #define TIMEOUT_VIDEO_HI_FRAME 800
 #define TIMEOUT_SCREENSHARE_HI_FRAME 3000
@@ -308,6 +310,7 @@ struct twcc {
 	uint64_t fbcnt;
 	//uint8_t fbcnt;
 	int seqno;
+	int resync_seq; /* far-away seq seen once, -1 if none */
 	uint64_t now;
 	uint64_t prevts;
 	struct list pktl;
@@ -1127,10 +1130,18 @@ static void add_twcc_pkt(struct twcc *twcc, struct transpkt *tp)
 	bool found = false;
 	struct le *le;
 
-	for (le = twcc->pktl.head; !found && le; le = le->next) {
+	for (le = twcc->pktl.head; le; le = le->next) {
 		struct transpkt *p = le->data;
 
+		if (tp->seqno == p->seqno) {
+			/* Duplicate: would shift all following statuses */
+			mem_deref(tp);
+			return;
+		}
+
 		found = seq_less(tp->seqno, p->seqno);
+		if (found)
+			break;
 	}
 	if (found)
 		list_insert_before(&twcc->pktl, le, &tp->le, tp);
@@ -1159,8 +1170,9 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	struct le *le;
 	uint16_t seqno;
 	uint32_t refcnt;
-	uint32_t refts;	
+	uint32_t refts;
 	uint64_t prevts;
+	uint64_t basets;
 
 	/*
 	  0                   1                   2                   3
@@ -1213,9 +1225,15 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	
 	mbuf_write_u16(mb, htons((uint16_t)list_count(&twcc->pktl)));
 
-	/* reference time is in multiples of 64ms */
-	refts = ((uint32_t)twcc->refts & 0xffffffLL);
-	refcnt = ((refts/64) << 8) | (uint8_t)twcc->fbcnt;
+	/* Reference time is in multiples of 64ms, and the receiver
+	 * reconstructs arrival times relative to the *quantized*
+	 * reference time. The deltas must therefore be computed from
+	 * the quantized value too, otherwise every feedback carries a
+	 * (refts % 64) ms error which shows up as delay variation.
+	 */
+	basets = twcc->refts - (twcc->refts % 64);
+	refts = (uint32_t)((basets / 64) & 0xffffffLL);
+	refcnt = (refts << 8) | (uint8_t)twcc->fbcnt;
 
 	mbuf_write_u32(mb, htonl(refcnt));
 
@@ -1260,7 +1278,7 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 	}
 
 	// Add delta
-	prevts = twcc->refts;
+	prevts = basets;
 	LIST_FOREACH(&twcc->pktl, le) {
 		struct transpkt *tp = le->data;
 
@@ -1284,8 +1302,6 @@ static int twcc_encode_handler(struct mbuf *mb, void *arg)
 			prevts = tp->ts;
 		}
 	}
-
-	twcc->refts = twcc->now;
 
 	return 0;
 }
@@ -1482,6 +1498,8 @@ static void twcc_handler(void *arg)
 
 	lock_write_get(twcc->lock);
 
+	twcc->now = tmr_jiffies();
+
 	if (list_count(&twcc->pktl) == 0) {
 		//SFTLOG(LOG_LEVEL_WARN, "no twcc packets\n", call);
 		goto out;
@@ -1509,12 +1527,11 @@ static void twcc_handler(void *arg)
 	}
 	
 	if (!ta->rssrc) {
-		warning("twcc_handler(%p): no valid ssrc yet\n");
+		warning("twcc_handler(%p): no valid ssrc yet\n", call);
 		goto out;
 	}
 
 	lssrc = mediaflow_get_ssrc(call->mf, "audio", true);
-	twcc->now = tmr_jiffies();
 	err = rtcp_encode(mb, RTCP_RTPFB, RTCP_RTPFB_TRANS_CC,
 			  lssrc,
 			  ta->rssrc,
@@ -1524,16 +1541,19 @@ static void twcc_handler(void *arg)
 		goto out;
 	}
 
-#if 0
-	info("twcc_handler(%p): ssrc(%u): %w\n", call, ta->rssrc, mb->buf, mb->end);
-#endif
 	
 	if (call->mf)
 		mediaflow_send_rtcp(call->mf, mb->buf, mb->end);
 
+	twcc->fbcnt++;
+
  out:
 	list_flush(&twcc->pktl);
-	twcc->fbcnt++;
+	/* Advance the reference time even if nothing was sent, so the
+	 * first delta of the next feedback always fits in 16 bits
+	 * (+/-8.19s), regardless of how long the sender was idle.
+	 */
+	twcc->refts = twcc->now;
 
 	mem_deref(mb);
 	if (twcc->running)
@@ -1547,6 +1567,7 @@ static void update_twcc(struct twcc *twcc,
 			int wseq)
 {
 	struct transpkt *tp;
+	int16_t diff;
 
 	lock_write_get(twcc->lock);
 	if (!twcc->running)
@@ -1557,6 +1578,40 @@ static void update_twcc(struct twcc *twcc,
 
 	if (twcc->seqno == -1)
 		twcc->seqno = wseq;
+
+	diff = (int16_t)((uint16_t)wseq - (uint16_t)twcc->seqno);
+	if (diff > TWCC_MAX_SEQ_GAP || diff < -TWCC_MAX_SEQ_GAP) {
+		int16_t rdiff = (int16_t)((uint16_t)wseq
+					  - (uint16_t)twcc->resync_seq);
+
+		/* Sender restarted its sequence, or a very long outage:
+		 * resync rather than reporting thousands of lost packets
+		 * (oversized feedback) or ignoring everything that
+		 * follows. Require two consecutive far-away packets so
+		 * that a single stray packet does not cause a resync.
+		 */
+		if (twcc->resync_seq < 0 || rdiff > TWCC_MAX_SEQ_GAP
+		    || rdiff < -TWCC_MAX_SEQ_GAP) {
+			twcc->resync_seq = (uint16_t)wseq;
+			goto out;
+		}
+		info("twcc(%p): seq jump %u -> %d, resyncing\n",
+		     twcc, (unsigned)(uint16_t)twcc->seqno, wseq);
+		list_flush(&twcc->pktl);
+		twcc->seqno = wseq;
+		twcc->resync_seq = -1;
+	}
+	else if (diff < 0) {
+		twcc->resync_seq = -1;
+		/* Already covered by a previous feedback (reported as
+		 * lost); adding it would make the base seqno go backwards
+		 * and misalign every status/delta in the next feedback.
+		 */
+		goto out;
+	}
+	else {
+		twcc->resync_seq = -1;
+	}
 
 	tp = mem_zalloc(sizeof(*tp), transpkt_destructor);
 	tp->seqno = wseq;
@@ -2305,6 +2360,7 @@ static void process_rtp(struct call *call,
 	bool ispadding = false;
 	size_t plpos;
 	uint16_t wseq = 0;
+	bool has_wseq = false;
 	uint8_t pkt_level = AUDIO_LEVEL_ABS_SILENCE;
 	bool has_level = false;
 	struct participant *sft_part = NULL;
@@ -2345,7 +2401,7 @@ static void process_rtp(struct call *call,
 	}
 
 	/* Parse RTP extension headers (if any) */
-	while(rtpxlen > 0 && mb->pos < hdrlen && mb->pos < mb->end) {
+	while(rtpxlen > 0 && mb->pos < hdrpos && mb->pos < mb->end) {
 		uint8_t xid = 0;
 		uint8_t xlen = 0;
 		int hlen = 0;
@@ -2455,6 +2511,7 @@ static void process_rtp(struct call *call,
 #if USE_TWCC	
 		case EXTMAP_VIDEO_WSEQ:
 			wseq = ntohs(mbuf_read_u16(mb));
+			has_wseq = true;
 			break;
 
 #endif
@@ -2534,7 +2591,7 @@ static void process_rtp(struct call *call,
 		tmr_start(&call->twcc.tmr, TIMEOUT_TWCC,
 			  twcc_handler, &call->twcc.ta);
 	}
-	if (wseq && !call->issft) {
+	if (has_wseq && !call->issft) {
 		update_twcc(&call->twcc, now, wseq);
 	}
 #endif
@@ -4258,6 +4315,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	tmr_cancel(&call->twcc.tmr);	
 	list_flush(&call->twcc.pktl);
 	call->twcc.seqno = -1;
+	call->twcc.resync_seq = -1;
 	call->twcc.refts = 0;
 	call->twcc.fbcnt = 0;
 	lock_rel(call->twcc.lock);
@@ -5769,6 +5827,7 @@ static int alloc_call(struct call **callp, struct sft *sft,
 	call->audio.level = AUDIO_LEVEL_ABS_SILENCE;
 
 	call->twcc.seqno = -1;
+	call->twcc.resync_seq = -1;
 	call->video.is_selective = selective_video;
 	call->video.ssrcc = selective_video ? vstreams : 0;
 
