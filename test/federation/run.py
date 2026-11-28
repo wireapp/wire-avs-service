@@ -16,6 +16,15 @@ All clients run in one sftloader process (-C users.json -V). sftloader
 stamps each sender's video and checks that every receiver decodes the
 right stamp from every other participant, exiting non-zero otherwise.
 
+The "tiles" case checks tile switching: every receiver requests fewer
+video streams than there are senders and rotates which senders it
+requests (sftloader -W/-R), so the SFT keeps handing a stream to a
+different source. A receiver that decodes the new source's frames on
+the old source's reference frames shows the old user's stamp under the
+new user's name, which counts as wrong video. That only happens when
+the senders' frame ids (libwebrtc starts them at 0) are close, so all
+clients start video at the same moment (sftloader -Y).
+
 Everything runs natively on 127.0.0.1. Only the standard library is used.
 
 Exit code: 0 = all checks passed, 1 = a check failed, 2 = setup error.
@@ -123,6 +132,10 @@ def tcp_open(port):
 def port_free(port):
     for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
         s = socket.socket(socket.AF_INET, kind)
+        # Like the servers themselves, ignore TIME_WAIT leftovers (e.g.
+        # from the previous run's metrics scrape); only live binds count.
+        if kind == socket.SOCK_STREAM:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((LOCALHOST, port))
         except OSError:
@@ -265,6 +278,12 @@ def build_topology(args, workdir):
     elif args.case == "control":
         sfts = [host, sft2]
         users = [("usera", host), ("userb", sft2)]
+    elif args.case == "tiles":
+        # Three local sources on the host (on-demand keyframe on switch)
+        # and one behind a federated SFT (relies on its periodic FIR).
+        sfts = [host, sft2]
+        users = [("usera", host), ("userb", host), ("userc", host),
+                 ("userd", sft2)]
     else:
         raise SetupError("unknown case %s" % args.case)
 
@@ -310,9 +329,17 @@ class Checks:
 
 
 def metric_value(text, name):
+    """Sum of all samples of a metric; None if the metric is not exported.
+
+    Labeled counters (e.g. turn_auth_credential_failures{cause=...}) emit
+    no samples until the first increment, so a declared metric without
+    samples counts as 0.
+    """
     total = None
     for line in text.splitlines():
-        if line.startswith(name) and not line.startswith("#"):
+        if re.match(r"^#\s+TYPE\s+%s\s" % re.escape(name), line):
+            total = total or 0.0
+        elif line.startswith(name):
             m = re.match(r"^%s(\{[^}]*\})?\s+(\S+)" % re.escape(name), line)
             if m:
                 total = (total or 0.0) + float(m.group(2))
@@ -368,8 +395,17 @@ def run(args):
         argv = [args.sftloader, "-C", cfg_path, "-V", "-P", args.pattern,
                 "-d", str(args.duration), "-n", "1",
                 "-l", os.path.join(workdir, "sftloader-wcall.log")]
-        print("running sftloader for %ds (%s case, %d users)"
-              % (args.duration, args.case, len(users)))
+        if args.max_streams:
+            argv += ["-W", str(args.max_streams)]
+        if args.rotate_ms:
+            argv += ["-R", str(args.rotate_ms)]
+        if args.video_sync_ms:
+            argv += ["-Y", str(args.video_sync_ms)]
+        print("running sftloader for %ds (%s case, %d users%s)"
+              % (args.duration, args.case, len(users),
+                 ", %d stream(s) per receiver rotating every %dms"
+                 % (args.max_streams or 9, args.rotate_ms)
+                 if args.rotate_ms else ""))
         sl = Proc("sftloader", argv, workdir)
         procs.append(sl)
         try:
@@ -428,9 +464,29 @@ def run(args):
                  frm, sft_of.get(fu, "?"), frames, ok, wrong, unread,
                  " wrong_from=" + wfrom if wfrom != "-" else ""))
 
+    # --- tile switching ---
+    if args.rotate_ms:
+        sel = re.findall(r"^TILES user=(\S+) streams=\[([^\]]*)\]", out,
+                         re.M)
+        # The first request per user is the initial selection, not a switch
+        last = {}
+        switches = 0
+        for user, streams in sel:
+            if user in last and last[user] != streams:
+                switches += 1
+            last[user] = streams
+        min_switches = len(users) * 2
+        checks.check("tile switches happened", switches >= min_switches,
+                     "%d switches (need >= %d)" % (switches, min_switches))
+
     # --- sftd ---
     for s in sfts:
         log = s.proc.log()
+        if args.rotate_ms:
+            kf = len(re.findall(r"video_source_switch\(.*at keyframe", log))
+            waits = len(re.findall(r"video_source_switch\(.*waiting", log))
+            print("info: %s source switches at keyframe=%d slow=%d"
+                  % (s.name, kf, waits))
         fp_ok = len(re.findall(r"fingerprint OK", log))
         fp_bad = len(re.findall(r"fingerprint mismatch|unknown fingerprint",
                                 log))
@@ -472,9 +528,24 @@ def run(args):
 def main():
     ap = argparse.ArgumentParser(
         description="SFT federation over TURN end-to-end test")
-    ap.add_argument("--case", choices=["star", "control"], default="star",
+    ap.add_argument("--case", choices=["star", "control", "tiles"],
+                    default="star",
                     help="star: host + 2 non-host SFTs in domain B "
-                    "(default); control: host + 1 non-host SFT")
+                    "(default); control: host + 1 non-host SFT; tiles: "
+                    "3 clients on the host + 1 on a non-host SFT, "
+                    "rotating video tiles")
+    ap.add_argument("--max-streams", type=int,
+                    help="video streams each client requests (sftloader "
+                    "-W; default 1 for tiles, else all)")
+    ap.add_argument("--video-sync-ms", type=int,
+                    help="start all video at once, ms after sftloader "
+                    "start (sftloader -Y; default 6000 for tiles, else "
+                    "off). Senders' frame ids then stay close, which is "
+                    "what lets a receiver decode a new source's delta "
+                    "frames on the old source's reference frames")
+    ap.add_argument("--rotate-ms", type=int,
+                    help="rotate the requested streams every ms "
+                    "(sftloader -R; default 2500 for tiles, else off)")
     ap.add_argument("--sftd", default=os.environ.get("SFTD_BIN",
                                                      DEFAULT_SFTD))
     ap.add_argument("--sftloader", default=os.environ.get("SFTLOADER_BIN",
@@ -500,6 +571,14 @@ def main():
     ap.add_argument("--base-port", type=int, default=31000)
     ap.add_argument("--workdir", help="log dir (default: new temp dir)")
     args = ap.parse_args()
+    if args.case == "tiles":
+        if args.video_sync_ms is None:
+            args.video_sync_ms = 6000
+        if args.max_streams is None:
+            args.max_streams = 1
+        if args.rotate_ms is None:
+            args.rotate_ms = 2500
+    args.rotate_ms = args.rotate_ms or 0
 
     try:
         return run(args)
