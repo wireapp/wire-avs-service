@@ -6558,8 +6558,9 @@ static struct call *federate_request(struct group *group,
 				   (const char *)mbuf_buf(mb),
 				   mbuf_get_left(mb));
 	if (err) {
-		warning("federate_request: group(%p): failed to decode econn message: %s\n",
-			(char *)mbuf_buf(mb));
+		warning("federate_request: group(%p): failed to decode "
+			"econn message: %b\n",
+			group, mbuf_buf(mb), mbuf_get_left(mb));
 		goto out;
 	}
 
@@ -6670,7 +6671,7 @@ static struct call *federate_request(struct group *group,
 			}
 			else {
 				warning("sft: provisional call: %s "
-					"already exists\n");
+					"already exists\n", convid);
 				call = NULL;
 				err = EALREADY;
 				goto out;
