@@ -155,6 +155,32 @@ static void worker_timeout_handler(void *arg)
 		tmr_start(&w->tmr, TIMEOUT_WORKER, worker_timeout_handler, w);	
 }
 
+/* Exported by libre (main.c), but not in its headers */
+struct list *tmrl_get(void);
+
+/* Cancel the timers still running on this thread before it exits.
+ *
+ * libre keeps the timer list in a per-thread struct that is freed when
+ * the thread exits. Objects still alive at that point (at shutdown: the
+ * calls, their flows and turnconns) cancel their timers later, from the
+ * main thread; tmr_cancel then unlinks them from the freed list.
+ * Cancelled here, those later tmr_cancel calls do nothing.
+ */
+static void cancel_thread_timers(int wid)
+{
+	struct list *tmrl = tmrl_get();
+	struct le *le;
+	unsigned n = 0;
+
+	while ((le = list_head(tmrl)) != NULL) {
+		tmr_cancel(le->data);
+		++n;
+	}
+
+	if (n)
+		info("worker_thread: id: %d cancelled %u timers\n", wid, n);
+}
+
 static void *worker_thread(void *arg)
 {
 	struct worker *w = arg;
@@ -172,6 +198,7 @@ static void *worker_thread(void *arg)
 	
 	info("worker_thread: id: %d ended\n", w->id);
 
+	cancel_thread_timers(w->id);
 	mem_deref(w);
 
 	return NULL;
@@ -190,6 +217,9 @@ struct worker *worker_get(const char *id)
 	uint32_t key;
 	int wid;
 	
+	if (!workb || !workb->c)
+		return NULL;
+
 	key = hash_joaat_str_ci(id);
 	wid = (int)(key % (uint32_t)workb->c);
 
@@ -200,7 +230,7 @@ struct worker *worker_get(const char *id)
 
 struct worker *worker_main(void)
 {
-	return workb->main;
+	return workb ? workb->main : NULL;
 }
 
 static int push_task(struct worker *w, enum worker_task_id tid,
@@ -230,6 +260,10 @@ static int push_task(struct worker *w, enum worker_task_id tid,
 
 int worker_assign_main(worker_task_h *taskh, void *arg)
 {
+	/* NULL after worker_close() */
+	if (!workb || !workb->main)
+		return ENOENT;
+
 	return push_task(workb->main, WORKER_TASK_RUN, taskh, arg);
 }
 

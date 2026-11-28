@@ -147,6 +147,7 @@ struct sft {
 	struct lock *lock;
 
 	struct tmr tmr_terminate;
+	bool closing; /* module_close: workers are gone */
 };
 
 static struct sft *g_sft = NULL;
@@ -230,6 +231,10 @@ struct pending_stream {
 
 #define TIMEOUT_SETUP 10000
 #define TIMEOUT_CONN 45000
+/* Time from the client's SETUP/UPDATE response until the data channel
+ * is up (ICE + DTLS + SCTP), see call_setup_wait_dc().
+ */
+#define TIMEOUT_DC_SETUP TIMEOUT_CONN
 /* PING-Req interval on SFT <-> SFT calls, see sft_ping_start() */
 #define TIMEOUT_SFT_PING 10000
 #define TIMEOUT_RR 500
@@ -3799,13 +3804,32 @@ static void icall_start_handler(struct icall *icall,
 	}
 }
 
+/* The client has answered: from here until the data channel is up
+ * nothing else guards the call (the ecall connection timer stops once
+ * DTLS is up, tmr_conn only starts with the data channel). Without a
+ * deadline, a client that goes away after DTLS but before SCTP leaves
+ * the call alive until usrsctp gives up on the association (~5 min).
+ *
+ * SFT calls are left alone: a federated SFT link does not necessarily
+ * get a data channel of its own.
+ */
+static void call_setup_wait_dc(struct call *call)
+{
+	if (call->issft || call->dc_estab) {
+		tmr_cancel(&call->tmr_setup);
+		return;
+	}
+
+	tmr_start(&call->tmr_setup, TIMEOUT_DC_SETUP,
+		  setup_timeout_handler, call);
+}
+
 static void icall_answer_handler(struct icall *icall, void *arg)
 {
 	struct call *call = arg;
 	
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
-	if (tmr_isrunning(&call->tmr_setup))
-		tmr_cancel(&call->tmr_setup);
+	call_setup_wait_dc(call);
 }
 
 #if 0
@@ -4569,6 +4593,7 @@ static void icall_datachan_estab_handler(struct icall *icall,
 	/* When data channel establishes, don't use HTTP any more */
 	call->isprov = false;
 	call->dc_estab = true;
+	tmr_cancel(&call->tmr_setup);
 	
 	SFTLOG(LOG_LEVEL_INFO,
 	       "issft: %d group: %p userid: %s clientid: %s update=%d\n",
@@ -5331,7 +5356,10 @@ static void call_destructor(void *arg)
 
 	if (group && group->calll.head == NULL) {
 		dict_remove(sft->groups, group->id);
-		if (avs_service_is_draining()
+		/* Not while the module closes: the service is already
+		 * terminating and the workers are gone.
+		 */
+		if (avs_service_is_draining() && !sft->closing
 		    && dict_count(sft->groups) == 0) {
 
 			worker_assign_main(service_terminate, NULL);
@@ -6530,8 +6558,9 @@ static struct call *federate_request(struct group *group,
 				   (const char *)mbuf_buf(mb),
 				   mbuf_get_left(mb));
 	if (err) {
-		warning("federate_request: group(%p): failed to decode econn message: %s\n",
-			(char *)mbuf_buf(mb));
+		warning("federate_request: group(%p): failed to decode "
+			"econn message: %b\n",
+			group, mbuf_buf(mb), mbuf_get_left(mb));
 		goto out;
 	}
 
@@ -6642,7 +6671,7 @@ static struct call *federate_request(struct group *group,
 			}
 			else {
 				warning("sft: provisional call: %s "
-					"already exists\n");
+					"already exists\n", convid);
 				call = NULL;
 				err = EALREADY;
 				goto out;
@@ -6992,8 +7021,8 @@ static int update_call(struct call *call, void *arg)
 	struct econn_message *cmsg = arg;
 
 	SFTLOG(LOG_LEVEL_INFO, "\n", call);
-	
-	tmr_cancel(&call->tmr_setup);
+
+	call_setup_wait_dc(call);
 
 	ICALL_CALLE(call->icall, msg_recv, 0, 0,
 		    cmsg->src_userid, cmsg->src_clientid,
@@ -7540,12 +7569,15 @@ static void sft_destructor(void *arg)
 
 	lock_write_get(sft->lock);
 	
+	/* Calls first: call_destructor removes the call's group from
+	 * sft->groups when the call was the group's last.
+	 */
 	dict_flush(sft->calls);
 	mem_deref(sft->calls);
-	dict_flush(sft->groups);
-	mem_deref(sft->groups);
 	dict_flush(sft->provisional.calls);
 	mem_deref(sft->provisional.calls);
+	dict_flush(sft->groups);
+	mem_deref(sft->groups);
 	list_flush(&sft->cbl);
 	list_flush(&sft->ecalls);
 
@@ -7831,6 +7863,12 @@ static int module_init(void)
 static int module_close(void)
 {
 	info("sft: module unloading...\n");
+
+	/* Calls still in the dicts are destroyed by sft_destructor after
+	 * the workers have stopped, see call_destructor.
+	 */
+	if (g_sft)
+		g_sft->closing = true;
 
 	worker_close();
 	
