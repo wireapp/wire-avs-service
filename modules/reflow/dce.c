@@ -266,24 +266,18 @@ static void payload_destructor(void *arg)
 	void *parg = pld->arg;
 
 	/* g_dce.pendingl is shared by all threads: payloads are created
-	 * on the usrsctp threads and destroyed on the workers. The refs
-	 * on dce and its arg are taken under the lock in payload_new, so
-	 * drop them under the lock too, except a last ref: its
-	 * destructor takes g_dce.lock (dce_destructor).
+	 * on the usrsctp threads and destroyed on the workers, so unlink
+	 * under the lock. Drop the refs on dce and its arg only after
+	 * releasing it: the lock is not recursive and dce_destructor
+	 * takes it, so a deref that turns out to be the last one (refs
+	 * are not atomic, other threads deref without the lock) would
+	 * deadlock.
 	 */
 	struct lock *lock = g_dce.lock;	/* NULL after dce_close */
 
 	if (lock)
 		lock_write_get(lock);
 	list_unlink(&pld->le);
-	if (dce && mem_nrefs(dce) > 1) {
-		mem_deref(dce);
-		dce = NULL;
-	}
-	if (parg && mem_nrefs(parg) > 1) {
-		mem_deref(parg);
-		parg = NULL;
-	}
 	if (lock)
 		lock_rel(lock);
 
